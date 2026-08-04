@@ -1,0 +1,21 @@
+{
+  "name": "aha-skills",
+  "owner": {
+    "name": "andromedarabbit"
+  },
+  "metadata": {
+    "description": "개인용 Claude Code Agent Skills 모음 — 메타(스킬 작성) 스킬 제공",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "meta-experts",
+      "description": "새 에이전트 스킬을 만들고 저장소 관례에 맞게 검증하는 메타 스킬",
+      "source": "./skills/meta-experts",
+      "strict": false,
+      "skills": [
+        "./skill-author"
+      ]
+    }
+  ]
+}

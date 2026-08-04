@@ -1,0 +1,106 @@
+# Pre-commit hooks for aha-skills
+# See https://pre-commit.com for more information
+
+default_language_version:
+  python: python3
+
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+        name: Check YAML files
+      - id: end-of-file-fixer
+        name: Fix end of files
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+      - id: check-added-large-files
+        name: Check for large files
+        args: ['--maxkb=1000']
+      - id: check-executables-have-shebangs
+        name: Check that executables have shebangs
+
+  # Local hooks for skill validation
+  - repo: local
+    hooks:
+      # Auto-generate SKILLS.md index
+      - id: generate-skills-index
+        name: Generate skills index
+        entry: ./tools/generate-index.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: ^skills/.*\.md$
+
+      # Validate SKILL.md frontmatter
+      - id: check-skill-frontmatter
+        name: Check skill frontmatter
+        entry: ./tools/check-frontmatter.sh
+        language: system
+        pass_filenames: true
+        require_serial: true
+        files: ^skills/.*/SKILL\.md$
+
+      # Validate skill structure
+      - id: validate-skill
+        name: Validate skill structure
+        entry: bash -c 'for dir in $(find skills -mindepth 2 -maxdepth 2 -type d | grep -v "\-workspace$" | grep -v "/shared$"); do ./tools/validate-skill.sh "$dir" || exit 1; done'
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: ^skills/.*
+
+      # Validate hook matchers + event names (matcher는 도구 이름만 비교)
+      - id: validate-matchers
+        name: Validate hook matchers and event names
+        entry: ./tools/validate-matchers.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: ^skills/.*/SKILL\.md$
+
+      # 프론트매터 훅 경로 검증 (${CLAUDE_PLUGIN_ROOT}/<skill>/... 형태)
+      #
+      # 상류(oh-my-skills)는 이 훅과 아래 validate-body-paths 를 CI 전용으로 뒀다 —
+      # 19플러그인 저장소에서 전체 스캔 시간 때문이다. 스킬이 몇 개뿐인 여기서는 1초도
+      # 안 걸리고 둘 다 stdlib python3 만 쓴다. pre-commit 에 넣어야
+      # `pre-commit run --all-files` 한 줄이 진짜 end-to-end 검증이 된다.
+      # docs/UPSTREAM.md 의 "의도적 차이" 3번 참조.
+      - id: validate-hook-paths
+        name: Validate hook script paths
+        entry: ./tools/validate-hook-paths.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: ^(skills/.*/SKILL\.md|\.claude-plugin/marketplace\.json)$
+
+      # 본문 경로 검증 — 훅 경로와 별개 검사다. 훅은 경로가 틀리면 조용히 안 돌지만,
+      # 본문은 에이전트가 그 경로로 실제 실행해서 첫 호출부터 실패한다.
+      - id: validate-body-paths
+        name: Validate body script paths
+        entry: ./tools/validate-body-paths.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: ^skills/.*\.md$
+
+      # Validate marketplace.json schema
+      - id: validate-marketplace
+        name: Validate marketplace.json schema
+        entry: ./tools/validate-marketplace.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: ^\.claude-plugin/marketplace\.json$
+
+      # Fix shell script permissions
+      - id: fix-shell-permissions
+        name: Fix shell script permissions
+        entry: 'bash -c ''for f in $(git diff --cached --name-only --diff-filter=ACMR | grep "\.sh$"); do chmod +x "$f" && echo "Fixed permissions: $f"; done'''
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: \.sh$
