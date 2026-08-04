@@ -1,0 +1,95 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# feature/* push 트리거는 두지 않는다 — PR 이 열린 브랜치에 push 하면 이미 pull_request 가
+# 발동하므로 커밋마다 워크플로가 두 번 돈다. PR 전 검증은 workflow_dispatch 로 충분하다.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 검증기 전량 + 검증기 자신의 회귀 테스트.
+  # bats 를 설치하지 않는다 — 검증 스택의 무결성을 서드파티 설치 없이 증명하는 성질을 지킨다.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # check-frontmatter.sh 의 YAML 파싱 검사에 파서가 필요하다. GitHub Actions 는
+      # CI=true 를 자동 설정하고, 그 경우 스크립트는 파서를 못 구하면 경고가 아니라
+      # 에러를 낸다 — uv 를 빼면 "로컬은 초록, CI 는 빨강" 이 된다.
+      - uses: astral-sh/setup-uv@v5
+
+      - name: shellcheck 확인
+        # validate-skill.sh 는 shellcheck 가 없으면 직접 내려받아 /usr/local/bin 에 쓴다.
+        # 러너에 이미 있어서 그 분기가 안 도는 게 정상 경로다. 없으면 여기서 깔고 넘긴다.
+        run: shellcheck --version || sudo apt-get install -y shellcheck
+
+      - name: 프론트매터 검증
+        run: |
+          for f in $(find skills -name SKILL.md -not -path '*/assets/*' -not -path '*-workspace/*'); do
+            echo "▶ $f"
+            ./tools/check-frontmatter.sh "$f"
+          done
+
+      - name: 스킬 구조 검증
+        run: |
+          for d in $(find skills -mindepth 2 -maxdepth 2 -type d | grep -v '\-workspace$' | grep -v '/shared$'); do
+            echo "▶ $d"
+            ./tools/validate-skill.sh "$d"
+          done
+
+      - name: 훅 matcher·이벤트 검증
+        run: ./tools/validate-matchers.sh
+
+      - name: 훅 경로 검증
+        run: ./tools/validate-hook-paths.sh
+
+      - name: 본문 경로 검증
+        run: ./tools/validate-body-paths.sh
+
+      - name: marketplace 정합성 검증
+        run: ./tools/validate-marketplace.sh
+
+      # 상류 CI 는 SKILLS.md 를 artifact 로만 올리고 커밋된 파일과 대조하지 않아서
+      # 인덱스 드리프트가 잡히지 않았다. 여기서는 게이트한다.
+      - name: SKILLS.md 인덱스 드리프트 검사
+        run: |
+          ./tools/generate-index.sh
+          git diff --exit-code -- SKILLS.md
+
+      # run-all-tests.sh 는 이걸 실행하지 않는다 — 탐색 규칙이
+      # skills/*/*/scripts/tests/run.sh 와 skills/*/shared/tests/*.bats 둘뿐이다.
+      - name: 검증기 회귀 테스트
+        run: |
+          for f in tools/test-*.sh; do
+            echo "▶ $f"
+            bash "$f"
+          done
+
+  # 스킬 테스트 스위트.
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # skill-author/scripts/tests/run.sh 는 pytest 대상이 있는데 uv 가 없으면 exit 1 이다.
+      # 현재 대상은 없지만 그 계약을 미리 만족시킨다.
+      - uses: astral-sh/setup-uv@v5
+
+      - name: bats 설치
+        # skill-author 의 bats 3개는 run/$status/setup/teardown/$BATS_TEST_DIRNAME 만 쓰고
+        # bats_load_library·bats-support·bats-assert 의존이 없다 — 배포판 버전으로 충분하다.
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - name: 스킬 테스트 실행
+        run: ./tools/run-all-tests.sh

@@ -1,0 +1,13 @@
+.claude/settings.local.json
+*.log
+.tmp/java-test-fixer-workspace/
+# Workspace directories for skill execution
+**/*-workspace/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Eval/optimization scratch artifacts (skill-creator runs)
+.eval-workspaces/
