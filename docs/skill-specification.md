@@ -352,8 +352,8 @@ context: inline
 ### 마켓플레이스 설치
 
 ```bash
-/plugin marketplace add https://git.baemin.in/dataplatform/oh-my-skills.git
-/plugin install gitlab-experts@oh-my-skills
+/plugin marketplace add https://github.com/andromedarabbit/aha-skills.git
+/plugin install meta-experts@aha-skills
 ```
 
 ## 모범 사례
