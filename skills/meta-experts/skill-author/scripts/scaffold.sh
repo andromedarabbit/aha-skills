@@ -26,14 +26,14 @@ Usage: scaffold.sh --category <cat> --name <name> --description <desc>
                    --interaction <model> [options]
 
 필수:
-  --category <cat>        카테고리 (kebab-case, 예: gitlab-experts)
-  --name <name>           스킬 이름 (kebab-case, 예: gitlab-ci-doctor)
+  --category <cat>        카테고리 (kebab-case, 예: ci-experts)
+  --name <name>           스킬 이름 (kebab-case, 예: ci-log-doctor)
   --description <desc>    무엇을 하는지 + 언제 쓰는지 (1024자 이내)
   --interaction <model>   none | dialog | highrisk | gate-worker | plan-apply | resume
 
 선택:
   --version <ver>         기본값 1.0.0
-  --dep <spec>            의존성 (반복 가능, 예: --dep 'glab>=1.38.0')
+  --dep <spec>            의존성 (반복 가능, 예: --dep 'gh>=2.0.0')
   --background false      context: fork 인 경우에만. 스킬 호출을 동기로 끝낸다
   --root <path>           저장소 루트 (테스트용, 기본값은 이 스크립트 기준 자동 계산)
   --dry-run               파일을 만들지 않고 계획만 출력

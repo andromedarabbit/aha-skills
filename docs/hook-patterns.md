@@ -24,9 +24,9 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/check-deps.sh\""
-          description: "glab 설치 확인"
+          if: "Bash(gh *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
+          description: "gh 설치 확인"
 ```
 
 ### PostToolUse
@@ -45,8 +45,8 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab ci *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/summarize-ci-log.sh\""
+          if: "Bash(gh run *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
           description: "CI 로그 요약"
 ```
 
@@ -61,7 +61,7 @@ hooks:
   SessionStart:
     - hooks:
         - type: command
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/init-session.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/init-session.sh\""
           description: "세션 시작 시 환경 초기화"
 ```
 
@@ -85,7 +85,7 @@ check_command() {
     fi
 }
 
-check_command "glab"
+check_command "gh"
 check_command "jq"
 ```
 
@@ -123,11 +123,11 @@ install_if_missing() {
 
 # macOS
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    install_if_missing "glab" "brew install glab"
+    install_if_missing "gh" "brew install gh"
     install_if_missing "jq" "brew install jq"
 # Linux
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    install_if_missing "glab" "sudo apt-get install -y glab"
+    install_if_missing "gh" "sudo apt-get install -y gh"
     install_if_missing "jq" "sudo apt-get install -y jq"
 fi
 ```
@@ -166,8 +166,8 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/check-deps.sh\""
+          if: "Bash(gh *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
           description: "의존성 자동 설치"
 ```
 
@@ -181,7 +181,7 @@ hooks:
 
 # CI 환경 감지
 if [[ -n "$CI_PIPELINE_ID" ]]; then
-    echo "# GitLab CI 환경이 감지되었습니다"
+    echo "# CI 환경이 감지되었습니다"
     export ENV_TYPE="ci"
 else
     echo "# 로컬 환경이 감지되었습니다"
@@ -201,7 +201,7 @@ hooks:
       hooks:
         - type: file
           if: "Bash(brew *)"
-          path: "${CLAUDE_PLUGIN_ROOT}/homebrew-formula/brew-config.json"
+          path: "${CLAUDE_PLUGIN_ROOT}/brew-formula/brew-config.json"
           description: "brew 설정 로드"
 ```
 
@@ -253,7 +253,7 @@ fi
 
 ## Matcher 패턴
 
-**중요**: `matcher`는 **도구 이름**(Bash, Edit, Write, Read, Grep, Glob, Task, WebFetch, `mcp__...` 등)에만 매칭됩니다. `matcher`에 `glab`이나 `kubectl` 같은 명령·경로 내용을 넣으면, 비교 대상은 도구 이름(예: `Bash`)뿐이라 절대 발동하지 않습니다. 명령·경로로 좁히려면 `if:` 필드를 사용하세요.
+**중요**: `matcher`는 **도구 이름**(Bash, Edit, Write, Read, Grep, Glob, Task, WebFetch, `mcp__...` 등)에만 매칭됩니다. `matcher`에 `gh`이나 `kubectl` 같은 명령·경로 내용을 넣으면, 비교 대상은 도구 이름(예: `Bash`)뿐이라 절대 발동하지 않습니다. 명령·경로로 좁히려면 `if:` 필드를 사용하세요.
 
 ### 특정 도구만 매칭
 
@@ -275,13 +275,13 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"          # glab 명령만
+          if: "Bash(gh *)"          # gh 명령만
           command: "..."
         - type: command
           if: "Bash(git commit*)"     # git commit 계열만
           command: "..."
         - type: command
-          if: "Bash(glab ci *)"       # glab ci 관련 명령만
+          if: "Bash(gh run *)"       # gh ci 관련 명령만
           command: "..."
 ```
 
@@ -311,19 +311,19 @@ hooks:
         # 1. 의존성 확인
         - type: command
           if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/homebrew-formula/scripts/check-brew.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\""
           description: "brew 확인"
 
         # 2. 탭 확인
         - type: command
           if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/homebrew-formula/scripts/verify-tap.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/verify-tap.sh\""
           description: "현재 tap 확인"
 
         # 3. 설정 로드
         - type: file
           if: "Bash(brew *)"
-          path: "${CLAUDE_PLUGIN_ROOT}/homebrew-formula/context.json"
+          path: "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json"
           description: "컨텍스트 정보 로드"
 ```
 
@@ -338,8 +338,8 @@ command: "uv run \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/report.py\" --quiet-ok
 path: "${CLAUDE_PLUGIN_ROOT}/my-skill/config.json"
 
 # 잘못됨
-command: "bash .claude/skills/gitlab-experts/my-skill/scripts/check.sh"       # 옛 형태 → 조용히 실행 안 됨
-command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-experts/my-skill/scripts/check.sh\""  # 카테고리 중복
+command: "bash .claude/skills/ci-experts/my-skill/scripts/check.sh"       # 옛 형태 → 조용히 실행 안 됨
+command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-experts/my-skill/scripts/check.sh\""  # 카테고리 중복
 command: "bash \"${CLAUDE_SKILL_DIR}/scripts/check.sh\""                     # 훅에서는 치환되지 않음
 command: "bash ${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/check.sh"              # 따옴표 없음
 command: "bash scripts/check.sh"
@@ -354,7 +354,7 @@ path: "config.json"
 넣으면 안 되고, 바로 스킬 이름부터 씁니다. 실측:
 
 ```
-~/.claude/plugins/cache/oh-my-skills/gitlab-experts/<sha>/gitlab-mr-creation/scripts/check-deps.sh
+~/.claude/plugins/cache/aha-skills/ci-experts/<sha>/pr-creator/scripts/check-deps.sh
 └───────────────────── $CLAUDE_PLUGIN_ROOT ─────────────────────┘└──── 스킬 디렉토리 ────┘
 ```
 
@@ -385,7 +385,7 @@ command: "bash \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/check.sh\" --quiet-ok"
 `.claude/skills/` 디렉토리 자체가 없습니다).
 
 문제는 훅이 경로가 틀렸을 때 **에러를 내지 않는다**는 점입니다. 그냥 아무 일도 일어나지
-않습니다. 그래서 이 저장소의 훅 43개가 전부 안 도는 상태로 방치됐고, `gitlab-mr-creation`의
+않습니다. 그래서 이 저장소의 훅 43개가 전부 안 도는 상태로 방치됐고, `pr-creator`의
 Stage 4 승인 영수증 훅(`record-stage4-approval.sh`)은 한 번도 실행되지 않은 채
 "승인 게이트가 있다"고 문서화돼 있었습니다. 옛 검사기가 그 형태를 규약으로 강제했으니
 CI 도 전부 통과시켰습니다.
@@ -438,9 +438,9 @@ bash "${CLAUDE_SKILL_DIR}/scripts/preflight.sh"
 uv run "${CLAUDE_SKILL_DIR}/scripts/report.py" doctor
 
 # 잘못됨
-bash .claude/skills/gitlab-experts/my-skill/scripts/x.sh  # CWD 상대경로 → 첫 호출부터 실패
+bash .claude/skills/ci-experts/my-skill/scripts/x.sh  # CWD 상대경로 → 첫 호출부터 실패
 bash "${CLAUDE_SKILL_DIR}/my-skill/scripts/x.sh"          # 스킬 이름 중복
-bash "${CLAUDE_SKILL_DIR}/gitlab-experts/my-skill/scripts/x.sh"  # 카테고리 중복
+bash "${CLAUDE_SKILL_DIR}/ci-experts/my-skill/scripts/x.sh"  # 카테고리 중복
 bash "${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/x.sh"        # 본문에서는 치환되지 않음
 bash ${CLAUDE_SKILL_DIR}/scripts/x.sh                     # 따옴표 없음
 ```
@@ -452,7 +452,7 @@ bash ${CLAUDE_SKILL_DIR}/scripts/x.sh                     # 따옴표 없음
 옮기면 한 단계가 남습니다.
 
 ```
-~/.claude/plugins/cache/oh-my-skills/gitlab-experts/<sha>/gitlab-mr-creation/scripts/check-deps.sh
+~/.claude/plugins/cache/aha-skills/ci-experts/<sha>/pr-creator/scripts/check-deps.sh
 └──────────────── $CLAUDE_PLUGIN_ROOT ────────────────┘
 └──────────────────────── $CLAUDE_SKILL_DIR ────────────────────────┘
 ```
@@ -480,8 +480,8 @@ bash ${CLAUDE_SKILL_DIR}/scripts/x.sh                     # 따옴표 없음
   1. 읽을 문서의 절대경로 (예: `WORKER.md`)
   2. 그 문서 안의 상대 참조를 풀 **기준 디렉토리**
 
-두 번째를 빼먹는 게 실제로 걸린 함정입니다. `aws-cost-analysis`와
-`setup-emr-on-eks-airflow-connection`의 `WORKER.md`는 `references/*.md`를 순수 상대경로로
+두 번째를 빼먹는 게 실제로 걸린 함정입니다. `cost-analyzer`와
+`deploy-prod-cluster`의 `WORKER.md`는 `references/*.md`를 순수 상대경로로
 지시하는데, `WORKER.md`의 절대경로만 넘기면 워커가 **자기 CWD 기준**으로 찾아 실패합니다.
 
 ### 왜 규약이 바뀌었나
@@ -529,13 +529,13 @@ bash ${CLAUDE_SKILL_DIR}/scripts/x.sh                     # 따옴표 없음
 ```bash
 #!/bin/bash
 # 좋음: 즉시 확인
-command -v glab || { echo "glab가 필요합니다"; exit 1; }
+command -v gh || { echo "gh가 필요합니다"; exit 1; }
 
 # 나쁨: 불필요한 작업
 echo "시작합니다..."
 sleep 1
 echo "확인 중..."
-command -v glab
+command -v gh
 ```
 
 ### 2. 명확한 출력
@@ -545,7 +545,7 @@ command -v glab
 ```bash
 #!/bin/bash
 # 좋음
-echo "# 🔍 glab 설치 확인 중..."
+echo "# 🔍 gh 설치 확인 중..."
 
 # 나쁨
 # (출력 없음)
@@ -558,7 +558,7 @@ echo "# 🔍 glab 설치 확인 중..."
 ```bash
 #!/bin/bash
 # 성공 시 0
-if command -v glab &> /dev/null; then
+if command -v gh &> /dev/null; then
     exit 0
 fi
 
@@ -583,7 +583,7 @@ echo "data" > /tmp/my-skill-temp-data
 ### 훅이 실행되지 않을 때
 
 1. **matcher 확인**: `matcher`는 도구 이름(`Bash`, `Edit` 등)만 매칭합니다. 명령 내용은 `if`로
-   거릅니다 — `matcher: "Bash.*glab.*"`처럼 쓰면 영영 발동하지 않습니다
+   거릅니다 — `matcher: "Bash.*gh.*"`처럼 쓰면 영영 발동하지 않습니다
 2. **경로 확인**: `${CLAUDE_PLUGIN_ROOT}/<skill>/...` 형태인지, 카테고리를 중복해서 넣지
    않았는지, 따옴표로 감쌌는지 확인합니다. `./tools/validate-hook-paths.sh`로 검사하세요.
    훅은 경로가 틀려도 에러 없이 조용히 안 돌기 때문에 이 검사가 유일한 신호입니다
@@ -609,7 +609,7 @@ echo "# DEBUG: Args: $@"
 
 스킬 실행 전에 필요한 도구를 자동으로 설치합니다.
 
-**실제 사용 사례**: gitlab-ci-pipeline-doctor 스킬
+**실제 사용 사례**: ci-log-doctor 스킬
 
 **SKILL.md:**
 ```yaml
@@ -618,9 +618,9 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/check-deps.sh\""
-          description: "glab 자동 설치"
+          if: "Bash(gh *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
+          description: "gh 자동 설치"
 ```
 
 **scripts/check-deps.sh:**
@@ -649,11 +649,11 @@ install_if_missing() {
 
 # macOS
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    install_if_missing "glab" "brew install glab"
+    install_if_missing "gh" "brew install gh"
     install_if_missing "jq" "brew install jq"
 # Linux
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    install_if_missing "glab" "curl -s https://gitlab.com/gitlab-org/cli/-/releases/permalink/latest/downloads/glab_linux_amd64.tar.gz | tar xz -C /usr/local/bin"
+    install_if_missing "gh" "curl -s https://github.com/cli/cli/releases/latest/download/gh_linux_amd64.tar.gz | tar xz -C /usr/local/bin"
     install_if_missing "jq" "sudo apt-get install -y jq"
 fi
 ```
@@ -671,7 +671,7 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
+          if: "Bash(gh *)"
           command: "bash \"${CLAUDE_PLUGIN_ROOT}/shared/scripts/sanitize-output.sh\""
           description: "시크릿 마스킹"
 ```
@@ -684,8 +684,8 @@ hooks:
 sanitize() {
     local output="$1"
 
-    # GitLab 토큰 마스킹
-    output=$(echo "$output" | sed -E 's/glpat-[a-zA-Z0-9_-]+/***GITLAB_TOKEN***/g')
+    # GitHub 토큰 마스킹
+    output=$(echo "$output" | sed -E 's/ghp_[a-zA-Z0-9_]+/***GH_TOKEN***/g')
 
     # API 키 마스킹
     output=$(echo "$output" | sed -E 's/api[_-]?key[=:][a-zA-Z0-9_-]+/api_key=***MASKED***/gi')
@@ -709,7 +709,7 @@ done
 
 긴 CI 로그를 자동으로 요약하여 핵심 정보만 표시합니다.
 
-**실제 사용 사례**: gitlab-ci-pipeline-doctor 스킬
+**실제 사용 사례**: ci-log-doctor 스킬
 
 **SKILL.md:**
 ```yaml
@@ -718,8 +718,8 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab ci *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/summarize-ci-log.sh\""
+          if: "Bash(gh run *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
           description: "CI 로그 요약"
 ```
 
@@ -792,25 +792,25 @@ hooks:
         # 1단계: 의존성 확인
         - type: command
           if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/homebrew-formula/scripts/check-brew.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\""
           description: "brew 설치 확인"
 
         # 2단계: 탭 확인
         - type: command
           if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/homebrew-formula/scripts/verify-tap.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/verify-tap.sh\""
           description: "현재 tap 확인"
 
         # 3단계: 권한 확인
         - type: command
           if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/homebrew-formula/scripts/check-permissions.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-permissions.sh\""
           description: "사용자 권한 확인"
 
         # 4단계: 컨텍스트 정보 로드
         - type: file
           if: "Bash(brew *)"
-          path: "${CLAUDE_PLUGIN_ROOT}/homebrew-formula/context.json"
+          path: "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json"
           description: "tap 정보 로드"
 ```
 
@@ -838,7 +838,7 @@ brew 명령 실행
 
 Git 변경 사항을 분석하여 Conventional Commits 형식의 커밋 메시지를 자동 생성합니다.
 
-**실제 사용 사례**: git-commit-helper 스킬
+**실제 사용 사례**: commit-helper 스킬
 
 **SKILL.md:**
 ```yaml
@@ -848,11 +848,11 @@ hooks:
       hooks:
         - type: command
           if: "Bash(git commit*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/git-commit-helper/scripts/check-deps.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/check-deps.sh\""
           description: "git 및 jq 설치 확인"
         - type: command
           if: "Bash(git commit*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/git-commit-helper/scripts/validate-git-state.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/validate-git-state.sh\""
           description: "Git 저장소 상태 검증"
 
   PostToolUse:
@@ -860,13 +860,13 @@ hooks:
       hooks:
         - type: command
           if: "Bash(git diff*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/git-commit-helper/scripts/analyze-staged-changes.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/analyze-staged-changes.sh\""
           description: "staged 변경 사항 분석 및 타입 추론"
     - matcher: "Write"
       hooks:
         - type: command
           if: "Write(**/commit-message.txt)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/git-commit-helper/scripts/validate-commit-message.sh\" \"$FILE\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/validate-commit-message.sh\" \"$FILE\""
           description: "커밋 메시지 형식 검증"
 ```
 

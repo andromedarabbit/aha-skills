@@ -73,11 +73,11 @@ Claude Code에서 직접 쓸 수 없었고, 문맥과 무관하게 9개 항목�
 
 ```bash
 skills/meta-experts/skill-author/scripts/scaffold.sh \
-  --category gitlab-experts \
-  --name gitlab-ci-log-digest \
+  --category ci-experts \
+  --name ci-log-digest \
   --description 'CI 로그를 요약합니다. "CI 왜 깨졌어" 요청이 있을 때 사용하세요.' \
   --interaction none \
-  --dep 'glab>=1.38.0'
+  --dep 'gh>=2.0.0'
 ```
 
 `--dry-run`으로 판정 결과만 먼저 볼 수 있습니다. 전체 옵션은 `--help` 또는

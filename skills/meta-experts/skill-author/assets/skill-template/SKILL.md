@@ -32,11 +32,11 @@ language: "korean"
 #   - CWD 기준 상대경로는 플러그인 설치 환경에서 조용히 실행되지 않는다 → 금지
 hooks:
   PreToolUse:
-    # 예: glab 명령 실행 전 자동 설치
+    # 예: gh 명령 실행 전 자동 설치
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
+          if: "Bash(gh *)"
           command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/script-name.sh\""
           description: "이 훅이 하는 일에 대한 설명"
 
@@ -45,7 +45,7 @@ hooks:
   #   - matcher: "Bash"
   #     hooks:
   #       - type: command
-  #         if: "Bash(glab ci *)"
+  #         if: "Bash(gh run *)"
   #         command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/summarize-log.sh\""
   #         description: "로그 요약"
 ---

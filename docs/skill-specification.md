@@ -112,9 +112,9 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/check-deps.sh\""
-          description: "glab 자동 설치"
+          if: "Bash(gh *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
+          description: "gh 자동 설치"
 ```
 
 **효과**: 사용자가 수동으로 도구를 설치할 필요 없이 스킬이 자동으로 처리
@@ -127,8 +127,8 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab ci *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/summarize-ci-log.sh\""
+          if: "Bash(gh run *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
           description: "CI 로그 요약"
 ```
 
@@ -142,7 +142,7 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
+          if: "Bash(gh *)"
           command: "bash \"${CLAUDE_PLUGIN_ROOT}/shared/scripts/sanitize-output.sh\""
           description: "시크릿 마스킹"
 ```
@@ -157,7 +157,7 @@ hooks:
     - matcher: "Bash"              # 도구 이름만. 정규식이 아니다
       hooks:
         - type: command            # command 또는 file
-          if: "Bash(glab *)"       # 명령 내용은 여기서 거른다
+          if: "Bash(gh *)"       # 명령 내용은 여기서 거른다
           command: "bash \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/check.sh\""
           description: "설명"      # 훅 설명
 ```
@@ -173,8 +173,8 @@ hooks:
 command: "bash \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/check.sh\""
 
 # 잘못됨
-command: "bash .claude/skills/gitlab-experts/my-skill/scripts/check.sh"  # 조용히 실행 안 됨
-command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-experts/my-skill/scripts/check.sh\""  # 카테고리 중복
+command: "bash .claude/skills/ci-experts/my-skill/scripts/check.sh"  # 조용히 실행 안 됨
+command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-experts/my-skill/scripts/check.sh\""  # 카테고리 중복
 command: "bash \"${CLAUDE_SKILL_DIR}/scripts/check.sh\""  # 훅에서는 치환되지 않음
 command: "bash scripts/check.sh"
 command: "bash ../../my-skill/scripts/check.sh"
@@ -203,9 +203,9 @@ command: "bash ../../my-skill/scripts/check.sh"
 > 미리 담겨 워커가 확인 없이 비가역 쓰기를 실행합니다. 입력은 게이트에서 앞당겨 받고, 승인은 그
 > 지점까지 진행한 뒤 `NEEDS_DECISION`(게이트+워커)이나 `PENDING_DECISION`(fork)으로 되물으세요.
 >
-> 예: `usermanager`의 "cider.kim을 zeppelin-public에 추가할까요?"는 인자에서 바로 나오는 문장이지만
-> LDAP 멤버십을 실제로 바꾸는 승인이므로 미리 받지 않습니다. `setup-emr-on-eks-airflow-connection`이
-> 노드풀명·태그·EMR 버전 7개는 게이트에서 받고 prod 쓰기 승인만 Step 4 dry-run 뒤로 미루는 것이
+> 예: `add-team-member`의 "alice를 review-team에 추가할까요?"는 인자에서 바로 나오는 문장이지만
+> 권한을 실제로 바꾸는 승인이므로 미리 받지 않습니다. `deploy-prod-cluster`이
+> 노드풀명·태그·클러스터 버전 7개는 게이트에서 받고 prod 쓰기 승인만 Step 4 dry-run 뒤로 미루는 것이
 > 같은 이유입니다.
 >
 > (이때 반환 텍스트에는 오케스트레이터용 relay 지시문을 반드시 포함합니다 — 정확한
@@ -226,13 +226,12 @@ command: "bash ../../my-skill/scripts/check.sh"
 호출 경계로 깔끔하게 쪼개질 때만 값을 합니다 — 승인이 여러 단계에 흩어져 있으면 스킬을 3개 이상
 쪼개야 하고, 트리거가 갈라지는 비용이 이득을 넘습니다.
 
-**4행은 2026-07-29 등급 재산정에서 뒤늦게 발견된 빈칸입니다.** `usermanager`(LDAP 그룹 멤버십
-변경)가 여기 걸리는데, 3행은 "게이트가 *여러 곳*", 6행은 "*가역*", 7행은 "조사 의존"이라 셋 다
+**4행은 2026-07-29 등급 재산정에서 뒤늦게 발견된 빈칸입니다.** `add-team-member`(권한 변경)가 여기 걸리는데, 3행은 "게이트가 *여러 곳*", 6행은 "*가역*", 7행은 "조사 의존"이라 셋 다
 정확히는 맞지 않아 그때까지 판정이 불가능했습니다. 판정 근거는 이렇습니다 — **실행 중 물어야 할
 일이 있으면 fork의 격리 이득이 애초에 없습니다.** 질문이 조사에 의존하지 않으면 fork가 격리할
 "조사"라는 게 존재하지 않고, 남는 건 게이트뿐인데 fork는 그 게이트를 `AskUserQuestion`이 아니라
 텍스트 관례로만 표현할 수 있습니다. 게이트가 지키는 게 비가역·공개 동작이라면 그 관례는
-방어가 아닙니다 — 실제로 `gitlab-mr-reviews`에서 오케스트레이터가 그 텍스트를 대신 승인해
+방어가 아닙니다 — 실제로 `pr-reviewer`에서 오케스트레이터가 그 텍스트를 대신 승인해
 리뷰 8건이 사용자 확인 없이 반영된 사고가 있었습니다(`docs/todo/pending-decision-relay-directive-rollout.md`).
 
 **6행 단서 — 게이트 내용이 요약을 견디지 못하면 6행을 적용하지 않습니다.** 6행이 대리 승인
@@ -243,18 +242,18 @@ command: "bash ../../my-skill/scripts/check.sh"
 게이트에 실어야 할 것이 **수정 후보 목록·제안서·미리보기**처럼 사용자가 읽어야만 고를 수 있는
 크기라면, 오케스트레이터를 거치며 "N건이 있습니다, 진행할까요?"로 줄어드는 순간 선택 근거가
 통째로 사라집니다. 사용자는 눈감고 고르는데 스킬은 "확인받음"으로 성공 보고합니다. relay 지시문을
-붙여도 막지 못합니다 — `gitlab-mr-creation`에서 지시문을 붙이고도 요약 전달이 일어났습니다.
+붙여도 막지 못합니다 — `pr-creator`에서 지시문을 붙이고도 요약 전달이 일어났습니다.
 이 경우 **가역이라도 `inline` + `AskUserQuestion`**으로 갑니다.
 
-해당 사례: `de-review`(v2.0.0, gated_auto 수정 후보 목록), `de-visualize`(v1.0.0, 후보 5개 ×
+해당 사례: `doc-review`(v2.0.0, gated_auto 수정 후보 목록), `doc-visualize`(v1.0.0, 후보 5개 ×
 위치·형식·ASCII 미리보기·근거·우선순위). 판정 근거 전문은 각 스킬의 `docs/GUIDELINES.md`에
 있습니다. 차선책으로 **제안서를 파일에 쓰고 반환은 짧게** 하는 파일 매개 방식이 있지만, 요약
 전달만 막고 대리 승인은 남습니다(오케스트레이터가 파일을 안 열고 답할 수 있습니다).
 
 **위임을 검토하기 전에 물어야 할 것: 그게 애초에 이 스킬의 책임인가.** 무거운 단계를 자체 워커로
 감싸기 전에, 그 일이 남의 전문 영역이면 **전문 스킬에 위임하고 격리는 그쪽에 맡깁니다.** 예:
-`gitlab-mr-creation`은 v3.0.0에서 테스트 실행과 코드리뷰를 워커로 감싸는 대신 아예 떼어내
-`compound-engineering:ce-code-review` 같은 전문 스킬에 넘겼습니다 — 위임 대상이 자체 서브에이전트로
+`pr-creator`은 v3.0.0에서 테스트 실행과 코드리뷰를 워커로 감싸는 대신 아예 떼어내
+`compound-engineering:ce-codoc-review` 같은 전문 스킬에 넘겼습니다 — 위임 대상이 자체 서브에이전트로
 격리하므로 이쪽에 워커가 필요 없어졌고, 리뷰 도구가 바뀔 때 이 스킬이 따라 바뀌지 않게 됐습니다.
 
 그리고 **중간 산출물이 커도 에이전트가 그 내용을 판단할 필요가 없다면 위임이 아니라 파일 매개가
@@ -272,7 +271,7 @@ command: "bash ../../my-skill/scripts/check.sh"
 실행 본문이 길고 중간 산출물이 큰데, 실행에 필요한 **입력**은 조사 전에 확정할 수 있을 때 씁니다.
 비가역 변경에 대한 **승인**은 조사 후에 받아야 하므로 워커가 `NEEDS_DECISION`으로 되묻습니다 —
 즉 "질문이 조사 결과에 의존하지 않을 때"가 아니라 "*입력*이 조사에 의존하지 않을 때"가 기준입니다
-(`setup-emr-on-eks-airflow-connection`이 입력 7개는 게이트에서 받고 prod 쓰기 승인만 dry-run 뒤로
+(`deploy-prod-cluster`이 입력 7개는 게이트에서 받고 prod 쓰기 승인만 dry-run 뒤로
 미루는 방식입니다). `SKILL.md`는 얇은 inline 게이트로 두고 — `AskUserQuestion`으로 입력을 확정한 뒤
 Intent Contract로 압축 — 실행 본문은 `WORKER.md`에 두고 `general-purpose` 에이전트에게 Contract와 함께 넘깁니다. 탐색 로그·파일 읽기·중간 추론은 워커에 남고, 주 대화에는 짧은 최종 요약만 돌아옵니다.
 
@@ -284,7 +283,7 @@ Intent Contract로 압축 — 실행 본문은 `WORKER.md`에 두고 `general-pu
 
 질문이 조사 결과에 의존하고 그 결정이 비가역일 때 씁니다. `X-plan`(읽기 전용, 질문 없음, 계획 아티팩트만 산출)과 `X-apply`(계획 파일만 입력)로 나눕니다. 승인이 두 호출 **사이**에서 일어나므로 주 에이전트가 `AskUserQuestion`을 정상적으로 쓰고, 재개 프로토콜이 필요 없습니다. 계획 아티팩트가 감사 기록과 재실행 근거로 남습니다.
 
-**후보(현재 구현 없음):** java-spring-refactor — "N개 파일 M LOC를 적용할까요?"는 diff를 뽑은 뒤에만 나오는 질문이라 이 갈래에 해당하지만, 실제로는 아직 `fork` + 반환-재개로 동작합니다. 이 저장소에 plan/apply를 채택한 스킬은 아직 없습니다.
+**후보(현재 구현 없음):** java-refactor — "N개 파일 M LOC를 적용할까요?"는 diff를 뽑은 뒤에만 나오는 질문이라 이 갈래에 해당하지만, 실제로는 아직 `fork` + 반환-재개로 동작합니다. 이 저장소에 plan/apply를 채택한 스킬은 아직 없습니다.
 
 #### fork
 
@@ -293,7 +292,7 @@ context: fork
 agent: general-purpose
 ```
 
-**사례:** gitlab-ci-pipeline-doctor(상호작용 없음)
+**사례:** ci-log-doctor(상호작용 없음)
 
 > `fork` 스킬의 사용자 확인은 `PENDING_DECISION:` 반환-재개 방식으로, 호출 전 모호성 해소 질문은 `description`에 담습니다 — 예시는 [프론트매터 참조](frontmatter-reference.md#fork-스킬에서-사용자-확인받기) 참고.
 
@@ -303,7 +302,7 @@ agent: general-purpose
 context: inline
 ```
 
-**사례:** git-commit-helper(커밋 타입·scope·설명을 여러 라운드로 수집), jupyterhub-custom-image-rollout(prod go/no-go 포함 게이트 7곳), homebrew-formula(formula 값 확인 후 PR 제출), gitlab-mr-creation(비가역 공개 산출물 + 승인 게이트 2곳 — v2.x까지 `fork`였다가 v3.0.0에서 판정표 3행으로 교정)
+**사례:** commit-helper(커밋 타입·scope·설명을 여러 라운드로 수집), rollout-custom-image(prod go/no-go 포함 게이트 7곳), brew-formula(formula 값 확인 후 PR 제출), pr-creator(비가역 공개 산출물 + 승인 게이트 2곳 — v2.x까지 `fork`였다가 v3.0.0에서 판정표 3행으로 교정)
 
 ## 에이전트 타입
 
@@ -343,7 +342,7 @@ context: inline
 
 ```
 ~/.claude/skills/
-└── oh-my-skills/
+└── aha-skills/
     └── skills/
         └── my-skill/
             └── SKILL.md
@@ -358,7 +357,7 @@ context: inline
 
 ## 모범 사례
 
-1. **명명 규칙**: kebab-case 사용 (`my-skill`, `gitlab-ci-doctor`)
+1. **명명 규칙**: kebab-case 사용 (`my-skill`, `ci-log-doctor`)
 2. **버전 관리**: 시맨틱 버전 준수
 3. **문서화**: README.md에 사용자 관점의 문서 작성
 4. **훅 경로**: 항상 전체 상대 경로 사용

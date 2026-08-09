@@ -123,10 +123,10 @@ frontmatter() {
 }
 
 @test "dependencies emit a hook block matching on tool name only" {
-  scaffold t-deps none --dep 'glab>=1.38.0' --dep 'jq>=1.6'
+  scaffold t-deps none --dep 'gh>=2.0.0' --dep 'jq>=1.6'
   [ "$status" -eq 0 ]
   # values are emitted as YAML double-quoted scalars so colons/hashes stay safe
-  frontmatter t-deps | grep -q '  - "glab>=1.38.0"'
+  frontmatter t-deps | grep -q '  - "gh>=2.0.0"'
   frontmatter t-deps | grep -q '  - "jq>=1.6"'
   # matcher must be the bare tool name; command filtering belongs in `if`
   frontmatter t-deps | grep -q 'matcher: "Bash"'
@@ -252,7 +252,7 @@ frontmatter() {
 # Assert the generated frontmatter is real YAML and round-trips a given key.
 #
 # PyYAML comes via `uv --with`, not the system python. The CI image
-# (buildkit:jdk25-SNAPSHOT) ships python3 without PyYAML, so `import yaml`
+# 일부 CI 이미지는 python3만 있고 PyYAML이 없다, so `import yaml`
 # against the bare interpreter fails there while passing locally.
 assert_frontmatter_parses() {
   local skill="$1" key="$2" expected="$3"

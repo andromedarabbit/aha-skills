@@ -61,7 +61,7 @@ command --advanced-option
 ## 훅이 실행되지 않을 때
 
 1. **matcher 확인** — `matcher`는 도구 이름(`Bash`, `Edit` 등)만 매칭합니다. 명령 내용으로
-   거르려면 `if: "Bash(glab *)"`를 씁니다. `matcher: "Bash.*glab.*"`처럼 쓰면 영영 발동하지 않습니다.
+   거르려면 `if: "Bash(gh *)"`를 씁니다. `matcher: "Bash.*gh.*"`처럼 쓰면 영영 발동하지 않습니다.
 2. **경로 확인** — `command`는 `"bash \"${CLAUDE_PLUGIN_ROOT}/<skill>/scripts/<script>.sh\""`
    형태여야 합니다. `${CLAUDE_PLUGIN_ROOT}`는 카테고리 설치 루트라서 경로에 카테고리를 다시
    넣으면 안 되고, CWD 기준 상대경로는 조용히 실행되지 않습니다. 훅에서

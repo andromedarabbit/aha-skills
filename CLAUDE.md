@@ -6,7 +6,7 @@
 
 `aha-skills`는 [anthropics/skills](https://github.com/anthropics/skills) 저장소의 모범 사례를 따르는 Claude Code용 개인 에이전트 스킬(Agent Skills) 모음입니다. 에이전트 스킬은 특화된 워크플로우, 도구, 도메인별 지식으로 Claude Code의 기능을 확장합니다.
 
-검증기·표준 문서·`skill-author`는 사내 저장소에서 이식했습니다. 출처와 의도적 차이는 [docs/UPSTREAM.md](docs/UPSTREAM.md) 참조.
+검증기·표준 문서·`skill-author`는 상류 저장소에서 이식했습니다. 출처와 의도적 차이는 [docs/UPSTREAM.md](docs/UPSTREAM.md) 참조.
 
 ## 개발 명령어
 
@@ -165,7 +165,7 @@ hooks:                       # 강력 권장
 **중요:**
 - `description`은 "무엇을 하는지 + 언제 쓰는지(when-to-use 트리거)"를 구체적으로 담으세요. Claude가 여러 스킬 중 올바른 것을 고르는 근거이며, 트리거가 빈약하면 스킬을 안 쓰고 넘어가는 undertrigger가 생깁니다. 공식 한도는 1024자이고, 그 안에서 불필요하게 장황하지 않게 씁니다 (임의의 짧은 글자 수 제한은 두지 않습니다)
 - `context`는 취향이 아니라 **상호작용 모델에서 파생**됩니다. `docs/skill-specification.md`의 판정표를 따르세요 — 손으로 고르지 말고 `skill-author`가 판정하게 합니다. 요약하면: 실행 중 사용자에게 물을 일이 없으면 `fork`(격리 이득), 고위험·비가역 게이트가 여러 곳이면 `inline`(서브에이전트는 `AskUserQuestion`을 쓸 수 없으므로)
-- `inline`은 "작은 유틸리티 전용"이 아닙니다 — 게이트가 여러 개인 큰 스킬도 `inline`이 맞을 수 있습니다(예: `gitlab-mr-creation` v3.0.0, `jupyterhub-custom-image-rollout`). 다만 inline 본문은 주 대화에 상주하므로 크기가 곧 비용이고, **주 에이전트가 실행할 절차를 참조 문서로 빼는 것은 자기무효**입니다(그 에이전트가 다시 Read해서 같은 토큰이 들어옵니다)
+- `inline`은 "작은 유틸리티 전용"이 아닙니다 — 게이트가 여러 개인 큰 스킬도 `inline`이 맞을 수 있습니다(예: `pr-creator` v3.0.0, `rollout-custom-image`). 다만 inline 본문은 주 대화에 상주하므로 크기가 곧 비용이고, **주 에이전트가 실행할 절차를 참조 문서로 빼는 것은 자기무효**입니다(그 에이전트가 다시 Read해서 같은 토큰이 들어옵니다)
 - 훅 경로는 `"bash \"${CLAUDE_PLUGIN_ROOT}/<skill>/scripts/<script>.sh\""` 형태여야 합니다. `${CLAUDE_PLUGIN_ROOT}`는 **카테고리 설치 루트**라서 경로에 카테고리가 들어가지 않습니다 (아래 "훅 경로 규칙" 참고)
 - `language` 필드는 필수입니다 (예: 이 저장소의 경우 `"korean"`)
 - **`context: fork` 스킬은 `AskUserQuestion`을 쓸 수 없습니다** (모든 서브에이전트 공통). 사용자 확인은 `PENDING_DECISION:` 반환-재개 방식으로, 호출 전 모호성 해소 질문은 `description`에 담습니다 — `docs/frontmatter-reference.md`의 "fork 스킬에서 사용자 확인받기" 참고
@@ -188,8 +188,8 @@ command: "bash \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/check.sh\""
 command: "uv run \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/report.py\" --quiet-ok"
 
 # 잘못됨
-command: "bash .claude/skills/gitlab-experts/my-skill/scripts/check.sh"  # CWD 상대경로 → 조용히 실행 안 됨
-command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-experts/my-skill/scripts/check.sh\""  # 카테고리 중복
+command: "bash .claude/skills/meta-experts/my-skill/scripts/check.sh"  # CWD 상대경로 → 조용히 실행 안 됨
+command: "bash \"${CLAUDE_PLUGIN_ROOT}/meta-experts/my-skill/scripts/check.sh\""  # 카테고리 중복
 command: "bash \"${CLAUDE_SKILL_DIR}/scripts/check.sh\""  # 훅에서는 치환되지 않음
 command: "bash ${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/check.sh"  # 따옴표 없음 → 경로에 공백 있으면 깨짐
 command: "bash scripts/check.sh"
@@ -199,13 +199,13 @@ command: "bash ../../my-skill/scripts/check.sh"
 `$CLAUDE_PLUGIN_ROOT`는 **플러그인(= 카테고리) 설치 루트**입니다. 실측:
 
 ```text
-~/.claude/plugins/cache/oh-my-skills/gitlab-experts/<sha>/gitlab-mr-creation/scripts/check-deps.sh
+~/.claude/plugins/cache/aha-skills/meta-experts/<sha>/skill-author/scripts/check-deps.sh
 └───────────────────── $CLAUDE_PLUGIN_ROOT ─────────────────────┘└──── 스킬 디렉토리 ────┘
 ```
 
 **왜 바뀌었나:** 옛 `.claude/skills/...` 형태는 CWD 기준 상대경로여서 플러그인으로 설치된
 환경에 존재하지 않는 경로였고(이 저장소에는 `.claude/skills/` 디렉토리 자체가 없습니다),
-훅은 경로가 틀려도 **에러 없이 조용히 실행되지 않습니다**. 그 결과 `gitlab-mr-creation`의
+훅은 경로가 틀려도 **에러 없이 조용히 실행되지 않습니다**. 그 결과 한 스킬의
 Stage 4 승인 영수증 훅이 한 번도 실행되지 않은 채 "승인 게이트가 있다"고 문서화돼 있었습니다.
 `tools/validate-hook-paths.sh`가 옛 형태를 오류로 잡습니다.
 
@@ -231,7 +231,7 @@ Stage 4 승인 영수증 훅이 한 번도 실행되지 않은 채 "승인 게�
 bash "${CLAUDE_SKILL_DIR}/scripts/preflight.sh"
 
 # 잘못됨
-bash .claude/skills/gitlab-experts/my-skill/scripts/x.sh  # CWD 상대경로 → 첫 호출부터 실패
+bash .claude/skills/meta-experts/my-skill/scripts/x.sh  # CWD 상대경로 → 첫 호출부터 실패
 bash "${CLAUDE_SKILL_DIR}/my-skill/scripts/x.sh"          # 스킬 이름 중복
 bash "${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/x.sh"        # 본문에서는 치환되지 않음
 ```
@@ -297,8 +297,8 @@ GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니�
 
 ## 명명 규칙
 
-- **스킬:** kebab-case (예: `git-commit-helper`, `gitlab-ci-pipeline-doctor`)
-- **카테고리:** kebab-case 복수형 (예: `git-experts`, `gitlab-experts`, `java-experts`, `macos-experts`)
+- **스킬:** kebab-case (예: `commit-helper`, `ci-log-doctor`)
+- **카테고리:** kebab-case 복수형 (예: `meta-experts`, `git-experts`, `java-experts`, `macos-experts`)
 - **파일:** 소문자와 하이픈 (예: `check-deps.sh`)
 - **디렉토리:** 소문자와 하이픈 (예: `scripts/`, `docs/`)
 
@@ -334,7 +334,7 @@ GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니�
 
 `scripts/`가 있는 스킬은 반드시 `scripts/tests/run.sh`를 포함해야 합니다 (`validate-skill.sh`가 실패로 잡습니다).
 
-이 파일이 없으면 테스트 파일이 아무리 많아도 CI가 발견하지 못합니다 — `run-all-tests.sh`가 찾는 경로가 이것 하나뿐입니다. `confluence-publish`가 실제로 그 상태였습니다(테스트 9개가 전부 통과하는데 아무도 돌리지 않음).
+이 파일이 없으면 테스트 파일이 아무리 많아도 CI가 발견하지 못합니다 — `run-all-tests.sh`가 찾는 경로가 이것 하나뿐입니다. 한 스킬이 실제로 그 상태였습니다(테스트가 전부 통과하는데 아무도 돌리지 않음).
 
 ### 프레임워크 선택
 
@@ -387,7 +387,7 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab ci *)"
+          if: "Bash(gh run *)"
           command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill/scripts/summarize-log.sh\""
           description: "CI 로그 요약"
 ```

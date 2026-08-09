@@ -101,7 +101,7 @@ run_with_hooks "valid" 'hooks:
       hooks:
         - type: command
           command: "bash .claude/skills/cat/skill-x/scripts/b.sh"
-    - matcher: "mcp__mcp-atlassian__confluence_(create|update)_page"
+    - matcher: "mcp__example__resource_(create|update)_action"
       hooks:
         - type: command
           command: "bash .claude/skills/cat/skill-x/scripts/c.sh"'

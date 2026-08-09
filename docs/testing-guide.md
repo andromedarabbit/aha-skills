@@ -1,6 +1,6 @@
 # 스킬 테스트 가이드
 
-이 문서는 oh-my-skills 저장소에서 에이전트 스킬의 스크립트를 테스트하는 베스트 프랙티스를 정리합니다.
+이 문서는 aha-skills 저장소에서 에이전트 스킬의 스크립트를 테스트하는 베스트 프랙티스를 정리합니다.
 
 ## 테스트 계층 개요
 
@@ -111,13 +111,13 @@ setup() {
   SBIN="$TEST_DIR/bin"
   mkdir -p "$SBIN"
 
-  # glab stub: 호출 기록만 남기고 성공 반환
-  cat >"$SBIN/glab" <<'STUB'
+  # gh stub: 호출 기록만 남기고 성공 반환
+  cat >"$SBIN/gh" <<'STUB'
 #!/usr/bin/env bash
-echo "glab $*" >> "$TEST_DIR/calls.log"
+echo "gh $*" >> "$TEST_DIR/calls.log"
 exit 0
 STUB
-  chmod +x "$SBIN/glab"
+  chmod +x "$SBIN/gh"
 
   export PATH="$SBIN:$PATH"
   export HOME="$TEST_DIR"
@@ -126,9 +126,9 @@ STUB
 
 ### 실제 예시 (이 저장소)
 
-- `skills/git-experts/commit-rule-extractor/scripts/tests/detect-rule-status.bats` — 해시 계산, 캐시 상태 검증
+- `skills/git-experts/commit-rule/scripts/tests/detect-rule-status.bats` — 해시 계산, 캐시 상태 검증
 - `skills/git-experts/shared/tests/hash-drift-guard.bats` — 두 스크립트 간 일관성 검증
-- `skills/confluence-experts/confluence-publish/scripts/__tests__/install-confluence-cli.test.sh` — PATH stub + 다양한 CLI 설치 시나리오
+- `skills/publish-experts/publish-doc/scripts/__tests__/install-cli.test.sh` — PATH stub + 다양한 CLI 설치 시나리오
 
 ---
 
@@ -161,8 +161,8 @@ def test_process_returns_expected():
 
 ### 실제 예시 (이 저장소)
 
-- `skills/confluence-experts/confluence-publish/scripts/__tests__/test_normalize_strikethrough.py`
-- `skills/confluence-experts/confluence-publish/scripts/__tests__/test_normalize_nested_lists.py`
+- `skills/publish-experts/publish-doc/scripts/__tests__/test_normalize_strikethrough.py` — 텍스트 정규화 단위 테스트
+- `skills/publish-experts/publish-doc/scripts/__tests__/test_normalize_nested_lists.py` — 중첩 리스트 정규화 단위 테스트
 
 ---
 
@@ -184,7 +184,7 @@ print(json.dumps({
 }
 
 @test "정상 명령어 → PASS (exit 0)" {
-  run bash "$HOOK_SCRIPT" <<< "$(make_event 'glab ci status')"
+  run bash "$HOOK_SCRIPT" <<< "$(make_event 'gh run list')"
   [ "$status" -eq 0 ]
 }
 
@@ -254,11 +254,11 @@ echo "requires external API credentials" > skills/my-category/my-skill/.ci-skip-
 
 ## 후속 작업 (TODO)
 
-- [ ] 기존 테스트 없는 스킬에 테스트 추가 (java-experts, doc-experts, homebrew-formula, woowa-office-experts)
-- [ ] CI 이미지에 uv/Python 추가 (containers 레포)
-- [x] ~~CI 이미지에 perl 추가~~ — **이미지가 아니라 스크립트를 고쳐서 해결**했다(2026-07-27). CI 이미지(`buildkit:jdk25-SNAPSHOT`, RHEL 계열 최소 perl 5.32)에는 `Encode`는 있지만 **`open.pm` 프래그마가 없다.** `confluence-publish`의 `normalize-adf-lossy` / `normalize-emphasis`가 `use open`을 쓰다가 perl이 `Can't locate open.pm`으로 죽었고, 하필 그 exit 2가 두 스크립트에서 "패턴 발견"·"게시 차단"을 뜻해 의존성 문제가 판정 결과로 둔갑했다. `binmode`(빌트인) + 3-arg open의 `:utf8`(PerlIO 코어)로 바꿔 모듈 의존을 없앴고, 지금은 두 스위트 40케이스가 CI에서 실제로 돈다.
+- [ ] 기존 테스트 없는 스킬에 테스트 추가 (java-experts, doc-experts, brew-formula, office-experts)
+- [ ] CI 이미지에 uv/Python 추가 (배포 이미지)
+- [x] ~~CI 이미지에 perl 추가~~ — **이미지가 아니라 스크립트를 고쳐서 해결**했다(2026-07-27). CI 이미지(`ci-runner:latest`, RHEL 계열 최소 perl 5.32)에는 `Encode`는 있지만 **`open.pm` 프래그마가 없다.** `publish-doc`의 `normalize-output` / `normalize-format`이 `use open`을 쓰다가 perl이 `Can't locate open.pm`으로 죽었고, 하필 그 exit 2가 두 스크립트에서 "패턴 발견"·"게시 차단"을 뜻해 의존성 문제가 판정 결과로 둔갑했다. `binmode`(빌트인) + 3-arg open의 `:utf8`(PerlIO 코어)로 바꿔 모듈 의존을 없앴고, 지금은 두 스위트 40케이스가 CI에서 실제로 돈다.
 
   교훈으로 남길 것: **모듈이 있는지 없는지를 정황으로 추론하지 말고 환경이 직접 말하게 하라.** 처음엔 exit 2만 보고 "Encode가 없다"고 단정했다가 한 번 헛수고했다. `__tests__/lib/perl-capability.sh`가 perl 경로·버전·`binmode`·`3-arg :utf8`·`open.pm`·`Encode`를 각각 찍고, 못 쓰는 환경이면 이유와 함께 스위트를 건너뛴다(실패로 두면 "환경 미비"와 "스크립트 깨짐"이 구분되지 않는다). 지금 CI에서는 이 장치가 발동하지 않는다 — 안전망으로만 남아 있다.
-- [x] confluence-publish에 `scripts/tests/run.sh` 생성 (기존 `__tests__/` 연결) — 2026-07-27. 통과하는 테스트 9개가 CI에서 한 번도 실행되지 않고 있었다. 같은 회차에 `analyze-emr-cost-surge-root-cause`(pytest 15개)·`analyze-spark-resources`(bats 22개)에도 러너를 추가해, `validate-skill.sh`의 러너 검사를 경고 → **실패**로 승격했다.
+- [x] publish-doc에 `scripts/tests/run.sh` 생성 (기존 `__tests__/` 연결) — 2026-07-27. 통과하는 테스트 9개가 CI에서 한 번도 실행되지 않고 있었다. 같은 회차에 `diagnose-cost-surge`(pytest 15개)·`analyze-job-resources`(bats 22개)에도 러너를 추가해, `validate-skill.sh`의 러너 검사를 경고 → **실패**로 승격했다.
 - [ ] `scripts/__tests__/` → `scripts/tests/` 디렉토리 통일 마이그레이션
 - [ ] promptfoo 기반 에이전트 동작 테스트 도입 검토

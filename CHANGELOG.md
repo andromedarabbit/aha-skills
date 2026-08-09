@@ -7,7 +7,7 @@
 
 ### 추가됨
 
-- 저장소 초기화. 검증기 15종·표준 문서 7종·`skill-author` 스킬을 사내 저장소에서 이식했습니다. 출처와 기준 커밋은 [docs/UPSTREAM.md](docs/UPSTREAM.md) 참조
+- 저장소 초기화. 검증기 15종·표준 문서 7종·`skill-author` 스킬을 상류 저장소에서 이식했습니다. 출처와 기준 커밋은 [docs/UPSTREAM.md](docs/UPSTREAM.md) 참조
 - `meta-experts` 카테고리와 `skill-author` 스킬
 - pre-commit 훅 15개 (검증기 8종 + 표준 훅 6종 + 셸 권한 보정)
 - GitHub Actions 검증 워크플로 (`checks`·`tests` 두 잡)

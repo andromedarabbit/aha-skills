@@ -10,7 +10,7 @@
 # 실제로 이 저장소의 훅 43개가 전부 `bash .claude/skills/<category>/<skill>/...`
 # 형태였다. 이건 CWD 기준 상대경로라서 플러그인으로 설치된 환경에서는 존재하지
 # 않는 경로다(이 저장소에는 `.claude/skills/` 디렉토리 자체가 없다). 그 결과
-# gitlab-mr-creation 의 Stage 4 승인 영수증 훅이 한 번도 실행되지 않은 채로
+# 한 스킬의 Stage 4 승인 영수증 훅이 한 번도 실행되지 않은 채로
 # "승인 게이트가 있다"고 문서화돼 있었다. 옛 검사기는 그 형태를 **규약으로 강제**
 # 했으니 43개가 전부 통과했다.
 #
@@ -20,7 +20,7 @@
 # - `${CLAUDE_PLUGIN_ROOT}` 는 **플러그인(= 카테고리) 설치 루트**다. 경로에
 #   카테고리가 다시 들어가지 않는다. 실측:
 #
-#     ~/.claude/plugins/cache/oh-my-skills/gitlab-experts/<sha>/gitlab-mr-creation/scripts/check-deps.sh
+#     ~/.claude/plugins/cache/aha-skills/meta-experts/<sha>/skill-author/scripts/check-deps.sh
 #     └───────────────────── $CLAUDE_PLUGIN_ROOT ─────────────────────┘└──── 스킬 디렉토리 ────┘
 #
 # - 따옴표는 필수다. 설치 경로에 공백이 들어갈 수 있다.
