@@ -1,6 +1,5 @@
 .claude/settings.local.json
 *.log
-.tmp/java-test-fixer-workspace/
 # Workspace directories for skill execution
 **/*-workspace/
 
@@ -11,3 +10,6 @@ __pycache__/
 
 # Eval/optimization scratch artifacts (skill-creator runs)
 .eval-workspaces/
+
+# Editor (personal — VS Code Peacock theme)
+.vscode/
