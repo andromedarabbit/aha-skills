@@ -110,7 +110,9 @@ context: inline   # 간단한 헬퍼
 
 Context는 **설명으로 설득하는 옵션이 아니라**, `context:` 한 줄로 **실행 방식이 바뀌는 제어 레버**입니다.
 
-첫 번째 기준은 **실행 중에 사용자에게 물어봐야 하는가**입니다. `fork` 스킬의 서브에이전트는 `AskUserQuestion`을 쓸 수 없으므로(아래 "fork 스킬에서 사용자 확인받기" 참고), 이 답이 곧 `context` 값을 정합니다. 판단표 전문은 [스킬 명세](skill-specification.md#context-선택)에 있습니다.
+첫 번째 기준은 **실행 중에 사용자에게 물어봐야 하는가**입니다. `fork` 스킬의 서브에이전트는 `AskUserQuestion`을 쓸 수 없으므로(아래 "fork 스킬에서 사용자 확인받기" 참고), 이 답이 곧 `context` 값을 정합니다.
+
+`tools/validate-gate-context.sh`가 이 규칙을 CI에서 잡습니다 — `allowed-tools`에 `AskUserQuestion`이 있으면서 `context`가 `inline`이 아니면 오류입니다. 본문 산문의 "fork라서 쓸 수 없으니 멈추고 보고한다" 언급은 잡지 않습니다. 판단표 전문은 [스킬 명세](skill-specification.md#context-선택)에 있습니다.
 
 물어봐야 한다면 그다음 기준은 **그 질문이 조사 결과에 의존하는가**입니다.
 
