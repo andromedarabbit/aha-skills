@@ -27,7 +27,7 @@ jobs:
       # check-frontmatter.sh 의 YAML 파싱 검사에 파서가 필요하다. GitHub Actions 는
       # CI=true 를 자동 설정하고, 그 경우 스크립트는 파서를 못 구하면 경고가 아니라
       # 에러를 낸다 — uv 를 빼면 "로컬은 초록, CI 는 빨강" 이 된다.
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
 
       - name: shellcheck 확인
         # validate-skill.sh 는 shellcheck 가 없으면 직접 내려받아 /usr/local/bin 에 쓴다.
@@ -87,7 +87,7 @@ jobs:
 
       # skill-author/scripts/tests/run.sh 는 pytest 대상이 있는데 uv 가 없으면 exit 1 이다.
       # 현재 대상은 없지만 그 계약을 미리 만족시킨다.
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
 
       - name: bats 설치
         # skill-author 의 bats 3개는 run/$status/setup/teardown/$BATS_TEST_DIRNAME 만 쓰고
