@@ -51,6 +51,9 @@ jobs:
       - name: 훅 matcher·이벤트 검증
         run: ./tools/validate-matchers.sh
 
+      - name: 게이트 컨텍스트 검증
+        run: ./tools/validate-gate-context.sh
+
       - name: 훅 경로 검증
         run: ./tools/validate-hook-paths.sh
 

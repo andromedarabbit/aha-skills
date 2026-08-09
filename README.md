@@ -46,7 +46,7 @@ skills/meta-experts/skill-author/scripts/scaffold.sh --help
 pre-commit run --all-files && ./tools/run-all-tests.sh && git diff --exit-code
 ```
 
-- `pre-commit run --all-files` — 검증기 7종이 실제 입력으로 돈다
+- `pre-commit run --all-files` — 검증기 8종이 실제 입력으로 돈다
 - `./tools/run-all-tests.sh` — 스킬 테스트 스위트가 실제로 발견되고 실행된다
 - `git diff --exit-code` — 인덱스 드리프트와 fixer 재작성이 없다
 
@@ -66,6 +66,7 @@ for f in tools/test-*.sh; do bash "$f" || break; done
 | `tools/check-frontmatter.sh` | SKILL.md 프론트매터 (필수 필드·semver·description 한도·when-to-use 트리거) |
 | `tools/validate-skill.sh` | 스킬 디렉토리 구조 + `shellcheck -x` |
 | `tools/validate-matchers.sh` | 훅 matcher·이벤트 이름 (발동 불가능한 matcher 적출) |
+| `tools/validate-gate-context.sh` | AskUserQuestion 게이트 컨텍스트 (`allowed-tools`에 있으면 `context: inline` 강제) |
 | `tools/validate-hook-paths.sh` | 프론트매터 훅의 스크립트 경로 (`${CLAUDE_PLUGIN_ROOT}` 형태) |
 | `tools/validate-body-paths.sh` | SKILL.md 본문·딸린 문서의 스크립트 경로 (`${CLAUDE_SKILL_DIR}` vs `$SKILL_DIR`) |
 | `tools/validate-marketplace.sh` | marketplace.json 스키마 + `skills/` 양방향 정합성 |

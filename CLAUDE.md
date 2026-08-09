@@ -19,8 +19,9 @@
 # 프론트매터 형식 확인
 ./tools/check-frontmatter.sh skills/your-category/your-skill/SKILL.md
 
-# 훅 매처·이벤트 이름·훅 경로·본문 경로 검증 (저장소 전체 스캔)
+# 훅 매처·이벤트 이름·게이트 컨텍스트·훅 경로·본문 경로 검증 (저장소 전체 스캔)
 ./tools/validate-matchers.sh
+./tools/validate-gate-context.sh
 ./tools/validate-hook-paths.sh
 ./tools/validate-body-paths.sh
 
@@ -46,7 +47,7 @@ for f in tools/test-*.sh; do bash "$f" || break; done
 pre-commit run --all-files && ./tools/run-all-tests.sh && git diff --exit-code
 ```
 
-- `pre-commit run --all-files` — 검증기 7종이 실제 입력으로 돈다
+- `pre-commit run --all-files` — 검증기 8종이 실제 입력으로 돈다
 - `./tools/run-all-tests.sh` — 스킬 테스트 스위트가 실제로 발견되고 실행된다
 - `git diff --exit-code` — `generate-index.sh`가 드리프트를 만들지 않았고 fixer가 파일을 다시 쓰지 않았다
 
@@ -102,7 +103,7 @@ aha-skills/
 ├── skills/                    # 카테고리별 모든 에이전트 스킬
 │   └── meta-experts/          # 스킬 작성 메타 스킬
 │       └── skill-author/      # 새 스킬 생성·판정·검증 (스킬 구조 예시는 아래 '스킬 구조' 참고)
-├── tools/                     # 검증 및 유틸리티 스크립트 (13개)
+├── tools/                     # 검증 및 유틸리티 스크립트 (15개)
 ├── docs/                      # 표준 및 모범 사례 + UPSTREAM.md (이식 출처)
 ├── .github/workflows/         # GitHub Actions 검증 워크플로
 └── .claude-plugin/            # 마켓플레이스 등록 메타데이터
