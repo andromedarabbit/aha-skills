@@ -79,11 +79,11 @@ TOOL_EVENTS = {
 
 # 알려진 내장 도구 이름. matcher는 도구 이름하고만 비교된다.
 # 오탐(정상 matcher를 깨졌다고 판정)을 피하려고 넉넉하게 둔다 — 깨진 matcher들은
-# 어떤 도구 이름에도 없는 리터럴(git/glab/brew/custom-cli/confluence/.txt/.log/Test 등)을 요구한다.
+# 어떤 도구 이름에도 없는 리터럴(git/brew/custom-cli/.txt/.log/Test 등)을 요구한다.
 #
 # AskUserQuestion·Agent·EnterPlanMode·NotebookRead·TaskCreate/Get/List/Update/Stop/Output
 # 은 MR !35 작업 중 설치된 Claude Code 바이너리(v2.1.220)의 문자열을 직접 확인해 추가했다
-# (validate-matchers.sh 가 gitlab-mr-creation 의 정상적인 `matcher: "AskUserQuestion"`
+# (validate-matchers.sh 가 한 스킬의 정상적인 `matcher: "AskUserQuestion"`
 # PostToolUse 훅을 "어떤 도구 이름과도 매칭 불가"로 오판했던 것이 발단 — 이 리스트 자체가
 # 오래돼 실재하는 도구 이름을 놓치고 있었다).
 TOOL_NAMES = [
@@ -225,7 +225,7 @@ print("────────────────────────�
 # 훅을 선언한 스킬이 있는데 검사 대상이 0건이면 통과가 아니라 실패다. 스캔 경로가
 # 잘못됐거나 프론트매터 파싱이 깨진 것이므로 초록불로 덮으면 안 된다.
 #
-# 상류(oh-my-skills)와의 의도적 차이: 상류는 `checked == 0` 자체를 실패로 봤다. 훅을 쓰는
+# 상류와의 의도적 차이: 상류는 `checked == 0` 자체를 실패로 봤다. 훅을 쓰는
 # 스킬이 항상 여러 개 있는 저장소에서는 그게 곧 "파서가 깨졌다"였기 때문이다. 이 저장소는
 # 훅 없는 스킬 하나로 시작할 수 있어서(예: skill-author 는 hooks: 가 없고, 훅 예제를 품은
 # assets/ 는 위에서 스캔 제외된다) 그 등식이 성립하지 않는다. 가드의 원래 의도인

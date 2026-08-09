@@ -92,7 +92,7 @@ for category_dir in "$SKILLS_DIR"/*/; do
             # YAML 큰따옴표 스칼라(예: description: "...\"MR 만들어줘\"...")는 바깥
             # 따옴표만 벗기고 내부 이스케이프(\")를 복원한다. 예전처럼 tr -d '"'로
             # 모든 큰따옴표를 지우면 escape 백슬래시만 남아 `\MR 만들어줘\`처럼
-            # 깨진다(2026-08-01 CodeRabbit 리뷰로 발견, gitlab-mr-doctor MR).
+            # 깨진다(2026-08-01 코드리뷰로 발견).
             if [[ "$raw" == \"*\" ]]; then
                 raw="${raw#\"}"
                 raw="${raw%\"}"

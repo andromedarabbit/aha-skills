@@ -37,8 +37,8 @@ hooks:
 스킬의 고유 이름입니다. 파일 이름과 일치해야 합니다.
 
 ```yaml
-name: gitlab-ci-pipeline-doctor  # 올바름
-name: GitLab_CI_Doctor            # 잘못됨
+name: ci-log-doctor          # 올바름
+name: CiLogDoctor             # 잘못됨
 ```
 
 ### description
@@ -51,10 +51,10 @@ name: GitLab_CI_Doctor            # 잘못됨
 
 ```yaml
 # 좋음: 기능 + when-to-use 트리거를 함께 담음
-description: GitLab CI 파이프라인 실패를 진단하고 수정 제안을 제공합니다. CI 파이프라인이 실패하거나 .gitlab-ci.yml 오류를 디버깅할 때 사용합니다
+description: CI 파이프라인 실패를 진단하고 수정 제안을 제공합니다. CI 파이프라인이 실패하거나 워크플로 설정 파일 오류를 디버깅할 때 사용합니다
 
 # 나쁨: 기능만 있고 "언제 쓰는지"가 없음 — undertrigger 위험
-description: GitLab CI 파이프라인 진단 도구
+description: CI 파이프라인 진단 도구
 ```
 
 ### dependencies
@@ -66,12 +66,12 @@ description: GitLab CI 파이프라인 진단 도구
 
 ```yaml
 dependencies:
-  - glab>=2.0.0
+  - gh>=2.0.0
   - jq>=1.6
 
 # 또는 버전 없이
 dependencies:
-  - glab
+  - gh
   - jq
 ```
 
@@ -135,16 +135,16 @@ Context는 **설명으로 설득하는 옵션이 아니라**, `context:` 한 줄
 
 **여러 행에 걸치면 위쪽이 이깁니다** — 3행과 7행이 특히 겹치기 쉬운데, 그때는 3행(`inline`)입니다. 자세한 근거와 "위임 전에 그게 이 스킬의 책임인지 먼저 묻는다" 원칙은 [스킬 명세](skill-specification.md#context-선택) 참고.
 
-**6행에는 단서가 붙습니다.** 게이트에 담을 내용이 **요약되면 선택 근거가 사라지는 크기**(수정 후보 목록, 제안서, 미리보기)라면 가역이라도 6행을 적용하지 않고 `inline` + `AskUserQuestion`으로 갑니다. 아래 "fork 스킬에서 사용자 확인받기"가 설명하듯 relay는 실행 보증이 아니라 관례이고, 요약 전달이 일어나면 사용자는 근거 없이 고르는데 스킬은 "확인받음"으로 성공 보고합니다. 실제 적용 사례는 `de-review` v2.0.0과 `de-visualize` v1.0.0입니다. 단서 전문은 [스킬 명세](skill-specification.md#context-선택)에 있습니다.
+**6행에는 단서가 붙습니다.** 게이트에 담을 내용이 **요약되면 선택 근거가 사라지는 크기**(수정 후보 목록, 제안서, 미리보기)라면 가역이라도 6행을 적용하지 않고 `inline` + `AskUserQuestion`으로 갑니다. 아래 "fork 스킬에서 사용자 확인받기"가 설명하듯 relay는 실행 보증이 아니라 관례이고, 요약 전달이 일어나면 사용자는 근거 없이 고르는데 스킬은 "확인받음"으로 성공 보고합니다. 실제 적용 사례는 `doc-review` v2.0.0과 `doc-visualize` v1.0.0입니다. 단서 전문은 [스킬 명세](skill-specification.md#context-선택)에 있습니다.
 
 상호작용 여부가 같다면 그다음 기준이 컨텍스트 소모량입니다 — 탐색·로그 수집이 길수록 격리하는 쪽이 유리합니다. 단 `inline`에서는 **주 에이전트가 실행할 절차를 참조 문서로 빼는 것이 자기무효**입니다(그 에이전트가 다시 Read해서 같은 토큰이 같은 컨텍스트에 들어옵니다) — 옮길 수 있는 건 주 에이전트가 안 읽어도 되는 레퍼런스뿐입니다.
 
-**fork 예제 (상호작용 없음: gitlab-ci-pipeline-doctor):**
+**fork 예제 (상호작용 없음: ci-log-doctor):**
 ```yaml
 context: fork
 ```
 
-**inline 예제 (대화형 수집이 핵심: git-commit-helper):**
+**inline 예제 (대화형 수집이 핵심: commit-helper):**
 ```yaml
 context: inline
 ```
@@ -158,11 +158,11 @@ context: inline
 > [!WARNING]
 > **반환-재개는 게이트가 지키는 동작이 *가역*일 때만 맞습니다.** 판정표 6행이 이 패턴의 조건을 "질문이 조사 결과에 의존 · **가역**"으로 못 박은 이유입니다. 게이트가 비가역·외부 공개 동작(MR 생성, 리뷰 코멘트 posting·resolve, 권한 변경, 원격 삭제)을 지킨다면 `fork` 자체가 틀린 선택이고, 3행(게이트 여러 곳)이나 4행(게이트 1곳 · 조사 비의존)대로 `context: inline` + `AskUserQuestion`으로 가야 합니다.
 >
-> **경계 판단 — "외부에 보인다"가 곧 "비가역"은 아닙니다.** 두 가지를 함께 보세요: **(1) 되돌리는 비용이 얼마인가** — Confluence 페이지 게시는 버전 이력으로 되돌아가지만, resolve된 리뷰 코멘트나 이미 행사된 접근 권한은 그렇지 않습니다. **(2) 프롬프트 게이트가 뚫렸을 때 스크립트가 기본값으로 막아 주는가** — `--apply`/`--yes` 없이는 아무 일도 안 일어나거나 write-enable 환경변수가 필요한 구조라면 기본 경로가 안전합니다. 둘 다 유리하면 `fork` + relay로 남겨도 되고, 아니면 `inline`입니다. 실제 등급 판정 사례와 그 근거는 `docs/todo/pending-decision-relay-directive-rollout.md`에 있습니다.
+> **경계 판단 — "외부에 보인다"가 곧 "비가역"은 아닙니다.** 두 가지를 함께 보세요: **(1) 되돌리는 비용이 얼마인가** — 위키 페이지 게시는 버전 이력으로 되돌아가지만, resolve된 리뷰 코멘트나 이미 행사된 접근 권한은 그렇지 않습니다. **(2) 프롬프트 게이트가 뚫렸을 때 스크립트가 기본값으로 막아 주는가** — `--apply`/`--yes` 없이는 아무 일도 안 일어나거나 write-enable 환경변수가 필요한 구조라면 기본 경로가 안전합니다. 둘 다 유리하면 `fork` + relay로 남겨도 되고, 아니면 `inline`입니다. 실제 등급 판정 사례와 그 근거는 `docs/todo/pending-decision-relay-directive-rollout.md`에 있습니다.
 >
-> 아래 relay 지시문은 **실행 보증이 아니라 관례입니다.** 수신 측인 오케스트레이터는 우리 코드가 아니라 사용자의 메인 세션이라, 지시문을 넣어도 그렇게 파싱한다는 보증이 없습니다. 실제로 `gitlab-mr-reviews`(2026-07-29)에서 오케스트레이터가 리뷰 8건을 **대리 승인**하고 워커를 재개시켜, 사용자가 내용을 한 번도 보지 못한 채 코드 수정·커밋·GitLab posting까지 진행됐습니다. `gitlab-mr-creation`은 relay 지시문을 붙이고도 요약 전달을 겪었습니다.
+> 아래 relay 지시문은 **실행 보증이 아니라 관례입니다.** 수신 측인 오케스트레이터는 우리 코드가 아니라 사용자의 메인 세션이라, 지시문을 넣어도 그렇게 파싱한다는 보증이 없습니다. 실제로 `pr-reviewer`(2026-07-29)에서 오케스트레이터가 리뷰 8건을 **대리 승인**하고 워커를 재개시켜, 사용자가 내용을 한 번도 보지 못한 채 코드 수정·커밋·원격 posting까지 진행됐습니다. `pr-creator`은 relay 지시문을 붙이고도 요약 전달을 겪었습니다.
 >
-> 되돌릴 수 없는 지점의 방어는 프롬프트가 아니라 **스크립트**에 두세요 — `gitlab-mr-creation`의 `create-mr.sh --approved-head`처럼 스크립트가 스스로 현실을 확인하고 거부하는 형태입니다. 등급별 판정 사례는 `docs/todo/pending-decision-relay-directive-rollout.md` 참고.
+> 되돌릴 수 없는 지점의 방어는 프롬프트가 아니라 **스크립트**에 두세요 — `pr-creator`의 `create-pr.sh --approved-head`처럼 스크립트가 스스로 현실을 확인하고 거부하는 형태입니다. 등급별 판정 사례는 `docs/todo/pending-decision-relay-directive-rollout.md` 참고.
 
 ```
 # 잘못됨
@@ -278,7 +278,7 @@ hooks:
 #### 언제 사용하는가? (적극 사용 권장)
 
 **PreToolUse - 환경/의존성 준비 (권장):**
-- ✅ 스킬 작동에 필요한 도구 설치/검증 (예: glab, jq)
+- ✅ 스킬 작동에 필요한 도구 설치/검증 (예: gh, jq)
 - ✅ 실행 환경 조성 (설정 파일 준비, 권한/컨텍스트 체크)
 
 **PostToolUse - 결과 검증 & 피드백 루프 (권장):**
@@ -300,9 +300,9 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/check-deps.sh\""
-          description: "glab 자동 설치"
+          if: "Bash(gh *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
+          description: "gh 자동 설치"
 
 # 패턴 2: CI 로그 요약
 hooks:
@@ -310,8 +310,8 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab ci *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/summarize-ci-log.sh\""
+          if: "Bash(gh run *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
           description: "CI 로그 요약"
 
 # 패턴 3: 훅 체이닝 (여러 훅 순차 실행)
@@ -321,14 +321,14 @@ hooks:
       hooks:
         - type: command
           if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/homebrew-formula/scripts/check-brew.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\""
           description: "brew 확인"
         - type: command
           if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/homebrew-formula/scripts/verify-tap.sh\""
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/verify-tap.sh\""
           description: "tap 확인"
         - type: file
-          path: "${CLAUDE_PLUGIN_ROOT}/homebrew-formula/context.json"
+          path: "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json"
           description: "컨텍스트 로드"
 ```
 
@@ -378,10 +378,10 @@ if: "Write(**/skill-team-rules/*.md)"   # 특정 경로 파일을 쓸 때만
 
 ```yaml
 ---
-name: gitlab-ci-pipeline-doctor
-description: GitLab CI 파이프라인 실패를 진단하고 수정 제안을 제공합니다
+name: ci-log-doctor
+description: CI 파이프라인 실패를 진단하고 수정 제안을 제공합니다
 dependencies:
-  - glab>=2.0.0
+  - gh>=2.0.0
   - jq>=1.6
 version: 2.0.0
 context: fork
@@ -392,15 +392,15 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/check-deps.sh\""
-          description: "glab 설치 확인"
+          if: "Bash(gh *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
+          description: "gh 설치 확인"
   PostToolUse:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab ci *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/analyze-ci-config.sh\""
+          if: "Bash(gh run *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/analyze-ci-config.sh\""
           description: "CI 설정 분석"
 ---
 ```

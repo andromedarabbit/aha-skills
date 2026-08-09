@@ -106,7 +106,7 @@ SKILL.md **본문**에서 스크립트를 부를 때는 `${CLAUDE_SKILL_DIR}`입
     빼먹으면 워커가 자기 CWD 기준으로 `references/*.md`를 찾아 실패합니다
   - 사람이 셸에서 직접 실행할 예시라면 `$SKILL_DIR`을 쓰고, **그 값을 정하는 방법을 같은 문서에
     적으세요**(플러그인 캐시 경로 / 클론 경로 두 가지). 여러 문서가 반복하면 README 한 곳에 두고
-    나머지는 링크합니다 — `git-experts/git-commit-helper`가 그 형태입니다
+    나머지는 링크합니다 — `git-experts/commit-helper`가 그 형태입니다
 
 ## 3. 검증
 

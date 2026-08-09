@@ -12,7 +12,7 @@ NC='\033[0m' # No Color
 # 사용법
 usage() {
     echo "Usage: $0 <skill-md-path>"
-    echo "Example: $0 skills/gitlab-experts/gitlab-ci-pipeline-doctor/SKILL.md"
+    echo "Example: $0 skills/meta-experts/skill-author/SKILL.md"
     exit 1
 }
 

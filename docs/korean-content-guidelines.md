@@ -28,8 +28,8 @@
 |------|------|------|
 | 변수명 | 영어 | `pipeline_id`, `job_name` |
 | 함수명 | 영어 | `check_dependencies()`, `analyze_logs()` |
-| 주석 | 한국어·영어 모두 허용 (강제하지 않음) | `# Check if glab is installed` |
-| 사용자 메시지 | 한국어 | `echo "# glab가 설치되어 있지 않습니다"` |
+| 주석 | 한국어·영어 모두 허용 (강제하지 않음) | `# Check if gh is installed` |
+| 사용자 메시지 | 한국어 | `echo "# gh가 설치되어 있지 않습니다"` |
 
 ## 한글 맞춤법
 
@@ -39,12 +39,12 @@
 
 ```markdown
 # 올바름
-GitLab CI 파이프라인을 분석합니다
-배민 데이터플랫폼 팀의 스킬입니다
+CI 파이프라인을 분석합니다
+우리 팀의 스킬입니다
 
 # 잘못됨
-GitLab CI파이프라인을분석합니다
-배민데이터플랫폼팀의스킬입니다
+CI파이프라인을분석합니다
+우리팀의스킬입니다
 ```
 
 ### 외래어 표기
@@ -66,9 +66,9 @@ GitLab CI파이프라인을분석합니다
 
 ```markdown
 # 일반적인 용어는 원어 사용
-GitLab CI/CD 파이프라인
-Merge Request (MR)
+CI/CD 파이프라인
 Pull Request (PR)
+Merge Request (MR)
 
 # 설명이 필요한 경우
 잡(Job) - CI 파이프라인의 개별 작업 단위
@@ -194,14 +194,14 @@ Pull Request (PR)
 
 ```markdown
 # 올바름 (일관성 있음)
-GitLab CI 파이프라인
-GitLab CI 파이프라인
-GitLab CI 파이프라인
+CI 파이프라인
+CI 파이프라인
+CI 파이프라인
 
 # 잘못됨 (불일치)
-GitLab CI 파이프라인
-GitLab CI/CD 파이프라인
-GitLab CI Pipeline
+CI 파이프라인
+CI/CD 파이프라인
+CI Pipeline
 ```
 
 ### 형식 일관성
@@ -227,10 +227,10 @@ GitLab CI Pipeline
 
 ```markdown
 # 좋음
-glab CLI를 사용해 파이프라인 실패 원인을 분석합니다
+gh CLI를 사용해 파이프라인 실패 원인을 분석합니다
 
 # 피하세요 (너무 긺)
-glab라는 명령행 인터페이스 도구를 활용하여 GitLab CI/CD 파이프라인에서 발생한
+gh라는 명령행 인터페이스 도구를 활용하여 CI 파이프라인에서 발생한
 다양한 종류의 실패 상황의 근본적인 원인을 분석하고 진단하는 기능을 제공합니다
 ```
 
@@ -255,7 +255,7 @@ glab라는 명령행 인터페이스 도구를 활용하여 GitLab CI/CD 파이�
 ```bash
 #!/bin/bash
 # 사용자 메시지는 한국어
-echo "# GitLab CI 파이프라인을 분석합니다..."
+echo "# CI 파이프라인을 분석합니다..."
 
 # 변수명과 함수명은 영어
 local pipeline_id="$1"
@@ -272,8 +272,8 @@ analyze_pipeline() {
 ```bash
 #!/bin/bash
 # 좋음 (명확하고 조치 가능)
-echo "# ⚠️ 오류: glab가 설치되지 않았습니다"
-echo "# 설치 방법: brew install glab"
+echo "# ⚠️ 오류: gh가 설치되지 않았습니다"
+echo "# 설치 방법: brew install gh"
 
 # 피하세요 (모호함)
 echo "# 오류 발생"
@@ -300,7 +300,7 @@ echo "# 다시 시도하세요"
 
 다음 용어는 원어를 유지합니다:
 
-- 제품명: GitLab, GitHub, Kubernetes, Docker
+- 제품명: GitHub, Kubernetes, Docker, Slack
 - 명령어: git, kubectl, bash, jq
 - 파일 확장자: .md, .sh, .yaml
 - 기술 약어: CI, CD, API, CLI, URL

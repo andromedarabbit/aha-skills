@@ -15,11 +15,11 @@
 
 ```bash
 # 올바름
-git-commit-helper
-gitlab-ci-pipeline-doctor
-gitlab-mr-reviews
-aws-cost-analysis
-homebrew-formula
+commit-helper
+ci-log-doctor
+pr-reviewer
+cost-analyzer
+brew-formula
 
 # 잘못됨
 GitCommitHelper               # 대문자 사용
@@ -53,17 +53,17 @@ skills/
 
 | 카테고리 | 설명 | 예시 스킬 |
 |---------|------|-----------|
-| `gitlab-experts` | GitLab 전문가 | gitlab-ci-pipeline-doctor |
-| `emr-experts` | EMR/Spark 전문가 | analyze-spark-resources |
-| `java-experts` | Java 개발 | java-spring-refactor |
-| `doc-experts` | 문서 작성 | de-review |
+| `ci-experts` | CI/CD 전문가 | ci-log-doctor |
+| `meta-experts` | 메타 스킬 | skill-author |
+| `java-experts` | Java 개발 | java-refactor |
+| `doc-experts` | 문서 작성 | doc-review |
 
 ### 카테고리 명명 규칙
 
 ```bash
 # 올바름
-gitlab-experts
-emr-experts
+ci-experts
+meta-experts
 java-experts
 doc-experts
 
@@ -91,7 +91,7 @@ dev-technical             # 약어 사용
 # 올바름
 check-deps.sh
 analyze-ci-config.sh
-install-glab.sh
+install-gh.sh
 
 # 잘못됨
 checkDeps.sh           # 카멜케이스
@@ -119,7 +119,7 @@ ANALYZE-LOGS.PY        # 대문자
 # 올바름
 check-deps.sh
 analyze-ci-config.sh
-install-glab.sh
+install-gh.sh
 
 # 잘못됨
 checkDeps.sh           # 카멜케이스
@@ -188,7 +188,7 @@ scripts/install-tool.sh     # 도구 설치
 
 ```yaml
 # 명확한 설명
-description: "glab가 설치되어 있는지 확인합니다"
+description: "gh가 설치되어 있는지 확인합니다"
 description: "CI 설정 파일을 분석하고 문제를 찾습니다"
 
 # 모호한 설명 (피하세요)
@@ -223,9 +223,9 @@ Conventional Commits 형식을 따릅니다:
 ### 예시
 
 ```
-feat: gitlab-ci-pipeline-doctor 스킬 추가
+feat: ci-log-doctor 스킬 추가
 
-glab CLI를 사용해 GitLab CI 파이프라인 로그를 분석하고
+gh CLI를 사용해 CI 파이프라인 로그를 분석하고
 실패 원인을 진단하는 스킬을 추가했습니다.
 
 Closes #123
@@ -297,12 +297,12 @@ hooks:
 
 ```bash
 # 올바름
-gitlab-ci-pipeline-doctor
-jupyterhub-custom-image-rollout
+ci-log-doctor
+rollout-custom-image
 
 # 피하세요 (내부 팀에서만 사용할 경우)
-gl-ci-doc               # gitlab-ci-pipeline-doctor
-jupyterhub-rollout      # jupyterhub-custom-image-rollout
+ci-doc                  # ci-log-doctor
+image-rollout           # rollout-custom-image
 ```
 
 ## 참고

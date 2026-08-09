@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 # 사용법
 usage() {
     echo "Usage: $0 <skill-path>"
-    echo "Example: $0 skills/gitlab-experts/gitlab-ci-pipeline-doctor"
+    echo "Example: $0 skills/meta-experts/skill-author"
     exit 1
 }
 
@@ -120,13 +120,12 @@ fi
 
 # scripts/가 있으면 테스트 러너가 있어야 함 (CLAUDE.md "테스트 규칙")
 #
-# 예전엔 경고였다 — 규칙은 "새 스킬"을 대상으로 하는데 기존 스킬 3개가 못 지키고 있었기
-# 때문이다. 그 3개(confluence-publish, analyze-emr-cost-surge-root-cause,
-# analyze-spark-resources)에 러너가 생겨서 실패로 승격했다.
+# 예전엔 경고였다 — 규칙은 "새 스킬"을 대상으로 하는데 기존 스킬 몇 개가 못 지키고 있었기
+# 때문이다. 그 스킬들에 러너가 생겨서 실패로 승격했다.
 #
 # run-all-tests.sh 가 찾는 경로가 정확히 이것뿐이라, 러너가 없으면 테스트 파일이 아무리
-# 많아도 CI 에서 한 번도 실행되지 않는다. confluence-publish 가 실제로 그 상태였다 —
-# 테스트 9개가 전부 통과하는데 아무도 돌리지 않고 있었다.
+# 많아도 CI 에서 한 번도 실행되지 않는다. 실제로 한 스킬이 그 상태였다 — 테스트가 전부
+# 통과하는데 아무도 돌리지 않고 있었다.
 if [[ -d "$SKILL_PATH/scripts" ]]; then
     if [[ -f "$SKILL_PATH/scripts/tests/run.sh" ]]; then
         echo -e "  ${GREEN}✅ scripts/tests/run.sh${NC}"
@@ -241,22 +240,16 @@ echo ""
 #
 # 표준(docs/frontmatter-reference.md#fork-스킬에서-사용자-확인받기)은 `PENDING_DECISION:`을
 # 단독 줄로 두고 바로 다음 줄에 고정 relay 지시문("오케스트레이터 지시")을 넣도록 한다.
-# 2026-07-29 WARNING → ERROR 로 승격했다. 승격 조건이던 relay 대상 3개
-# (java-spring-refactor / confluence-publish / de-publish)가 모두 마이그레이션됐고,
-# PENDING_DECISION 을 언급하는 스킬 7개 전부가 이 검사를 통과하는 것을 확인했다.
-# (그중 3개는 inline 으로 전환돼 방출 자체가 없고 산문 인용만 남았다.)
+# WARNING → ERROR 로 승격했다. 승격 조건이던 relay 대상 스킬들이 모두 마이그레이션됐고,
+# PENDING_DECISION 을 언급하는 스킬 전부가 이 검사를 통과하는 것을 확인했다.
+# (일부는 inline 으로 전환돼 방출 자체가 없고 산문 인용만 남았다.)
 #
 # 이 검사가 잡지 못하는 것 (중요): relay 지시문의 유무만 본다. 그 게이트가 **지키는 동작이
 # 비가역·외부 공개인지**는 보지 않는다 — 그런 스킬은 애초에 fork 가 아니라 context: inline
 # 이어야 하고(판정표 3행), relay 지시문을 붙이는 건 잘못된 방향으로 한 걸음 더 가는 것이다.
-# 2026-07-29 등급 재산정에서 대상 7개 중 3개가 이 경우로 판정돼 inline 전환 대상이 됐다.
 #
-# 선행 조건이던 A등급 3건은 모두 inline 전환으로 해소됐다 — gitlab-mr-reviews(v2.0.0),
-# usermanager(v2.0.0), analyze-spark-resources(v2.0.0). 셋 다 PENDING_DECISION 을 더 이상
-# 방출하지 않으므로 이 검사의 대상 자체가 아니다(산문 인용만 남았다). analyze-spark-resources
-# 는 push·MR 생성을 scripts/create-spark-mr.sh 단일 진입점으로 모으면서 위임 보류 문제도
-# 함께 정리했다 — 예전 주석은 그 전 상태를 서술하고 있었다(2026-07-30 정정).
-# 등급표와 판정 근거: docs/todo/pending-decision-relay-directive-rollout.md
+# 선행 조건이던 고위험 스킬들은 모두 inline 전환으로 해소됐다 — 더 이상 PENDING_DECISION
+# 을 방출하지 않으므로 이 검사의 대상 자체가 아니다(산문 인용만 남았다).
 echo "🔄 PENDING_DECISION 오케스트레이터 relay 지시문 확인 (ERROR)..."
 RELAY_MARKER="오케스트레이터 지시"
 if [[ -f "$SKILL_PATH/SKILL.md" ]] && grep -q "PENDING_DECISION" "$SKILL_PATH/SKILL.md"; then

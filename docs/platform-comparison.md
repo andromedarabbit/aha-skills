@@ -54,9 +54,9 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/check-deps.sh\""
-          description: "glab 자동 설치"
+          if: "Bash(gh *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
+          description: "gh 자동 설치"
 ```
 
 **사용 사례:**
@@ -95,9 +95,9 @@ PreToolUse 훅으로 필요한 도구를 자동으로 설치:
 
 ```bash
 # check-deps.sh
-if ! command -v glab &> /dev/null; then
-    echo "# 📦 glab 설치 중..."
-    brew install glab
+if ! command -v gh &> /dev/null; then
+    echo "# 📦 gh 설치 중..."
+    brew install gh
 fi
 ```
 
@@ -326,12 +326,12 @@ fi
 
 ## 실전 비교 예제
 
-### 시나리오: GitLab CI 파이프라인 진단
+### 시나리오: CI 파이프라인 진단
 
 **Claude Code:**
 ```yaml
 ---
-name: gitlab-ci-pipeline-doctor
+name: ci-log-doctor
 context: fork
 agent: general-purpose
 hooks:
@@ -339,15 +339,15 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/check-deps.sh\""
-          description: "glab 자동 설치"
+          if: "Bash(gh *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
+          description: "gh 자동 설치"
   PostToolUse:
     - matcher: "Bash"
       hooks:
         - type: command
-          if: "Bash(glab ci *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/gitlab-ci-pipeline-doctor/scripts/summarize-ci-log.sh\""
+          if: "Bash(gh run *)"
+          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
           description: "CI 로그 요약"
 ---
 
@@ -360,7 +360,7 @@ hooks:
 ```
 
 **효과:**
-- ✅ glab 자동 설치
+- ✅ gh 자동 설치
 - ✅ 긴 로그 자동 요약
 - ✅ 5단계 자동 실행
 - ✅ 독립 컨텍스트 (fork)
@@ -368,8 +368,8 @@ hooks:
 **Cursor AI:**
 ```
 # .cursorrules
-GitLab CI 파이프라인 진단 시:
-1. glab 설치 확인 (수동)
+CI 파이프라인 진단 시:
+1. gh 설치 확인 (수동)
 2. 파이프라인 상태 확인
 3. 실패한 잡 분석
 4. 로그 수동 확인

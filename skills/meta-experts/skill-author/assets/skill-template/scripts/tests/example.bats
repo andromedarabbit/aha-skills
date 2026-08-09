@@ -3,7 +3,7 @@
 #
 # 이 파일을 실제 테스트로 교체하세요.
 # BATS 문서: https://github.com/bats-core/bats-core
-# 저장소 내 실제 예시: skills/git-experts/commit-rule-extractor/scripts/tests/
+# 저장소 내 실제 예시: skills/meta-experts/skill-author/scripts/tests/
 
 setup() {
   TEST_DIR="$(mktemp -d)"
