@@ -22,7 +22,7 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # check-frontmatter.sh 의 YAML 파싱 검사에 파서가 필요하다. GitHub Actions 는
       # CI=true 를 자동 설정하고, 그 경우 스크립트는 파서를 못 구하면 경고가 아니라
@@ -83,7 +83,7 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # skill-author/scripts/tests/run.sh 는 pytest 대상이 있는데 uv 가 없으면 exit 1 이다.
       # 현재 대상은 없지만 그 계약을 미리 만족시킨다.
