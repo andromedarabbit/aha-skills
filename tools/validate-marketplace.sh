@@ -109,13 +109,26 @@ if isinstance(data, dict):
 #
 # 스키마만 검증하면 등록 자체를 빠뜨린 스킬을 놓친다 — 실제로 새 카테고리를 만들면서
 # 등록을 누락해 스킬이 로드조차 안 됐는데 검증기 전부와 테스트 22스위트가 통과했다.
-skills_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(path))), "skills")
+repo_root = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+skills_root = os.path.join(repo_root, "skills")
 if os.path.isdir(skills_root):
     registered = set()
     for p in data.get("plugins", []):
         if not isinstance(p, dict) or not isinstance(p.get("name"), str):
             continue
-        for s in p.get("skills", []) or []:
+        skill_list = p.get("skills") or []
+        if p.get("strict") is True:
+            # strict 엔트리는 컴포넌트를 source 의 .claude-plugin/plugin.json 이 지정한다
+            src = p.get("source")
+            if isinstance(src, str):
+                pj = os.path.join(repo_root, src, ".claude-plugin", "plugin.json")
+                try:
+                    with open(pj, encoding="utf-8") as f:
+                        pdata = json.load(f)
+                    skill_list = pdata.get("skills") or []
+                except Exception as e:
+                    errors.append(f"plugins '{p['name']}': strict 엔트리의 plugin.json 읽기 실패 ({pj}): {e}")
+        for s in skill_list:
             if isinstance(s, str):
                 registered.add((p["name"], s.lstrip("./")))
 
