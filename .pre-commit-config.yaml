@@ -47,7 +47,7 @@ repos:
       # Validate skill structure
       - id: validate-skill
         name: Validate skill structure
-        entry: bash -c 'for dir in $(find skills -mindepth 2 -maxdepth 2 -type d | grep -v "\-workspace$" | grep -v "/shared$"); do ./tools/validate-skill.sh "$dir" || exit 1; done'
+        entry: bash -c 'for dir in $(find skills -mindepth 2 -maxdepth 2 -type d | grep -v "\-workspace$" | grep -v "/shared$" | grep -v "/agents$" | grep -v "/\.claude-plugin$"); do ./tools/validate-skill.sh "$dir" || exit 1; done'
         language: system
         pass_filenames: false
         always_run: true

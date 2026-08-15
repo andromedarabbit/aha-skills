@@ -1,6 +1,6 @@
 ---
 name: career-memoir-compiler
-description: "인터뷰 기록을 충실한 산문 초안으로 컴파일한다. 회고 초안 만들어, 정리 시작 요청으로 호출. 인터뷰 진행은 career-memoir-interviewer 담당 — 질문하지 않고 대화하지 않는다."
+description: "인터뷰 기록을 충실한 산문 초안으로 컴파일한다. '회고 초안 만들어', '정리 시작' 같은 요청이 있을 때 사용. 인터뷰 진행은 career-memoir-interviewer 담당 — 이 스킬은 질문하지 않고 대화하지 않는다."
 version: "1.0.0"
 context: inline
 language: "korean"

@@ -15,6 +15,29 @@
 - [레퍼런스](skills/meta-experts/skill-author/docs/REFERENCE.md)
 
 
+## writing-experts
+
+### [career-memoir-compiler](skills/writing-experts/career-memoir-compiler)
+
+**버전**: 1.0.0
+
+인터뷰 기록을 충실한 산문 초안으로 컴파일한다. '회고 초안 만들어', '정리 시작' 같은 요청이 있을 때 사용. 인터뷰 진행은 career-memoir-interviewer 담당 — 이 스킬은 질문하지 않고 대화하지 않는다.
+
+- [문서](skills/writing-experts/career-memoir-compiler/README.md)
+- [구현 가이드](skills/writing-experts/career-memoir-compiler/docs/GUIDELINES.md)
+- [레퍼런스](skills/writing-experts/career-memoir-compiler/docs/REFERENCE.md)
+
+### [career-memoir-interviewer](skills/writing-experts/career-memoir-interviewer)
+
+**버전**: 1.0.0
+
+경력 회고 에세이를 위한 저자 인터뷰를 진행한다. 한 번에 한 질문, 패러프레이즈 선행, 감정·고민 명시 질문, 세션 원문 축적과 holding 큐로 세션 간 연속성 유지. 경력 회고 인터뷰, 회고 인터뷰 시작, 인터뷰 이어서 같은 요청이 있을 때 사용. 산문 작성·정리·초안 생성은 career-memoir-compiler 담당.
+
+- [문서](skills/writing-experts/career-memoir-interviewer/README.md)
+- [구현 가이드](skills/writing-experts/career-memoir-interviewer/docs/GUIDELINES.md)
+- [레퍼런스](skills/writing-experts/career-memoir-interviewer/docs/REFERENCE.md)
+
+
 
 ---
 *이 파일은 `tools/generate-index.sh`에 의해 자동 생성되었습니다*
