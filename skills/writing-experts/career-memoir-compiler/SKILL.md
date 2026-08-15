@@ -6,86 +6,86 @@ context: inline
 language: "korean"
 ---
 
-# career-memoir-compiler 스킬
+# career-memoir-compiler — 인터뷰 기록 → 산문 초안 컴파일
 
 ## 개요
 
-이 스킬의 목적과 기능을 설명합니다.
+사용자가 "정리 시작"을 선언한 뒤, 인터뷰 기록(세션 원문·압축 상태)을 충실한 산문 초안으로
+변환한다. 원칙은 **추출 not 생성** — 초안의 모든 문장은 세션 원문·인용 발언에 근거해야 하고,
+컴파일러는 창작하지 않는다.
 
-## 스크립트 경로 (먼저 읽을 것)
+이 파일은 게이트다. 게이트를 통과하면 컴파일 오케스트레이션(7단계 프로토콜)은
+`WORKER.md` 본문을 `general-purpose` 서브에이전트로 실행한다.
 
-이 스킬의 스크립트는 `${CLAUDE_SKILL_DIR}` 아래에 있습니다. 하네스가 SKILL.md 를 넘겨줄 때 이
-변수를 **스킬 디렉토리 절대경로로 미리 치환**하므로, 아래 형태를 그대로 실행하면 됩니다.
+## 프로젝트 루트 (vault)
 
-```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/<script>.sh"
-```
+- vault 프로젝트 루트: `/Users/keaton/Workspace/Obsidian/notes/`
+- 이 프로젝트 디렉터리: `/Users/keaton/Workspace/Obsidian/notes/초안/경력 회고 에세이/`
+  - 압축 상태(Spine·장면표·공개 경계): `interview-state.md`
+  - 세션 원문: `sessions/YYYY-MM-DD.md`
+  - 초안 산출: `draft-vN.md`
 
-- 뒤에 카테고리(`writing-experts`)나 스킬 이름을 덧붙이지 마세요 — 이 변수가 이미 스킬 디렉토리입니다
-- 따옴표는 필수입니다. 치환된 설치 경로에 공백이 들어갈 수 있습니다
-- CWD 기준 상대경로로 부르지 마세요. 플러그인으로 설치된 환경에는 그 경로가 없어서 첫 호출부터
-  `No such file or directory` 로 실패합니다
-- 프론트매터 `hooks:` 는 `${CLAUDE_PLUGIN_ROOT}` 규약을 씁니다 — **본문과 훅의 변수가
-  다릅니다.** 서로 바꿔 쓰면 치환되지 않고 조용히 깨집니다
+vault를 옮기면 이 문서와 `WORKER.md`를 함께 고친다.
 
-## 사용 방법
+## 트리거와 담당 범위
 
-스킬을 사용하는 방법을 단계별로 설명합니다:
+- 트리거: "회고 초안 만들어", "정리 시작" 등 산문 변환 요청.
+- **인터뷰 진행은 career-memoir-interviewer 담당** — 이 스킬은 질문하지 않고 대화하지
+  않는다. 인터뷰어의 정리 게이트에서 사용자의 "정리 시작" 선언으로 넘어온다.
 
-1. 단계 1
-2. 단계 2
-3. 단계 3
+## 전제 게이트 (프로토콜 0단계)
 
-## 예시
+두 조건을 모두 확인한다. 어느 하나라도 미완료면 **무엇이 남았는지 보고하고 중단**한다 —
+게이트를 통과한 것처럼 컴파일을 시작하지 않는다.
 
-사용 예시를 보여줍니다:
+1. **사용자의 명시적 정리 선언** — 이 대화에서 사용자가 "정리 시작"(또는 이에 준하는 명시적
+   산문 변환 선언)을 했는가. 없으면 "정리 시작" 선언을 안내하고 중단한다.
+2. **Stage 2 완료 신호** — career-memoir-interviewer 스킬의 `assets/state-schema.md`(§4)
+   정의 그대로 판정한다:
 
-```bash
-# 예시 명령
-command argument
-```
+   > **Stage 2 완료 = 압축 상태 frontmatter `stage: 2` + `## 장면표` 섹션이 존재하고 비어 있지 않음(장면표에 데이터 행 1개 이상).**
 
-## 1. 의도 확정 (게이트)
+   판정 대상 파일: `/Users/keaton/Workspace/Obsidian/notes/초안/경력 회고 에세이/interview-state.md`
 
-조사·탐색을 시작하기 **전에**, 필요한 것만 `AskUserQuestion` 으로 묻습니다.
-이미 대화에서 알 수 있는 값은 묻지 말고 채운 뒤 확인만 받으세요. 게이트는 얇게 유지합니다.
+   이 판정식은 state-schema.md와 **동일 문구**로 유지해야 한다 — 어느 한쪽에서 문구가
+   달라지면 게이트 판정이 갈린다.
 
-## 2. Intent Contract 구성
+미완료 시 보고 예시: "압축 상태 `stage: 1`입니다 — Stage 1(시기별 심층)이 끝나지 않았고
+장면표가 없습니다. 인터뷰를 마친 뒤 다시 '정리 시작'을 선언해 주세요."
 
-답변을 아래로 압축합니다. 원 대화나 중간 추론은 옮기지 않습니다.
+## 워커 실행 (게이트 통과 시)
 
-```yaml
-goal: 사용자가 달성하려는 결과
-scope:
-  in: [포함]
-  out: [제외]
-constraints: [기술·정책·호환성]
-acceptance_criteria: [완료 판정 기준]
-decisions:
-  - question: 확정한 선택
-    answer: 사용자 답
-```
+`general-purpose` 서브에이전트를 띄워 `WORKER.md` 오케스트레이션을 실행한다.
+`${CLAUDE_SKILL_DIR}` 치환은 SKILL.md 본문에서만 일어나므로, 워커 프롬프트에는
+**치환된 절대경로 두 개**를 실어 보낸다:
 
-## 3. 워커 실행
+1. 읽어야 할 본문: `${CLAUDE_SKILL_DIR}/WORKER.md`의 절대경로
+2. 참조 문서의 기준 디렉토리: `${CLAUDE_SKILL_DIR}`의 절대경로 (WORKER.md가 `docs/`를
+   상대경로로 가리키면, 이게 없으면 워커가 **자기 CWD 기준**으로 찾아 실패한다)
 
-`general-purpose` 에이전트를 띄우면서 `${CLAUDE_SKILL_DIR}/WORKER.md` 를 읽고 따르라는
-지시와 Contract 만 전달합니다. 탐색 로그·파일 읽기·중간 추론은 전부 워커에 남고,
-주 대화에는 워커의 짧은 최종 요약만 돌아옵니다.
+vault 데이터 경로는 위 "프로젝트 루트" 절의 절대경로를 그대로 전달한다.
 
-**워커 프롬프트에는 치환된 절대경로 두 개를 실어 보냅니다.** `${CLAUDE_SKILL_DIR}` 치환은
-SKILL.md 본문과 `allowed-tools` 에서만 일어나므로, 워커가 Read 로 읽는 `WORKER.md` 안에서는
-이 변수가 날문자로 남습니다:
+워커가 `NEEDS_DECISION`을 반환하면(프로토콜 진행 중 예상 못한 결정) `AskUserQuestion`으로
+묻고, 새 워커를 만들지 말고 `SendMessage`로 기존 워커를 재개시킨다. 워커가 재감사 상한
+초과를 보고하면 그 내용을 사용자에게 그대로 전달하고 거기서 끝낸다 — 자율 판단으로
+컴파일을 계속하지 않는다.
 
-1. 읽어야 할 본문: `${CLAUDE_SKILL_DIR}/WORKER.md` 의 절대경로
-2. 참조 문서의 기준 디렉토리: `${CLAUDE_SKILL_DIR}` 의 절대경로 (WORKER.md 가 `docs/` 나
-   `scripts/` 를 상대경로로 가리키면, 이게 없으면 워커가 **자기 CWD 기준**으로 찾아 실패합니다)
+## 비-목표
 
-워커가 `NEEDS_DECISION` 을 반환하면(의도 확정 단계에서 예상하지 못한 결정) 여기서
-`AskUserQuestion` 으로 묻고, 새 워커를 만들지 말고 `SendMessage` 로 기존 워커를
-재개시킵니다.
+- **윤문·문체 수정·사실 추가 창작 금지** — 문체는 im-not-ai 인계 후 `/humanize-korean`의
+  몫이다.
+- **구조 변경 제안은 사용자 승인 후에만** — 장면 순서·구성을 자의로 바꾸지 않는다.
+
+## 다음 단계 인계 (im-not-ai)
+
+컴파일이 끝나고 의미·구조가 확정되면 사용자에게 `/ce-doc-review` → `/humanize-korean`
+순서 실행을 권고한다(의미 리뷰를 먼저 끝내야 이후 윤문이 무효화되지 않는다).
+
+**윤문은 이 스킬이 직접 수행하지 않는다.**
 
 ## 관련 문서
 
 - [사용자 문서](README.md)
 - [문서 인덱스](docs/INDEX.md)
 - [구현 가이드](docs/GUIDELINES.md)
+- [레퍼런스](docs/REFERENCE.md)
