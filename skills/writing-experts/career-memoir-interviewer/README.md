@@ -1,102 +1,47 @@
 # career-memoir-interviewer
 
-경력 회고 에세이를 위한 저자 인터뷰를 진행한다. 한 번에 한 질문, 패러프레이즈 선행, 감정·고민 명시 질문, 세션 원문 축적과 holding 큐로 세션 간 연속성 유지. 경력 회고 인터뷰, 회고 인터뷰 시작, 인터뷰 이어서 요청으로 호출. 산문 작성·정리·초안 생성은 career-memoir-compiler 담당.
+경력 회고 에세이를 위한 저자 인터뷰를 진행하는 대화형 스킬. 한 번에 한 질문을 던지고 패러프레이즈로 확인하며, 저자의 발언을 세션 원문 파일에 verbatim으로 축적한다. 인터뷰어는 **산문을 쓰지 않는다** — 재료를 모으는 역할만 하고, 초안 작성은 `career-memoir-compiler`가 담당한다.
 
-## 개요
+## 무엇을 하나
 
-이 스킬이 무엇인지, 어떤 문제를 해결하는지 설명합니다.
+- 저자(사용자)와의 인터뷰로 회고 에세이 재료를 수집한다.
+- 질문-답변을 Stage 0(개괄) → Stage 1(시기별 심층) → Stage 2(형식·주제·장면표) 순으로 진행한다.
+- 세션 원문(`sessions/YYYY-MM-DD.md`)과 압축 상태(`interview-state.md`)의 이중 구조로 여러 세션에 걸친 진행을 유지한다.
+- 세션 종료 시 `career-memoir-distiller` 서브에이전트가 원문을 압축 상태로 증류한다.
 
-## 사용 방법
+## 언제 쓰나
 
-### 기본 사용법
+- 경력 회고 에세이의 재료를 새로 모으거나 이어서 모을 때.
+- 산문 작성·정리·초안 생성이 필요할 때는 이 스킬이 아니라 `career-memoir-compiler`를 쓴다.
 
-```bash
-# 기본 예시
-command argument
+## 사용 예 (트리거 문구)
+
+```text
+경력 회고 인터뷰 시작하자
+회고 인터뷰 이어서 진행해줘
+인터뷰 이어서
 ```
 
-### 옵션
+세션 흐름 예:
 
-| 옵션 | 설명 |
-|------|------|
-| `--option` | 옵션 설명 |
+1. "인터뷰 이어서" → 세션 시작 루틴(경력 맥락 로드, 압축 상태 복원, holding 큐 회수, 제안 승인)
+2. 워밍업 → 본론(개방형 질문) → 클로징 성찰 질문
+3. 세션 종료 → 반사 단계 → distiller 호출 → 다음 세션 예정 질문 1개 예고
 
-## 사용 예시
+## 상호작용 방식
 
-### 예시 1: 기본 사용
+`context: inline` 대화형 스킬이다. 저자와의 질문-답변 루프는 메인 컨텍스트에서 직접 돌고, 세션 종료 정리만 서브에이전트(distiller)로 위임한다.
 
-```bash
-command --option value
-```
+## 데이터 위치
 
-결과:
-```
-출력 결과
-```
+인터뷰 데이터는 스킬이 아니라 사용자 vault에 산다:
 
-### 예시 2: 고급 사용
+- 프로젝트 루트: `/Users/keaton/Workspace/Obsidian/notes/초안/경력 회고 에세이/`
+- 세션 원문: `<루트>/sessions/YYYY-MM-DD.md`
+- 압축 상태: `<루트>/interview-state.md`
 
-```bash
-command --advanced-option
-```
+## 관련 문서
 
-## 요구사항
-
-- 필요한 도구 1: 버전
-- 필요한 도구 2: 버전
-
-## 문제 해결
-
-### 일반적인 문제
-
-**문제**: 설명
-
-**해결**: 해결 방법
-
-## 추가 정보
-
-- [구현 가이드](docs/GUIDELINES.md)
-- [레퍼런스](docs/REFERENCE.md)
-
-## 훅이 실행되지 않을 때
-
-1. **matcher 확인** — `matcher`는 도구 이름(`Bash`, `Edit` 등)만 매칭합니다. 명령 내용으로
-   거르려면 `if: "Bash(gh *)"`를 씁니다. `matcher: "Bash.*gh.*"`처럼 쓰면 영영 발동하지 않습니다.
-2. **경로 확인** — `command`는 `"bash \"${CLAUDE_PLUGIN_ROOT}/<skill>/scripts/<script>.sh\""`
-   형태여야 합니다. `${CLAUDE_PLUGIN_ROOT}`는 카테고리 설치 루트라서 경로에 카테고리를 다시
-   넣으면 안 되고, CWD 기준 상대경로는 조용히 실행되지 않습니다. 훅에서
-   `${CLAUDE_SKILL_DIR}`은 치환되지 않습니다.
-3. **권한 확인** — 스크립트에 실행 권한이 있는지 확인합니다.
-
-```bash
-chmod +x skills/writing-experts/career-memoir-interviewer/scripts/*.sh
-```
-
-## 스크립트가 `No such file or directory`로 실패할 때
-
-훅이 아니라 **SKILL.md 본문**의 경로 문제입니다. 본문에서는 `${CLAUDE_SKILL_DIR}`을 쓰고,
-뒤에 카테고리나 스킬 이름을 붙이지 않습니다 — 이 변수가 이미 스킬 디렉토리 자체입니다. 쓸 형태는
-`SKILL.md`의 "스크립트 경로 (먼저 읽을 것)" 절에 그대로 있습니다.
-
-CWD 기준 상대경로는 플러그인으로 설치된 환경에 존재하지 않아 첫 호출부터 실패합니다.
-
-이 README처럼 **딸린 문서**에서는 `${CLAUDE_SKILL_DIR}`을 경로로 쓸 수 없습니다 — 치환은 SKILL.md
-본문과 `allowed-tools`에서만 일어나고, 딸린 문서는 누가 읽든 Read 도구로 읽혀 날문자로 남습니다.
-사람이 셸에서 직접 돌릴 예시는 `$SKILL_DIR`을 쓰고, 그 값을 정하는 방법을 문서에 함께 적으세요:
-
-```bash
-# 플러그인으로 설치했다면 (경로 해시는 설치 시점마다 다릅니다)
-SKILL_DIR=$(ls -d ~/.claude/plugins/cache/aha-skills/<category>/*/<career-memoir-interviewer> | tail -1)
-
-# 이 저장소를 클론해 쓴다면
-SKILL_DIR=<clone 경로>/skills/<category>/<career-memoir-interviewer>
-
-bash "$SKILL_DIR/scripts/<script>.sh"
-```
-
-## 실행 방식
-
-- 상호작용 모델: `dialog` — 자유형 대화가 핵심 → context: inline
-- `context: inline`
-
-판정 근거는 [Context 선택 판단표](../../../docs/skill-specification.md)를 따릅니다.
+- [문서 인덱스](docs/INDEX.md)
+- [구현 가이드](docs/GUIDELINES.md) — 8질문·5태도·세션 운영 규칙 요약
+- [레퍼런스](docs/REFERENCE.md) — assets·에이전트·상태 파일 구조

@@ -1,273 +1,75 @@
 # 구현 가이드라인
 
-이 문서는 스킬을 구현하고 확장할 때 참고하는 가이드라인입니다.
+career-memoir-interviewer 스킬의 인터뷰 운영 규칙 요약. 스킬 본문(SKILL.md)이 실행 규칙의 source of truth이고, 이 문서는 규칙의 배경과 요약을 다룬다.
 
 ## 개요
 
-이 가이드라인의 목적과 범위를 설명합니다.
+이 스킬은 경력 회고 에세이의 재료를 저자 인터뷰로 수집한다. 설계 원칙은 세 가지다:
 
-## 아키텍처
+1. **인터뷰 루프는 메인 컨텍스트에서만 돈다.** 질문-답변은 대화형이므로 서브에이전트로 위임하지 않는다. 질문 품질은 자기점검 체크리스트로 관리한다.
+2. **원문과 압축 상태를 분리한다.** 저자 발언 verbatim은 세션 원문 파일에, 진행 요약은 압축 상태 파일에. 세션 종료 시 distiller 서브에이전트가 원문을 압축 상태로 증류한다.
+3. **산문은 쓰지 않는다.** 인터뷰어는 질문하고 들은 것을 정리할 뿐. 초안 작성은 `career-memoir-compiler`가 담당하고 "정리 시작" 선언으로만 시작된다.
 
-스킬의 전체 구조와 각 컴포넌트의 역할을 설명합니다.
+## 시기별 8질문
 
-```
-스킬 구조 다이어그램
-```
+각 시기(회사·단위)마다 다음 순서로 질문한다:
 
-## Context 선택
+1. **상황** — 그 시기 무엇을 하고 있었나, 주변은 어떤 상태였나
+2. **문제** — 무엇이 어려웠거나 걸림돌이었나
+3. **행동** — 나는 무엇을 했나
+4. **전환점** — 무엇이(누구의 말이) 방향을 바꿨나
+5. **당시의 해석** — 그때는 그 경험을 어떻게 이해했나
+6. **현재의 해석** — 지금은 어떻게 다르게 이해하나
+7. **다음 시기에 남긴 것** — 그 경험이 다음 단계에 무엇을 남겼나
+8. **관통 주제** — 이 시기는 전체 서사의 어떤 주제와 연결되나
 
-스킬의 실행 컨텍스트를 결정하는 기준입니다.
+완료 판정은 "8질문을 했다"가 아니라 **그 시기 경험을 동료에게 설명할 수 있는가**로 한다.
 
-### fork vs inline 결정 기준
+## 5태도 (질문과 후속질문의 기준)
 
-Context는 `context:` 한 줄로 실행 방식을 제어하는 수단입니다.
+1. **패배 미화 금지** — 패배를 성장의 재료로 미화하지 않는다. "아직 의미를 모르겠다"는 결론을 허용하고, 그런 답이 나오면 파고들지 않는다.
+2. **다축 평가 허용** — 하나의 경험을 여러 축으로 평가하게 한다. 기술적 성공과 사업적 실패는 공존할 수 있다.
+3. **개인 실수와 구조 문제 구분** — 잘못된 판단·번아웃·조직 정치·시장 상황을 한 종류로 합치지 않는다.
+4. **결과와 대가 함께** — 무엇을 얻었고 무엇을 잃었으며 무엇을 희생했는가.
+5. **당시/현재 해석 혼합 금지** — 실패였던 일을 지금 좋은 일로 재해석하도록 유도하지 않는다.
 
-첫 번째 기준은 **실행 중에 사용자에게 물어봐야 하는가**입니다 — `fork` 서브에이전트는
-`AskUserQuestion`을 쓸 수 없기 때문입니다.
+## 세션 운영 규칙
 
-- 상호작용 없음 → `fork`
-- 여러 라운드 자유형 대화가 핵심이거나, 고위험·비가역 게이트가 여러 곳 → `inline`
-- 조사 **전에** 의도 확정 가능 → `inline` 게이트 + `WORKER.md` 워커
-- 질문이 조사 결과에 의존, 가역 → `fork` + `PENDING_DECISION` 반환-재개
-- 질문이 조사 결과에 의존, 비가역 → plan/apply 분할
+### 시작 루틴 (5단계)
 
-상호작용 여부가 같다면 그다음 기준이 컨텍스트 소모량입니다. 판단표 전문은
-`docs/skill-specification.md`의 "Context 선택"에 있습니다.
+1. `assets/career-context.md` 로드
+2. 압축 상태 복원(없으면 생성 확인)
+3. holding 큐에서 이번 세션 회수 조건 항목 확인·꺼내기
+4. distiller가 남긴 제안의 승인/기각
+5. 세션 원문 파일 확보(시작일 기준 파일명 규칙)
 
-**이 스킬의 선택:** 실제 값은 `SKILL.md` 프론트매터와 [README의 "실행 방식"](../README.md)에 있습니다.
-여기서는 값을 다시 적지 말고 **왜 그 갈래로 판정됐는지**만 쓰세요 — 값을 세 곳에 적으면 갈라집니다.
+### 세션 3단 구조
 
-**선택 이유:** (여기에 이 스킬이 해당 갈래로 판정된 이유를 설명)
+워밍업(가벼운 확인 질문) → 본론(개방형 질문) → 클로징 성찰("이 시기가 전체 서사에서 어떤 자리인가"류). 메타 점검("이 인터뷰 방식이 잘 통하나?")은 클로징에 1회 흡수한다.
 
-## Agent 선택
+### 인터랙션 규칙
 
-작업 유형에 따라 최적화된 에이전트를 선택합니다.
+- 한 번에 한 질문만. 패러프레이즈 선행("내가 들은 바로는 …").
+- 감정 질문 스킵 금지 — 사실·성과 답변 뒤 최소 1회 "그때 어떤 기분이었가 / 무엇이 고민됐나".
+- 추천 답 허용(보기 2~3개) — 단 선택이 아니라 답의 출발점.
+- 빈틈 탐지 — 그 자리에서 파고들지 않고 holding 큐에 유형(탐침 보관)·회수 조건을 붙여 보관. 저자가 다루지 않은 주제는 미응답 유형으로 기록만.
+- 배경에서 심층으로 — career-context.md의 사실을 아는 척하지 않고 인터뷰로 확인된 것만 인용 발언으로.
+- 저자가 지치면 세션을 종료한다.
 
-### Agent Types 선택 기준
+### 기록 규칙
 
-`agent`는 `context: fork`일 때만 의미가 있습니다.
+- 저자 발언은 **답변마다**(늦어도 2~3답변 주기) 세션 원문에 append. 종료에 몰아 쓰지 않는다(컨텍스트 압축 대비).
+- 인터뷰어의 압축 상태 직접 편집은 세션 로그 1줄 추가와 Spine 긴급 갱신만 허용.
 
-내장 agent (Claude Code 기준):
-- `general-purpose` — 잘 모르겠으면 이것
-- `Explore`, `Plan` — **one-shot이라 `SendMessage` 재개가 안 됩니다.** 승인 게이트가 있는
-  스킬(반환-재개 패턴)에는 쓸 수 없습니다.
+### 종료 절차
 
-> 참고: 언어/프레임워크 전문 agent는 플랫폼/버전에 따라 다를 수 있습니다.
-
-**선택 이유:** (여기에 이 스킬이 해당 agent를 선택한 이유를 설명)
-
-## Hooks 구현
-
-이벤트 기반 자동화를 위한 훅 구현 가이드입니다.
-
-### 훅 경로 규칙
-
-```yaml
-command: "bash \"${CLAUDE_PLUGIN_ROOT}/<skill>/scripts/<script>.sh\""
-```
-
-- `${CLAUDE_PLUGIN_ROOT}` 는 **플러그인(= 카테고리) 설치 루트**입니다. 경로에 카테고리를
-  다시 넣지 마세요 — 가장 자주 틀리는 지점입니다.
-- 따옴표는 필수입니다. 설치 경로에 공백이 들어갈 수 있습니다.
-- `${CLAUDE_SKILL_DIR}` 은 훅에서 치환되지 않습니다 (SKILL.md 본문·`allowed-tools` 전용).
-- CWD 기준 상대경로는 플러그인 설치 환경에서 풀리지 않고, 훅은 그때 **에러 없이 조용히 실행되지
-  않습니다**. 쓰지 마세요.
-
-### 본문 경로 규칙 (훅과 다른 변수를 씁니다)
-
-SKILL.md **본문**에서 스크립트를 부를 때는 `${CLAUDE_SKILL_DIR}` 을 씁니다. 쓸 형태는
-`SKILL.md` 의 "스크립트 경로 (먼저 읽을 것)" 절에 그대로 들어 있으니 그 줄을 재사용하세요.
-
-- 이 변수는 **스킬 디렉토리 자체**입니다. 뒤에 카테고리도 스킬 이름도 붙이지 마세요 —
-  훅 규약(`${CLAUDE_PLUGIN_ROOT}/<skill>/...`)을 그대로 옮기면 한 단계가 남습니다.
-- 따옴표는 본문에서도 필수입니다.
-- **본문 결함은 훅 결함보다 시끄럽습니다.** 훅은 조용히 안 돌지만, 본문 경로가 틀리면 에이전트가
-  그 경로로 실제 실행해서 **첫 호출부터** `No such file or directory` 로 실패합니다.
-
-### 딸린 문서 경로 규칙 (또 다릅니다)
-
-`docs/*.md` · `README.md` · `WORKER.md` 안에서는 `${CLAUDE_SKILL_DIR}` 을 **경로로 쓰지
-마세요.** 치환은 SKILL.md 본문과 `allowed-tools` 에서만 일어나고, 딸린 문서는 에이전트가 읽든
-사람이 읽든 Read 도구로 읽혀 날문자로 남습니다. 기준은 "에이전트용이냐 사람용이냐"가 아니라
-**"하네스를 거치느냐"** 입니다. 규약을 설명하려고 변수 **이름만** 부르는 건 괜찮습니다.
-
-- 서브에이전트(`WORKER.md`)에는 게이트가 프롬프트에 **치환된 절대경로**를 실어 보냅니다 — 읽을
-  문서의 절대경로와, 그 문서 안의 상대 참조를 풀 기준 디렉토리 둘 다 필요합니다.
-- 사람이 셸에서 직접 돌릴 예시는 `$SKILL_DIR` 을 쓰고, **그 값을 정하는 방법을 문서에 적으세요**
-  (플러그인 캐시 경로 / 클론 경로). 문서가 여러 개면 README 한 곳에 두고 나머지는 링크합니다.
-
-`tools/validate-hook-paths.sh` 와 `tools/validate-body-paths.sh` 가 각각을 CI 에서 검사합니다.
-자세한 배경은 저장소의 `docs/hook-patterns.md` 에 있습니다.
-
-### 일반적인 훅 패턴
-
-**1. 자동 의존성 설치 (PreToolUse):**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(tool-name *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/career-memoir-interviewer/scripts/check-deps.sh\""
-          description: "tool-name 자동 설치"
-```
-
-**2. 로그 자동 요약 (PostToolUse):**
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(command * log*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/career-memoir-interviewer/scripts/summarize-log.sh\""
-          description: "로그 요약"
-```
-
-**3. 시크릿 마스킹 (PostToolUse):**
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(*api*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/career-memoir-interviewer/scripts/sanitize-output.sh\""
-          description: "시크릿 마스킹"
-```
-
-> `PostToolWrite`는 실재하는 이벤트가 아닙니다. 출력 후처리는 `PostToolUse` + `if`로 씁니다.
-
-**4. 훅 체이닝 (여러 훅 순차 실행):**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(kubectl *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/career-memoir-interviewer/scripts/check-kubectl.sh\""
-          description: "kubectl 확인"
-        - type: command
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/career-memoir-interviewer/scripts/verify-context.sh\""
-          description: "클러스터 확인"
-        - type: file
-          path: "${CLAUDE_PLUGIN_ROOT}/career-memoir-interviewer/context.json"
-          description: "컨텍스트 로드"
-```
-
-### 이 스킬의 Hooks
-
-(여기에 이 스킬이 사용하는 훅과 그 이유를 설명)
-
-**사용하는 훅:**
-- PreToolUse: (목적)
-- PostToolUse: (목적)
-
-**훅 실행 흐름:**
-```
-사용자 입력
-    ↓
-[PreToolUse] 의존성 확인
-    ↓
-도구 실행
-    ↓
-[PostToolUse] 결과 후처리
-    ↓
-사용자에게 결과 표시
-```
-
-## 필수 조건
-
-### 환경 요구사항
-
-- 요구사항 1
-- 요구사항 2
-
-### 의존성
-
-```bash
-# 설치 명령
-install-tool
-```
-
-## 구현 단계
-
-### 1단계: 준비
-
-첫 번째 단계에서 수행할 작업을 설명합니다.
-
-### 2단계: 구현
-
-두 번째 단계에서 수행할 작업을 설명합니다.
-
-### 3단계: 테스트
-
-테스트 방법을 설명합니다.
-
-## 확장 방법
-
-새로운 기능을 추가하는 방법을 설명합니다.
-
-### 새 기능 추가
-
-1. 단계 1
-2. 단계 2
+반사 단계(세션 전체를 짧은 서사로 되짚어 저자가 확정 — 질문마다 하는 패러프레이즈와 별개) 후: 원문 저장 확인 → `Task(subagent_type="career-memoir-distiller")` 호출(원문·상태 파일 절대경로 전달) → 다음 세션 예정 질문 1개 예고.
 
 ## 테스트
 
-### 단위 테스트
+이 스킬에는 런타임 스크립트가 없다. 검증은 `scripts/tests/run.sh`(플러그인 agents/ frontmatter 무결성 검사)와 SKILL.md 내용 점검(grep·wc)으로 한다.
 
-```bash
-# 테스트 실행
-run-test
-```
-
-### 통합 테스트
-
-```bash
-# 통합 테스트 실행
-run-integration-test
-```
-
-### 훅 테스트
-
-훅이 올바르게 동작하는지 테스트합니다:
-
-```bash
-# 1. 훅 스크립트 실행 권한 확인
-chmod +x skills/writing-experts/career-memoir-interviewer/scripts/*.sh
-
-# 2. 훅 스크립트 단독 실행
-bash skills/writing-experts/career-memoir-interviewer/scripts/check-deps.sh
-
-# 3. 훅 트리거 조건 확인
-# matcher 패턴에 맞는 명령 실행하여 훅이 트리거되는지 확인
-```
-
-**훅 디버깅:**
-```bash
-# 스크립트에 디버깅 추가
-#!/bin/bash
-set -x  # 모든 명령 출력
-
-echo "# DEBUG: Running hook"
-echo "# DEBUG: Args: $@"
-```
-
-## 배포
-
-배포 절차를 설명합니다.
-
-### 릴리스 체크리스트
-
-- [ ] 테스트 통과
-- [ ] 문서 업데이트
-- [ ] 버전 bump
-- [ ] CHANGELOG.md 업데이트
-
-## 참고
+## 관련 문서
 
 - [사용자 문서](../README.md)
 - [레퍼런스](REFERENCE.md)
