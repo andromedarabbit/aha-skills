@@ -96,5 +96,47 @@ case "$LAST_OUT" in
 esac
 echo "✅ case registration-ghost"
 
+# strict 엔트리의 agents 정합성 — plugin.json 선언 ↔ {source}/agents/*.md 양방향
+# 사용법: run_strict_tree <이름> <plugin.json agents JSON 배열> <디스크에 둘 에이전트 파일들...>
+run_strict_tree() {
+  local name="$1" agents_json="$2"; shift 2
+  local root="$tmp_root/stree-$name"
+  mkdir -p "$root/.claude-plugin" "$root/skills/cat-experts/.claude-plugin" "$root/skills/cat-experts/agents"
+  printf '{"name":"m","owner":{"name":"o"},"plugins":[{"name":"cat-experts","source":"./skills/cat-experts","strict":true}]}' \
+    > "$root/.claude-plugin/marketplace.json"
+  printf '{"name":"cat-experts","version":"1.0.0","skills":["./alpha"],"agents":%s}' "$agents_json" \
+    > "$root/skills/cat-experts/.claude-plugin/plugin.json"
+  mkdir -p "$root/skills/cat-experts/alpha"
+  printf -- '---\nname: x\n---\n' > "$root/skills/cat-experts/alpha/SKILL.md"
+  local f
+  for f in "$@"; do
+    printf -- '---\nname: y\n---\n' > "$root/skills/cat-experts/agents/$f"
+  done
+  set +e
+  LAST_OUT="$(bash "$SCRIPT_PATH" "$root/.claude-plugin/marketplace.json" 2>&1)"
+  LAST_RC=$?
+  set -e
+}
+
+run_strict_tree agents-ok '["./agents/a1.md"]' a1.md
+assert_rc 0 "strict agents 선언과 디스크가 일치하면 통과해야 함"
+echo "✅ case strict-agents-matched"
+
+run_strict_tree agents-undeclared '["./agents/a1.md"]' a1.md a2.md
+assert_rc 1 "plugin.json 에 선언되지 않은 에이전트 파일이 있으면 실패해야 함"
+case "$LAST_OUT" in
+  *"선언되지 않았습니다"*) ;;
+  *) echo "❌ 미선언 에이전트 메시지가 없음"; echo "$LAST_OUT"; exit 1 ;;
+esac
+echo "✅ case strict-agents-undeclared"
+
+run_strict_tree agents-ghost '["./agents/a1.md","./agents/gone.md"]' a1.md
+assert_rc 1 "plugin.json agents 의 유령 선언은 실패해야 함"
+case "$LAST_OUT" in
+  *"유령 선언"*) ;;
+  *) echo "❌ 유령 agents 선언 메시지가 없음"; echo "$LAST_OUT"; exit 1 ;;
+esac
+echo "✅ case strict-agents-ghost"
+
 echo ""
 echo "✅ 모든 테스트 통과"
