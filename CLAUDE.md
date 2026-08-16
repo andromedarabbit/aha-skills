@@ -105,6 +105,7 @@ aha-skills/
 │       └── skill-author/      # 새 스킬 생성·판정·검증 (스킬 구조 예시는 아래 '스킬 구조' 참고)
 ├── tools/                     # 검증 및 유틸리티 스크립트 (15개)
 ├── docs/                      # 표준 및 모범 사례 + UPSTREAM.md (이식 출처)
+│   └── solutions/             # 과거 문제 해결 문서 — 카테고리별 분류, YAML 프론트매터(module, tags, problem_type). 문제 구현·디버깅 전 참고
 ├── .github/workflows/         # GitHub Actions 검증 워크플로
 └── .claude-plugin/            # 마켓플레이스 등록 메타데이터
 ```
