@@ -1,6 +1,6 @@
 {
   "name": "writing-experts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "경력 회고 에세이 작성 스킬 — 인터뷰 진행(interviewer)과 산문 초안 컴파일(compiler), 그리고 distiller·compiler-worker·auditor 서브에이전트 제공",
   "author": {
     "name": "andromedarabbit"
