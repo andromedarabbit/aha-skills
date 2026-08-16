@@ -13,3 +13,9 @@ __pycache__/
 
 # Editor (personal — VS Code Peacock theme)
 .vscode/
+
+# graphify (knowledge graph) — 생성 산출물 전체를 무시한다.
+# 업스트림 "Team setup"은 그래프 공유를 위해 커밋을 권장하지만, 이 저장소는
+# 플러그인 마켓플레이스라 사용자가 설치·업데이트마다 내려받으므로 제외한다.
+graphify-out/
+.graphify_*.json
