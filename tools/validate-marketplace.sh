@@ -126,6 +126,23 @@ if os.path.isdir(skills_root):
                     with open(pj, encoding="utf-8") as f:
                         pdata = json.load(f)
                     skill_list = pdata.get("skills") or []
+                    # strict 엔트리의 에이전트는 plugin.json 의 agents 선언이 로드를 결정한다.
+                    # 미선언 파일은 디스크에 있어도 세션 로드에서 조용히 누락된다
+                    # (docs/solutions/integration-issues/strict-marketplace-plugin-json-agents-missing.md).
+                    declared_agents = set()
+                    for a in pdata.get("agents") or []:
+                        if not isinstance(a, str):
+                            continue
+                        rel = a.lstrip("./")
+                        declared_agents.add(rel)
+                        if not os.path.isfile(os.path.join(repo_root, src, rel)):
+                            errors.append(f"plugins '{p['name']}': plugin.json 의 agents 경로에 파일이 없습니다 (유령 선언): {a}")
+                    agents_dir = os.path.join(repo_root, src, "agents")
+                    if os.path.isdir(agents_dir):
+                        for a in sorted(os.listdir(agents_dir)):
+                            if a.endswith(".md") and f"agents/{a}" not in declared_agents:
+                                errors.append(f"plugins '{p['name']}': {src}/agents/{a} 이 plugin.json 의 agents 에 선언되지 않았습니다 "
+                                              f"(strict 엔트리는 선언되지 않은 에이전트를 로드하지 않습니다)")
                 except Exception as e:
                     errors.append(f"plugins '{p['name']}': strict 엔트리의 plugin.json 읽기 실패 ({pj}): {e}")
         for s in skill_list:
