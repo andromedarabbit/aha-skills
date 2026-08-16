@@ -34,7 +34,7 @@
 session: N
 started: YYYY-MM-DD HH:MM
 ended: # 세션 종료 시 기입 (자정 통과 시 종료일이 시작일과 다를 수 있음)
-periods: [] # 다룬 시기 태그 (예: [[개인정보 제거], 데일리, [개인정보 제거]])
+periods: [] # 다룬 시기 태그 (저자의 실제 시기명 — vault 경력 맥락 파일 기준)
 ---
 
 # 세션 N — YYYY-MM-DD

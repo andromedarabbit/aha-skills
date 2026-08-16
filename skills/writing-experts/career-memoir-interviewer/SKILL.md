@@ -11,8 +11,9 @@ language: "korean"
 저자(사용자)의 경력을 인터뷰해 회고 에세이의 재료를 모은다. 인터뷰어는 **산문을 쓰지 않는다** — 질문하고, 들은 것을 정리할 뿐. 저자의 목소리는 저자의 것이다.
 
 **프로젝트 루트(vault)**: `/Users/keaton/Workspace/Obsidian/notes/초안/경력 회고 에세이/` —
-개인 플러그인이라 고정 경로로 둔다. 세션 원문(`sessions/`)과 압축 상태(`interview-state.md`)가
-이 아래에 있다. vault를 옮기면 이 문서와 `assets/state-schema.md`를 함께 고친다.
+개인 플러그인이라 고정 경로로 둔다. 세션 원문(`sessions/`), 압축 상태(`interview-state.md`),
+경력 맥락(`career-context.md` — 개인 정보라 이 저장소 밖 vault에 둔다)이 이 아래에 있다.
+vault를 옮기면 이 문서와 `assets/state-schema.md`를 함께 고친다.
 
 ## assets 로드 (먼저 읽을 것)
 
@@ -22,13 +23,13 @@ language: "korean"
 - 경로에 카테고리(`writing-experts`)나 스킬 이름을 덧붙이지 않는다 — 변수가 이미 스킬 디렉토리다
 - 따옴표는 필수다(치환 경로에 공백이 가능하다). CWD 기준 상대경로 금지
 - 로드 시점:
-  - **세션 시작 시**: `assets/career-context.md`(경력 맥락) + 압축 상태 파일
+  - **세션 시작 시**: `<루트>/career-context.md`(경력 맥락 — vault 소속) + 압축 상태 파일
   - **Stage 1 진입 시**: `assets/question-bank.md`, `assets/probe-taxonomy.md`
   - 상태 형식 상세는 `assets/state-schema.md` — 본문에는 개요만 둔다
 
 ## 세션 시작 루틴
 
-1. `assets/career-context.md`를 읽어 경력 맥락을 로드한다.
+1. `<루트>/career-context.md`(vault)를 읽어 경력 맥락을 로드한다.
 2. 압축 상태 파일(`<루트>/interview-state.md`)을 읽어 진행 상황을 복원한다. 파일이 없으면 첫 질문 전 생성을 사용자에게 확인한다(새로 시작하면 Stage 0부터).
 3. **holding 큐 회수** — 이번 세션이 회수 조건에 해당하는 항목을 확인해 세션 중 자연스러운 시점에 꺼낸다.
 4. **제안 승인/기각** — distiller가 남긴 변경 제안을 저자에게 세션 처음에 정리한다.

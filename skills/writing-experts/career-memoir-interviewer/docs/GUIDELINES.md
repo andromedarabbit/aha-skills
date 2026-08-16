@@ -37,7 +37,7 @@ career-memoir-interviewer 스킬의 인터뷰 운영 규칙 요약. 스킬 본�
 
 ### 시작 루틴 (5단계)
 
-1. `assets/career-context.md` 로드
+1. vault `<루트>/career-context.md` 로드 (개인 정보 — 이 저장소 밖)
 2. 압축 상태 복원(없으면 생성 확인)
 3. holding 큐에서 이번 세션 회수 조건 항목 확인·꺼내기
 4. distiller가 남긴 제안의 승인/기각
