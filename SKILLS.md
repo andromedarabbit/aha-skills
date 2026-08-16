@@ -29,7 +29,7 @@
 
 ### [career-memoir-interviewer](skills/writing-experts/career-memoir-interviewer)
 
-**버전**: 1.0.0
+**버전**: 1.1.0
 
 경력 회고 에세이를 위한 저자 인터뷰를 진행한다. 한 번에 한 질문, 패러프레이즈 선행, 감정·고민 명시 질문, 세션 원문 축적과 holding 큐로 세션 간 연속성 유지. 경력 회고 인터뷰, 회고 인터뷰 시작, 인터뷰 이어서 같은 요청이 있을 때 사용. 산문 작성·정리·초안 생성은 career-memoir-compiler 담당.
 

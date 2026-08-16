@@ -43,7 +43,7 @@ jobs:
 
       - name: 스킬 구조 검증
         run: |
-          for d in $(find skills -mindepth 2 -maxdepth 2 -type d | grep -v '\-workspace$' | grep -v '/shared$'); do
+          for d in $(find skills -mindepth 2 -maxdepth 2 -type d | grep -v '\-workspace$' | grep -v '/shared$' | grep -v '/agents$' | grep -v '/\.claude-plugin$'); do
             echo "▶ $d"
             ./tools/validate-skill.sh "$d"
           done

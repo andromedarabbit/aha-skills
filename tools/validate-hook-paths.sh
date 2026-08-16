@@ -413,6 +413,19 @@ for plugin in plugins:
         print(f"ERR_SOURCE_INVALID\t{plugin_name}\t{source_raw!r}")
         continue
 
+    # strict 엔트리는 컴포넌트를 source 의 .claude-plugin/plugin.json 이 지정한다
+    # (validate-marketplace.sh 의 strict 인식과 같은 규칙 — skills 가 없다고 오류 내지 않는다).
+    if skills_raw is None and plugin.get("strict") is True:
+        pj_source = source_raw[2:] if source_raw.startswith("./") else source_raw
+        pj = os.path.join(project_root, pj_source, ".claude-plugin", "plugin.json")
+        try:
+            with open(pj, "r", encoding="utf-8") as f:
+                skills_raw = json.load(f).get("skills")
+        except Exception as e:
+            errors += 1
+            print(f"ERR_SKILLS_INVALID\t{plugin_name}\tstrict 엔트리의 plugin.json 읽기 실패 ({pj}): {e}")
+            continue
+
     if not isinstance(skills_raw, list):
         errors += 1
         print(f"ERR_SKILLS_INVALID\t{plugin_name}\t{skills_raw!r}")
