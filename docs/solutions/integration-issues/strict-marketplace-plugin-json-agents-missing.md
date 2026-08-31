@@ -57,7 +57,7 @@ career-memoir-distiller)이 세션에 로드되지 않았다. 같은 플러그�
 `skills/writing-experts/.claude-plugin/plugin.json` 1파일 +7/-2; 작성 시점 기준 origin/main에
 푸시 전인 로컬 커밋).
 
-1. 매니페스트에 `agents` 배열 추가. 현재 트리의 `skills/writing-experts/.claude-plugin/plugin.json`:
+1. 매니페스트에 `agents` 배열 추가. 수정 시점(v0.1.2)의 `skills/writing-experts/.claude-plugin/plugin.json`:
 
    ```json
    "skills": ["./career-memoir-interviewer", "./career-memoir-compiler"],
@@ -67,6 +67,8 @@ career-memoir-distiller)이 세션에 로드되지 않았다. 같은 플러그�
      "./agents/career-memoir-auditor.md"
    ]
    ```
+
+   현재(v0.2.0) 매니페스트는 이 원칙대로 skills 4개·agents 6개(블로그 파이프라인 확장분 포함)를 모두 선언한다.
 
 2. 버전 0.1.1 → 0.1.2로 범프. 캐시 디렉토리가 버전을 키로 쓰므로, 범프 없이는
    `claude plugin update`가 새 복사본을 만들지 않아 수정이 반영되지 않는다.
