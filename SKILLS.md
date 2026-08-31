@@ -17,6 +17,26 @@
 
 ## writing-experts
 
+### [blog-compiler](skills/writing-experts/blog-compiler)
+
+**버전**: 0.1.0
+
+블로그 글 인터뷰 기록을 충실한 산문 초안으로 컴파일한다. '블로그 초안 만들어', '초안 작성 시작' 같은 요청이 있을 때 사용. 인터뷰 진행은 blog-interviewer 담당 — 이 스킬은 질문하지 않고 대화하지 않는다. 경력 회고 초안은 career-memoir-compiler 담당.
+
+- [문서](skills/writing-experts/blog-compiler/README.md)
+- [구현 가이드](skills/writing-experts/blog-compiler/docs/GUIDELINES.md)
+- [레퍼런스](skills/writing-experts/blog-compiler/docs/REFERENCE.md)
+
+### [blog-interviewer](skills/writing-experts/blog-interviewer)
+
+**버전**: 0.1.0
+
+블로그 글을 위한 저자 인터뷰를 진행한다. 한 번에 한 질문, 패러프레이즈 선행, 캘리브레이션 체크, 세션 원문 축적과 holding 큐로 세션 간 연속성 유지. 블로그 글 인터뷰 시작, 글 소재 인터뷰, 블로그 인터뷰 이어서 같은 요청이 있을 때 사용. 산문 작성·초안 생성은 blog-compiler 담당. 경력 회고 에세이 인터뷰는 career-memoir-interviewer 담당.
+
+- [문서](skills/writing-experts/blog-interviewer/README.md)
+- [구현 가이드](skills/writing-experts/blog-interviewer/docs/GUIDELINES.md)
+- [레퍼런스](skills/writing-experts/blog-interviewer/docs/REFERENCE.md)
+
 ### [career-memoir-compiler](skills/writing-experts/career-memoir-compiler)
 
 **버전**: 1.0.0
