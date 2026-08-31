@@ -57,13 +57,22 @@ vault를 옮기면 이 문서와 `WORKER.md`를 함께 고친다.
 
 `general-purpose` 서브에이전트를 띄워 `WORKER.md` 오케스트레이션을 실행한다.
 `${CLAUDE_SKILL_DIR}` 치환은 SKILL.md 본문에서만 일어나므로, 워커 프롬프트에는
-**치환된 절대경로 두 개**를 실어 보낸다:
+**치환된 절대경로 세 개**를 실어 보낸다:
 
 1. 읽어야 할 본문: `${CLAUDE_SKILL_DIR}/WORKER.md`의 절대경로
 2. 참조 문서의 기준 디렉토리: `${CLAUDE_SKILL_DIR}`의 절대경로 (WORKER.md가 `docs/`를
    상대경로로 가리키면, 이게 없으면 워커가 **자기 CWD 기준**으로 찾아 실패한다)
+3. 상태 스키마: career-memoir-interviewer 스킬 소속 `assets/state-schema.md`의 절대경로.
+   이 스킬(career-memoir-compiler)에는 assets/ 사본이 없으므로 형제 경로
+   `${CLAUDE_SKILL_DIR}/../career-memoir-interviewer/assets/state-schema.md`를 절대경로로
+   풀어 전달한다 — 워커가 형제 디렉토리 홉을 추측하게 두지 않는다
 
 vault 데이터 경로는 위 "프로젝트 루트" 절의 절대경로를 그대로 전달한다.
+
+이 게이트 자신에게 스폰 도구(하네스에 따라 `Task` 또는 `Agent`)가 없다면 이 실행은
+서브에이전트 컨텍스트일 가능성이 높다(중첩 스폰 차단 — 플러그인 문제가 아니다).
+`SendMessage`로 에이전트 타입 이름을 호출하지 말고, "새 메인 세션에서 이 스킬을 다시
+실행"할 것을 안내하고 중단한다.
 
 워커가 `NEEDS_DECISION`을 반환하면(프로토콜 진행 중 예상 못한 결정) `AskUserQuestion`으로
 묻고, 새 워커를 만들지 말고 `SendMessage`로 기존 워커를 재개시킨다. 워커가 재감사 상한

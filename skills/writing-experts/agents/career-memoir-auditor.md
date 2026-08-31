@@ -16,13 +16,14 @@ tools: Read, Grep
 
 - 감사 대상 초안 경로 — vault 기준 예: `/Users/keaton/Workspace/Obsidian/notes/초안/경력 회고 에세이/draft-vN.md`
 - 세션 원문 경로 목록 — vault 기준 예: `/Users/keaton/Workspace/Obsidian/notes/초안/경력 회고 에세이/sessions/*.md` (주 근거원)
-- 상태 파일 경로 — `/Users/keaton/Workspace/Obsidian/notes/초안/경력 회고 에세이/interview-state.md`의 "인용 가능한 발언" 섹션 (보조 근거원)
+- 상태 파일 경로 — `/Users/keaton/Workspace/Obsidian/notes/초안/경력 회고 에세이/interview-state.md`의 "인용 가능한 발언"·"감정·패턴 노트" 섹션 (보조 근거원 + 분석 라벨 승격 감시 대상)
 
 **fail fast**: 경로가 누락되거나 읽을 수 없으면 감사를 계속하지 말고 즉시 실패를 보고한다. 불완전한 근거원으로 부분 감사하면 근거 없음 오판이 양산된다.
 
 ## 판정 방법
 
 - 근거 판정은 **Read로 읽은 인터뷰 기록에 대한 의미적 대조**로 한다.
+- **분석 라벨 승격 감시**: 초안이 압축 상태 파일의 인터뷰어 분석·패턴 노트(세션 verbatim이 아닌 요약)를 저자의 직접 발화·경험인 양 서술하는지 검사한다 — 그런 서술은 근거 없음으로 판정하고, 요약임을 밝힌 서술은 부분 근거로 판정한다.
 - Grep은 **후보 위치 탐색 보조로만** 사용하고 **부분문자열 일치로 판정하지 않는다**. 이유: 표현을 바꾼 정당한 서술을 "근거 없음"으로 오판하고, 우연한 문자열 일치를 오통과시키는 것을 막기 위함이다.
 - 검증 단위는 초안의 각 서술 단위(문장 ~ 짧은 단락)다.
 
