@@ -43,12 +43,14 @@ platforms: [x, linkedin]              # flow style 필수 — publish.sh가 파�
 accounts: {x: u0, linkedin: u0}       # flow style 필수 — 플랫폼 → aside 프로필 식별자
 source: {type: topic, topic: ...}     # 또는 {type: document, path: ...}
 status: {x: draft, linkedin: draft}   # draft → ready → posted (사람용 표시)
+post_intent: teaser                   # teaser | summary — Stage 2 포스트 목적 (선택 키)
 ```
 
 요건:
 
 - `platforms`·`accounts`·`status`는 **한 줄 flow style**(대괄호·중괄호)로 쓴다 — publish.sh가 sed로 파싱한다.
 - `accounts` 값은 aside 프로필 식별자(`u0`, `u1`)만 담는다. 이메일은 aside가 무시한다.
+- `post_intent`는 `teaser` 또는 `summary`만 담는다. 없으면 `summary`로 취급한다(기존 작업 호환). Stage 5 canonical이 이 값을 읽어 티저형(훅 1개 + 링크 유도만)과 요약형을 구분한다.
 
 ## 3. 초안 파일 형식 (drafts/<platform>.md)
 
