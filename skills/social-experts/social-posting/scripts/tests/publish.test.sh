@@ -24,15 +24,16 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-# aside stub: 호출 로그 + 프롬프트에서 동결 파일 경로를 추출해 내용을 캡처한다
+# aside stub: 호출 로그 + SOCIAL_POSTING_FROZEN 동결 파일을 캡처한다
+# (publish.sh가 프롬프트에 파일 경로 대신 본문을 인라인으로 전달하므로 경로는 env로 전달된다)
 mkdir -p "$sandbox/bin"
 export SOCIAL_ASIDE_LOG="$sandbox/aside-calls.log"
 export SOCIAL_ASIDE_PAYLOAD="$sandbox/last-payload.md"
 cat >"$sandbox/bin/aside" <<'EOF'
 #!/bin/bash
-printf '%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
-f="$(printf '%s' "$*" | sed -n 's/.*파일 \([^ ]*\) 의 내용.*/\1/p')"
-[ -n "$f" ] && [ -f "$f" ] && cp "$f" "$SOCIAL_ASIDE_PAYLOAD"
+printf '=== aside call ===\n%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
+f="${SOCIAL_POSTING_FROZEN:-}"
+[ -n "$f" ] && [ -f "$f" ] && { rm -f "$SOCIAL_ASIDE_PAYLOAD"; cp "$f" "$SOCIAL_ASIDE_PAYLOAD"; }
 echo "게시 완료: https://stub.example/post/1"
 exit 0
 EOF
@@ -47,7 +48,7 @@ hash_of() {
   fi
 }
 
-aside_call_count() { { cat "$SOCIAL_ASIDE_LOG" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'; }
+aside_call_count() { { cat "$SOCIAL_ASIDE_LOG" 2>/dev/null || true; } | grep -c "^=== aside call ===$" || true; }
 
 make_job() { # $1=dir  $2=platforms  $3=accounts
   mkdir -p "$1/drafts"
@@ -91,7 +92,7 @@ bash "$PUBLISH" --job "$job" --platform x --dry-run >/dev/null || fail "승인 �
 rm -f "$SOCIAL_ASIDE_LOG"
 bash "$PUBLISH" --job "$job" --platform x >/dev/null || fail "승인 정상 실행이 실패했다"
 [ "$(aside_call_count)" = "1" ] || fail "aside exec는 정확히 1회 호출되어야 한다"
-last_call="$(cat "$SOCIAL_ASIDE_LOG")"
+last_call="$(sed -n '/^=== aside call ===$/,$p' "$SOCIAL_ASIDE_LOG" | tail -n +2)"
 grep -q -- "--account u0" <<<"$last_call" || fail "job-state 계정(u0)으로 호출해야 한다"
 grep -q "그대로" <<<"$last_call" || fail "변경 금지 지시가 프롬프트에 담겨야 한다"
 # 페이로드 검증: 동결 파일은 본문만(frontmatter 제거), media는 절대경로 지시로 전달
@@ -104,6 +105,24 @@ if grep -q "platform: x" "$SOCIAL_ASIDE_PAYLOAD"; then
   fail "frontmatter 메타데이터가 게시 페이로드에 섞였다"
 fi
 grep -qF "$job/plot.png" <<<"$last_call" || fail "media 절대경로가 프롬프트에 명시되어야 한다"
+
+# --- 1b. 프롬프트는 본문을 인라인으로 전달한다 — 파일 경로 참조 부재 (무인 read_file 정지 회피) ---
+# 근본 원인(2026-09-01 실측): aside exec가 프롬프트의 TMPDIR 파일 경로를 read_file하다
+# 무인 권한 확인에 무한 정지했다. 본문이 프롬프트에 직접 담기면 read_file이 일어나지 않는다.
+grep -q "스파크 잡을" <<<"$last_call" || fail "게시 프롬프트에 동결 본문이 인라인으로 담겨야 한다"
+if grep -q "social-posting-body" <<<"$last_call"; then
+  fail "게시 프롬프트에 동결 파일 경로가 남아 있으면 안 된다 (aside read_file 정지 원인)"
+fi
+grep -q "게시 텍스트 시작" <<<"$last_call" || fail "인라인 본문에 시작/끝 구분 마커가 있어야 한다"
+
+# --- 1c. 동결 파일명은 매 실행 고유하다 (mktemp 접미사 버그 회귀 방지) ---
+# macOS BSD mktemp는 XXXXXX 뒤 접미사가 있으면 랜덤화하지 않는다 — 과거 병렬 실행에서
+# 서로 다른 플랫폼 본문이 뒤섞여 실제 게시된 사고가 있었다.
+path1="$(bash "$PUBLISH" --job "$job" --platform x --dry-run | sed -n 's/.*동결 본문: \([^ ]*\) .*/\1/p')"
+path2="$(bash "$PUBLISH" --job "$job" --platform x --dry-run | sed -n 's/.*동결 본문: \([^ ]*\) .*/\1/p')"
+[ -n "$path1" ] && [ -n "$path2" ] || fail "dry-run이 동결 본문 경로를 출력해야 한다: $path1 / $path2"
+[ "$path1" != "$path2" ] || fail "동결 파일명이 매 실행 달라야 한다 (고정 파일명 = 병렬 실행 충돌): $path1"
+case "$path1" in *XXXXXX*) fail "동결 파일명에 리터럴 XXXXXX가 남아 있으면 안 된다: $path1";; esac
 grep -q "런타임 그래프" <<<"$last_call" || fail "media alt가 프롬프트에 명시되어야 한다"
 grep -q "https://example.com/post" <<<"$last_call" || fail "link가 프롬프트에 명시되어야 한다"
 
@@ -201,9 +220,9 @@ fi
 # --- 10. 스레드 게시: 답글 체인 지시 + 세그먼트 수만큼 URL ---
 cat >"$sandbox/bin/aside" <<'EOF'
 #!/bin/bash
-printf '%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
-f="$(printf '%s' "$*" | sed -n 's/.*파일 \([^ ]*\) 의 내용.*/\1/p')"
+printf '=== aside call ===\n%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
 # 동결 파일은 0400이라 cp가 대상 모드까지 물려받는다 — 재캡처를 위해 먼저 지운다
+f="${SOCIAL_POSTING_FROZEN:-}"
 if [ -n "$f" ] && [ -f "$f" ]; then rm -f "$SOCIAL_ASIDE_PAYLOAD"; cp "$f" "$SOCIAL_ASIDE_PAYLOAD"; fi
 printf '1/3 https://stub.example/post/1\n2/3 https://stub.example/post/2\n3/3 https://stub.example/post/3\n'
 exit 0
@@ -232,7 +251,7 @@ touch "$job10/plot.png"
 approve "$job10" "x: u0"
 rm -f "$SOCIAL_ASIDE_LOG"
 bash "$PUBLISH" --job "$job10" --platform x >/dev/null || fail "스레드 3세그먼트·URL 3개는 통과해야 한다"
-last_call="$(cat "$SOCIAL_ASIDE_LOG")"
+last_call="$(sed -n '/^=== aside call ===$/,$p' "$SOCIAL_ASIDE_LOG" | tail -n +2)"
 grep -q "답글로" <<<"$last_call" || fail "thread 프롬프트에 답글 체인 지시가 담겨야 한다"
 grep -q "하나의 스레드" <<<"$last_call" || fail "thread 프롬프트에 스레드 연결 지시가 담겨야 한다"
 grep -q "첫 게시물에만 첨부" <<<"$last_call" || fail "thread+미디어는 첫 게시물 첨부 지시가 담겨야 한다"
@@ -252,15 +271,27 @@ fi
 # --- 12. single 회귀: single 프롬프트에는 답글 지시가 없다 ---
 cat >"$sandbox/bin/aside" <<'EOF'
 #!/bin/bash
-printf '%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
+printf '=== aside call ===\n%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
 echo "게시 완료: https://stub.example/single/1"
 exit 0
 EOF
 rm -f "$SOCIAL_ASIDE_LOG"
 bash "$PUBLISH" --job "$job" --platform x >/dev/null || fail "single 정상 게시가 실패했다"
-last_call="$(cat "$SOCIAL_ASIDE_LOG")"
+last_call="$(sed -n '/^=== aside call ===$/,$p' "$SOCIAL_ASIDE_LOG" | tail -n +2)"
 if grep -q "답글로" <<<"$last_call"; then
   fail "single 프롬프트에는 답글 체인 지시가 없어야 한다"
+fi
+
+# --- 13. aside exec 무한 정지는 상한 타임아웃으로 기명 실패한다 ---
+# 과거(2026-09-01) 무인 read_file 권한 정지가 수 분~15분 이상 프로세스를 물고 있었다.
+cat >"$sandbox/bin/aside" <<'EOF'
+#!/bin/bash
+sleep 8
+echo "게시 완료: https://stub.example/late/1"
+exit 0
+EOF
+if SOCIAL_ASIDE_TIMEOUT=2 bash "$PUBLISH" --job "$job" --platform x >/dev/null 2>&1; then
+  fail "타임아웃 내 완료 못 한 aside exec는 exit 1이어야 한다"
 fi
 
 echo "✅ publish.test.sh 통과"

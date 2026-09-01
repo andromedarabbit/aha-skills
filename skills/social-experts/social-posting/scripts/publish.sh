@@ -101,8 +101,9 @@ payload_json="$(uv run -q --with grapheme --with pyyaml python "$SCRIPT_DIR/chec
   || die "게시 페이로드 생성 실패 (초안 형식 오류 가능 — check-drafts를 다시 실행해 확인하세요)"
 
 frozen=""
-trap 'rm -f "$frozen"' EXIT
-frozen="$(mktemp "${TMPDIR:-/tmp}/social-posting-body.XXXXXX.md")"
+out_file=""
+trap 'rm -f "$frozen" "$out_file"' EXIT
+frozen="$(mktemp "${TMPDIR:-/tmp}/social-posting-body.XXXXXX")"
 printf '%s' "$payload_json" | jq -j '.body' >"$frozen"
 chmod 0400 "$frozen"
 
@@ -138,7 +139,15 @@ else
   post_prompt="'=== POST ===' 줄은 스레드 경계다 — 각 세그먼트를 순서대로 별도 게시물로 게시한다."
 fi
 
-prompt="파일 $frozen 의 내용을 그대로 $platform 에 게시해줘. 텍스트를 변경·요약·추가·삭제하지 마세요. $post_prompt$media_prompt$link_prompt 완료 후 게시된 게시물 URL을 반환해줘."
+# --- 본문은 인라인으로 전달한다 (2026-09-01 실측 근본 원인 제거) ---
+# aside exec가 프롬프트의 로컬 파일 경로를 read_file하다 무인 권한 확인에 무한 정지했다.
+# 본문을 프롬프트에 직접 싣으면 read_file이 일어나지 않는다. 동결 파일은 audit 증거로
+# 유지되고 SOCIAL_POSTING_FROZEN으로 하위 프로세스(테스트 stub 포함)에 경로가 전달된다.
+body_inline="$(cat "$frozen")"
+export SOCIAL_POSTING_FROZEN="$frozen"
+prompt="다음 게시 텍스트를 그대로 $platform 에 게시해줘. 텍스트를 변경·요약·추가·삭제하지 마세요. <<<게시 텍스트 시작>>>
+$body_inline
+<<<게시 텍스트 끝>>> $post_prompt$media_prompt$link_prompt 완료 후 게시된 게시물 URL을 반환해줘."
 
 if [[ "$dry_run" == "true" ]]; then
   echo "가드 통과 (dry-run): platform=$platform account=$account format=$format"
@@ -151,8 +160,30 @@ if [[ "$dry_run" == "true" ]]; then
 fi
 
 echo "게시 지시: platform=$platform account=$account format=$format"
-out="$(aside exec --account "$account" "$prompt")" \
-  || die "aside exec 실패 — 게시되지 않았을 가능성이 크다. aside 출력을 확인하고 성공 여부를 판별한 뒤, 성공했을 때만 Stage 10 read-back을 진행하세요"
+# --- aside exec를 상한 타임아웃으로 감싼다 — 무한 정지를 기명 실패로 바꾼다 ---
+# 무인 read_file 권한 정지, 게시 후 완료 알림 추적 루프 등으로 exec가 물고 있던 전례
+# (2026-09-01, 수 분~15분+) 때문에 상한을 넘으면 프로세스를 죽고 "게시 여부 불명"으로
+# 실패 종료한다. 정상 게시는 60초 안에 끝난다(실측) — 기본 120초는 그 여유 2배다.
+# 상한은 SOCIAL_ASIDE_TIMEOUT(초)으로 조정 가능하다.
+aside_timeout="${SOCIAL_ASIDE_TIMEOUT:-120}"
+out_file="$(mktemp "${TMPDIR:-/tmp}/social-posting-out.XXXXXX")"
+aside exec --account "$account" "$prompt" >"$out_file" 2>&1 &
+aside_pid=$!
+deadline=$(( $(date +%s) + aside_timeout ))
+hung=0
+while kill -0 "$aside_pid" 2>/dev/null; do
+  if [ "$(date +%s)" -ge "$deadline" ]; then hung=1; break; fi
+  sleep 2
+done
+if [ "$hung" = "1" ]; then
+  kill "$aside_pid" 2>/dev/null
+  wait "$aside_pid" 2>/dev/null
+  printf '%s\n' "$(cat "$out_file")" >&2
+  die "aside exec가 ${aside_timeout}초 내에 완료되지 않았다 — 게시 여부 불명(타임아웃). 브라우저와 공개 API로 게시 여부를 확인한 뒤 사용자에게 즉시 보고하세요"
+fi
+wait "$aside_pid" \
+  || { printf '%s\n' "$(cat "$out_file")" >&2; die "aside exec 실패 — 게시되지 않았을 가능성이 크다. aside 출력을 확인하고 성공 여부를 판별한 뒤, 성공했을 때만 Stage 10 read-back을 진행하세요"; }
+out="$(cat "$out_file")"
 
 # --- 게시 성공 신호: aside 출력에서 게시 URL을 기계 확인한다 (침묵 실패 차단) ---
 url_count="$(printf '%s' "$out" | grep -oE 'https?://' | wc -l | tr -d '[:space:]')"
