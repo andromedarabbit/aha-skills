@@ -18,7 +18,7 @@
 #
 # 규칙 문법 (2026-09-01 실측, zod 판별 유니언):
 #   {type:'tool', tool:string}
-#   {type:'browser', action:'read'|'modify'|'download'}  (+선택 host)
+#   {type:'browser', action:'read'|'modify'|'download'}  — host는 지정해도 저장 시 제거됨(전역)
 #   {type:'network', url:string}  (와일드카드 *)
 
 set -uo pipefail
@@ -26,17 +26,16 @@ set -uo pipefail
 
 # 게시에 필요한 allow 규칙. X만 tool 축이 있다(~/.aside/skills/builtin/x-twitter의
 # twitter 글로벌). linkedin·facebook·bluesky는 내장 스킬이 없어 브라우저 경로뿐이다.
+# browser 규칙은 aside가 저장 시 host 필드를 제거한다(2026-09-01 실측) — 사이트
+# 좁히기 없이 전역으로만 부여 가능하고, 사이트 범위 제어는 network url 패턴뿐이다.
 REQUIRED_JSON='[
   {"type":"tool","tool":"twitter.tweet"},
   {"type":"tool","tool":"twitter.reply"},
   {"type":"tool","tool":"twitter.deleteTweet"},
-  {"type":"browser","action":"modify","host":"x.com"},
+  {"type":"browser","action":"modify"},
   {"type":"network","url":"https://x.com/*"},
-  {"type":"browser","action":"modify","host":"www.linkedin.com"},
   {"type":"network","url":"https://www.linkedin.com/*"},
-  {"type":"browser","action":"modify","host":"www.facebook.com"},
   {"type":"network","url":"https://www.facebook.com/*"},
-  {"type":"browser","action":"modify","host":"bsky.app"},
   {"type":"network","url":"https://bsky.app/*"}
 ]'
 
@@ -73,7 +72,12 @@ plan() {
 import json, sys
 
 mode, req, cur, new = sys.argv[1], json.loads(sys.argv[2]), json.loads(sys.argv[3]), (json.loads(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None)
-canon = lambda r: json.dumps(r, sort_keys=True, ensure_ascii=False)
+# aside는 저장 시 browser 규칙의 host를 제거한다 — 양쪽 다 host 없이 비교해야
+# 부여 직후 재조회와 정확히 맞물린다(2026-09-01 실측, 회귀 테스트 5 참조).
+canon = lambda r: json.dumps(
+    {k: v for k, v in r.items() if not (r.get("type") == "browser" and k == "host")},
+    sort_keys=True, ensure_ascii=False)
+dedup = lambda rules: list({canon(r): r for r in rules}.values())
 req_set = {canon(r) for r in req}
 rules = cur.get("rules") or {}
 allow, ask, deny = rules.get("allow") or [], rules.get("ask") or [], rules.get("deny") or []
@@ -95,7 +99,7 @@ elif mode == "grant":
         "ask_replaced": hits(ask),
         "deny_replaced": hits(deny),
         "new_permission": {**cur, "rules": {
-            "allow": [r for r in allow if canon(r) not in req_set] + req,
+            "allow": dedup([r for r in allow if canon(r) not in req_set] + req),
             "ask": [r for r in ask if canon(r) not in req_set],
             "deny": [r for r in deny if canon(r) not in req_set],
             **{k: v for k, v in rules.items() if k not in ("allow", "ask", "deny")},
