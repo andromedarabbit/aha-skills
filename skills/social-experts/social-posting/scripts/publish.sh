@@ -174,9 +174,10 @@ echo "게시 지시: platform=$platform account=$account format=$format"
 # --- aside exec를 상한 타임아웃으로 감싼다 — 무한 정지를 기명 실패로 바꾼다 ---
 # 무인 read_file 권한 정지, 게시 후 완료 알림 추적 루프 등으로 exec가 물고 있던 전례
 # (2026-09-01, 수 분~15분+) 때문에 상한을 넘으면 프로세스를 죽고 "게시 여부 불명"으로
-# 실패 종료한다. 정상 게시는 60초 안에 끝난다(실측) — 기본 120초는 그 여유 2배다.
+# 실패 종료한다. 브라우저 UI 경로 실측은 39~300초 분산 + 300초 초과 사망 1회(LinkedIn)
+# 관측 — 기본 420초는 상한의 1.4배 여유(병렬 실행 브라우저 경합 흡수 포함).
 # 상한은 SOCIAL_ASIDE_TIMEOUT(초)으로 조정 가능하다.
-aside_timeout="${SOCIAL_ASIDE_TIMEOUT:-120}"
+aside_timeout="${SOCIAL_ASIDE_TIMEOUT:-420}"
 out_file="$(mktemp "${TMPDIR:-/tmp}/social-posting-out.XXXXXX")"
 aside exec --account "$account" "$prompt" >"$out_file" 2>&1 &
 aside_pid=$!

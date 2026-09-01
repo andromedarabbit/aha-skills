@@ -37,7 +37,7 @@ aside의 게시 권한은 settings.json 최상위 `permission` 키다(`rules.all
 
 - `status`: 활성(또는 `--account`) 계정의 권한을 읽어 필수 규칙과 대조한다. `bound:true` = 필수 규칙이 전부 allow에 있고 같은 모양의 ask/deny가 없다. 항상 exit 0 (soft-fail)
 - `grant`: 없는 필수 규칙을 추가하고 같은 모양(키 정렬 JSON 동일)의 ask/deny를 allow로 대체한 뒤 재조회로 검증한다. 실패 시 exit 1
-- 필수 규칙: X는 `twitter.tweet`/`twitter.reply`/`twitter.deleteTweet` 도구 + `x.com` browser-modify·network. linkedin·facebook·bluesky는 각 사이트 browser-modify·network (정의는 스크립트의 `REQUIRED_JSON` — 유일한 지점)
+- 필수 규칙: X는 `twitter.tweet`/`twitter.reply`/`twitter.deleteTweet` 도구 + 4개 사이트 network url 패턴 + browser-modify **1건(전역)** — aside가 저장 시 browser 규칙의 `host`를 제거하므로(2026-09-01 실측) 사이트 좁히기는 network 축으로만 가능하다 (정의는 스크립트의 `REQUIRED_JSON` — 유일한 지점)
 - repl은 `--account`를 무시하므로 계정 전환은 `aside account use`로 하고 작업 뒤 원복한다 (원복 실패는 결과에 남긴다)
 - Stage 2에서 "일괄 허용"으로만 호출한다 — grant는 사용자 동의 없이 실행하지 않는다
 
@@ -58,7 +58,7 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 5. 승인 시점 계정 스냅샷(`approved_accounts`)과 현재 accounts 일치 — 승인 후 계정 변경 거부
 6. 본문 동결 직후 원본 전체 digest 재검증 — 검사→동결 사이 변경(TOCTOU) 거부
 
-게시 페이로드: 본문만 `mktemp 0400` 동결(EXIT trap으로 항상 정리 — 템플릿의 `XXXXXX`는 반드시 마지막 문자여야 한다, macOS BSD mktemp는 접미사가 붙으면 랜덤화하지 않는다)하고 **프롬프트에 인라인으로 실어 보낸다** — 파일 경로 전달은 aside exec가 무인 read_file 권한 확인에 무한 정지하는 근본 원인이었다(2026-09-01 실측). 동결 경로는 `SOCIAL_POSTING_FROZEN` 환경변수로 하위 프로세스에 전달된다. media/link는 프롬프트 지시(절대경로·alt 포함 — 미디어 첨부가 있으면 로컬 파일 경로 전달이 필요해 같은 권한 게이트에 걸릴 수 있다는 것이 알려진 제약이다). 성공 신호는 aside 출력의 URL(`https?://`) 기계 감지 — URL 없으면 exit 1 "게시 여부 불명". aside exec는 상한 타임아웃(`SOCIAL_ASIDE_TIMEOUT`초, 기본 120 — 정상 게시는 60초 안에 끝난다)으로 감싸서 무한 정지를 기명 실패로 바꾼다. Facebook 초안의 `visibility`(`public`/`friends`/`keep`)은 게시 지시에 공개 범위 설정으로 반영된다(`keep`이면 지시 없음 — 계정 기본 설정). **스레드(`format: thread`)**는 프롬프트가 세그먼트를 이전 게시물에 대한 **답글로 연결**하도록 지시하고(미디어는 첫 게시물에만), URL 개수 ≥ 세그먼트 수를 요구한다 — 미달이면 exit 1 "부분 게시 가능성". 세그먼트 수는 check-drafts.py의 파싱과 같은 방식(공백 세그먼트 제외)으로 센다.
+게시 페이로드: 본문만 `mktemp 0400` 동결(EXIT trap으로 항상 정리 — 템플릿의 `XXXXXX`는 반드시 마지막 문자여야 한다, macOS BSD mktemp는 접미사가 붙으면 랜덤화하지 않는다)하고 **프롬프트에 인라인으로 실어 보낸다** — 파일 경로 전달은 aside exec가 무인 read_file 권한 확인에 무한 정지하는 근본 원인이었다(2026-09-01 실측). 동결 경로는 `SOCIAL_POSTING_FROZEN` 환경변수로 하위 프로세스에 전달된다. media/link는 프롬프트 지시(절대경로·alt 포함 — 미디어 첨부가 있으면 로컬 파일 경로 전달이 필요해 같은 권한 게이트에 걸릴 수 있다는 것이 알려진 제약이다). 성공 신호는 aside 출력의 URL(`https?://`) 기계 감지 — URL 없으면 exit 1 "게시 여부 불명". aside exec는 상한 타임아웃(`SOCIAL_ASIDE_TIMEOUT`초, 기본 420 — 실측 39~300초 분산·300초 초과 사망 관측, 병렬 경합 여유)으로 감싸서 무한 정지를 기명 실패로 바꾼다. Facebook 초안의 `visibility`(`public`/`friends`/`keep`)은 게시 지시에 공개 범위 설정으로 반영된다(`keep`이면 지시 없음 — 계정 기본 설정). **스레드(`format: thread`)**는 프롬프트가 세그먼트를 이전 게시물에 대한 **답글로 연결**하도록 지시하고(미디어는 첫 게시물에만), URL 개수 ≥ 세그먼트 수를 요구한다 — 미달이면 exit 1 "부분 게시 가능성". 세그먼트 수는 check-drafts.py의 파싱과 같은 방식(공백 세그먼트 제외)으로 센다.
 
 ## 훅 계약 (record-approval.sh)
 
