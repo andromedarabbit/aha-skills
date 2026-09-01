@@ -62,6 +62,7 @@ media:                    # 선택. 사용자가 제공한 파일만
   - path: ./image.png
     alt: 대체 텍스트
 link: https://example.com # 선택. 본문에 넣을 링크
+visibility: public        # 선택. facebook 전용 — public | friends | keep(기존 설정 유지·기본)
 ---
 
 본문 게시 문구.
@@ -75,6 +76,7 @@ link: https://example.com # 선택. 본문에 넣을 링크
 
 - frontmatter `platform`은 파일명과 같아야 한다(불일치·파싱 불가 형식은 하드 제약 위반 — fail-closed).
 - 스레드 경계는 **정확히 `=== POST ===` 한 줄**이다 — check-drafts.py가 이 경계로 게시물을 분리해 길이를 각각 검사한다.
+- `visibility`는 선택 키로 **facebook 전용**이다(`public`=공개, `friends`=친구만, `keep`=기존 설정 유지·기본값). Stage 2에서 사용자에게 반드시 묻고 답을 이 키에 기록한다 — publish.sh가 `public`/`friends`일 때 게시 지시에 공개 범위 설정을 포함하고, `keep`이면 지시하지 않는다(계정 기본 설정을 따른다). 하드 제약은 아니다(Convention 등급).
 - `format`과 게시물 수는 정합해야 한다: `single`은 게시물 정확히 1개, `thread`는 **2개 이상**(하드 제약 — 어긋나면 fail-closed).
 - 스레드(`format: thread`)는 **x·bluesky만 지원**한다 — 답글 체인이 네이티브인 플랫폼이다. linkedin·facebook은 네이티브 스레딩이 없어 `format: thread`가 하드 제약 위반으로 거부된다(단일 게시물로 작성한다). X 스레드는 게시물 25개 이하.
 - 스레드 게시는 각 세그먼트를 **이전 게시물에 대한 답글로 연결**한다(publish.sh가 지시) — 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공 신호는 URL 개수가 세그먼트 수 이상이다.

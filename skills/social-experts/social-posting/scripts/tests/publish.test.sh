@@ -294,4 +294,32 @@ if SOCIAL_ASIDE_TIMEOUT=2 bash "$PUBLISH" --job "$job" --platform x >/dev/null 2
   fail "타임아웃 내 완료 못 한 aside exec는 exit 1이어야 한다"
 fi
 
+# --- 14. Facebook 공개 범위: visibility가 게시 지시에 반영된다 (keep이면 지시 없음) ---
+# 테스트 13의 sleep stub은 로그를 남기지 않으므로 여기서 로깅 stub을 다시 설치한다
+cat >"$sandbox/bin/aside" <<'EOF'
+#!/bin/bash
+printf '=== aside call ===\n%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
+echo "게시 완료: https://stub.example/fb/1"
+exit 0
+EOF
+job14="$sandbox/job-visibility"
+make_job "$job14" "facebook" "facebook: u0"
+printf -- '---\nplatform: facebook\nformat: single\nvisibility: friends\n---\n본문\n' >"$job14/drafts/facebook.md"
+printf '{"approved_digests":{"facebook":"%s"},"approved_accounts":"{facebook: u0}"}' \
+  "$(hash_of "$job14/drafts/facebook.md")" >"$job14/receipt.json"
+rm -f "$SOCIAL_ASIDE_LOG"
+bash "$PUBLISH" --job "$job14" --platform facebook >/dev/null || fail "visibility 게시가 실패했다"
+last_call="$(sed -n '/^=== aside call ===$/,$p' "$SOCIAL_ASIDE_LOG" | tail -n +2)"
+grep -q "친구'만 보도록" <<<"$last_call" || fail "visibility: friends는 공개 범위 지시가 프롬프트에 담겨야 한다"
+# keep(기본): visibility 없으면 지시가 없다 — 계정 기본 설정을 조용히 따린다
+printf -- '---\nplatform: facebook\nformat: single\n---\n본문\n' >"$job14/drafts/facebook.md"
+printf '{"approved_digests":{"facebook":"%s"},"approved_accounts":"{facebook: u0}"}' \
+  "$(hash_of "$job14/drafts/facebook.md")" >"$job14/receipt.json"
+rm -f "$SOCIAL_ASIDE_LOG"
+bash "$PUBLISH" --job "$job14" --platform facebook >/dev/null || fail "keep 게시가 실패했다"
+last_call="$(sed -n '/^=== aside call ===$/,$p' "$SOCIAL_ASIDE_LOG" | tail -n +2)"
+if grep -q "공개 범위" <<<"$last_call"; then
+  fail "visibility가 없으면(keep) 공개 범위 지시가 없어야 한다"
+fi
+
 echo "✅ publish.test.sh 통과"

@@ -127,6 +127,17 @@ link_prompt=""
 link="$(printf '%s' "$payload_json" | jq -r '.link // ""')"
 [[ -n "$link" ]] && link_prompt=" 본문의 자연스러운 위치에 이 링크를 포함한다: $link"
 
+# --- Facebook 공개 범위 지시 (Stage 2에서 사용자가 정한 값만 — keep이면 계정 기본 설정) ---
+visibility_prompt=""
+if [[ "$platform" == "facebook" ]]; then
+  visibility="$(printf '%s' "$payload_json" | jq -r '.visibility // "keep"')"
+  if [[ "$visibility" == "public" ]]; then
+    visibility_prompt=" 게시물 공개 범위를 '공개'(전체 공개)로 설정해 게시한다."
+  elif [[ "$visibility" == "friends" ]]; then
+    visibility_prompt=" 게시물 공개 범위를 '친구'만 보도록 설정해 게시한다."
+  fi
+fi
+
 # --- 게시 형식 분기: 스레드는 답글 체인으로 연결 지시 (흩어진 게시물 방지) ---
 format="$(printf '%s' "$payload_json" | jq -r '.format // "single"')"
 # 세그먼트 수는 check-drafts.py parse_draft와 같은 방식으로 센다(공백 세그먼트 제외) —
@@ -147,7 +158,7 @@ body_inline="$(cat "$frozen")"
 export SOCIAL_POSTING_FROZEN="$frozen"
 prompt="다음 게시 텍스트를 그대로 $platform 에 게시해줘. 텍스트를 변경·요약·추가·삭제하지 마세요. <<<게시 텍스트 시작>>>
 $body_inline
-<<<게시 텍스트 끝>>> $post_prompt$media_prompt$link_prompt 완료 후 게시된 게시물 URL을 반환해줘."
+<<<게시 텍스트 끝>>> $post_prompt$media_prompt$link_prompt$visibility_prompt 완료 후 게시된 게시물 URL을 반환해줘."
 
 if [[ "$dry_run" == "true" ]]; then
   echo "가드 통과 (dry-run): platform=$platform account=$account format=$format"

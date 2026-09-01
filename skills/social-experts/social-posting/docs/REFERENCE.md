@@ -13,7 +13,7 @@
 | `post-state.sh` | `bash $SKILL_DIR/scripts/post-state.sh <sub>` | 영수증·활성 작업 관리 |
 | `record-approval.sh` | PostToolUse 훅 (matcher: AskUserQuestion) | 승인 digest + 계정 스냅샷 기록 (승인의 유일한 입구) |
 | `check-drafts.py` | `uv run --with grapheme --with pyyaml $SKILL_DIR/scripts/check-drafts.py <job-dir>` | 하드 제약 검사 (위반·파싱 불가 exit 1) + 플랫폼 간 문형 중복 경고(`warnings` — 차단 안 함) |
-| `check-drafts.py` (페이로드) | 위 명령에 `--platform <p>` 추가 | 게시 페이로드 JSON: 본문(frontmatter 제거)·절대경로 media·link·format |
+| `check-drafts.py` (페이로드) | 위 명령에 `--platform <p>` 추가 | 게시 페이로드 JSON: 본문(frontmatter 제거)·절대경로 media·link·format·visibility |
 | `publish.sh` | `bash $SKILL_DIR/scripts/publish.sh --job <dir> --platform <p>` | 게시 단일 진입점 (6중 가드 후 aside exec, URL 감지) |
 
 ## post-state.sh 서브커맨드
@@ -45,7 +45,7 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 5. 승인 시점 계정 스냅샷(`approved_accounts`)과 현재 accounts 일치 — 승인 후 계정 변경 거부
 6. 본문 동결 직후 원본 전체 digest 재검증 — 검사→동결 사이 변경(TOCTOU) 거부
 
-게시 페이로드: 본문만 `mktemp 0400` 동결(EXIT trap으로 항상 정리 — 템플릿의 `XXXXXX`는 반드시 마지막 문자여야 한다, macOS BSD mktemp는 접미사가 붙으면 랜덤화하지 않는다)하고 **프롬프트에 인라인으로 실어 보낸다** — 파일 경로 전달은 aside exec가 무인 read_file 권한 확인에 무한 정지하는 근본 원인이었다(2026-09-01 실측). 동결 경로는 `SOCIAL_POSTING_FROZEN` 환경변수로 하위 프로세스에 전달된다. media/link는 프롬프트 지시(절대경로·alt 포함 — 미디어 첨부가 있으면 로컬 파일 경로 전달이 필요해 같은 권한 게이트에 걸릴 수 있다는 것이 알려진 제약이다). 성공 신호는 aside 출력의 URL(`https?://`) 기계 감지 — URL 없으면 exit 1 "게시 여부 불명". aside exec는 상한 타임아웃(`SOCIAL_ASIDE_TIMEOUT`초, 기본 120 — 정상 게시는 60초 안에 끝난다)으로 감싸서 무한 정지를 기명 실패로 바꾼다. **스레드(`format: thread`)**는 프롬프트가 세그먼트를 이전 게시물에 대한 **답글로 연결**하도록 지시하고(미디어는 첫 게시물에만), URL 개수 ≥ 세그먼트 수를 요구한다 — 미달이면 exit 1 "부분 게시 가능성". 세그먼트 수는 check-drafts.py의 파싱과 같은 방식(공백 세그먼트 제외)으로 센다.
+게시 페이로드: 본문만 `mktemp 0400` 동결(EXIT trap으로 항상 정리 — 템플릿의 `XXXXXX`는 반드시 마지막 문자여야 한다, macOS BSD mktemp는 접미사가 붙으면 랜덤화하지 않는다)하고 **프롬프트에 인라인으로 실어 보낸다** — 파일 경로 전달은 aside exec가 무인 read_file 권한 확인에 무한 정지하는 근본 원인이었다(2026-09-01 실측). 동결 경로는 `SOCIAL_POSTING_FROZEN` 환경변수로 하위 프로세스에 전달된다. media/link는 프롬프트 지시(절대경로·alt 포함 — 미디어 첨부가 있으면 로컬 파일 경로 전달이 필요해 같은 권한 게이트에 걸릴 수 있다는 것이 알려진 제약이다). 성공 신호는 aside 출력의 URL(`https?://`) 기계 감지 — URL 없으면 exit 1 "게시 여부 불명". aside exec는 상한 타임아웃(`SOCIAL_ASIDE_TIMEOUT`초, 기본 120 — 정상 게시는 60초 안에 끝난다)으로 감싸서 무한 정지를 기명 실패로 바꾼다. Facebook 초안의 `visibility`(`public`/`friends`/`keep`)은 게시 지시에 공개 범위 설정으로 반영된다(`keep`이면 지시 없음 — 계정 기본 설정). **스레드(`format: thread`)**는 프롬프트가 세그먼트를 이전 게시물에 대한 **답글로 연결**하도록 지시하고(미디어는 첫 게시물에만), URL 개수 ≥ 세그먼트 수를 요구한다 — 미달이면 exit 1 "부분 게시 가능성". 세그먼트 수는 check-drafts.py의 파싱과 같은 방식(공백 세그먼트 제외)으로 센다.
 
 ## 훅 계약 (record-approval.sh)
 

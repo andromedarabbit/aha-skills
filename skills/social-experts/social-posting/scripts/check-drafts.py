@@ -258,6 +258,7 @@ def payload_for(platform: str, job: str) -> dict:
         "body": body.strip("\n"),
         "media": resolved,
         "link": str(meta.get("link") or ""),
+        "visibility": str(meta.get("visibility") or "keep"),
     }
 
 
