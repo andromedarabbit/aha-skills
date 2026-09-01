@@ -112,6 +112,9 @@ aha-skills/
 
 카테고리는 필요할 때 늘립니다. 새 카테고리를 만들면 `.claude-plugin/marketplace.json`에 플러그인 항목을 추가해야 하고, **`plugins[].name`은 카테고리 디렉토리명과 정확히 같아야 합니다** — `validate-marketplace.sh`가 그 튜플로 양방향 정합성을 검사하므로 다르면 "미등록"과 "유령 등록" 오류가 동시에 납니다.
 
+- 서브에이전트 없는 신규 카테고리는 `.claude-plugin/plugin.json` 없이 marketplace.json에 `strict: false` + `skills` 배열로 등록한다(meta-experts·social-experts 전례). 매니페스트는 `strict: true`(agents 선언) 카테고리만 필요하다.
+- 스킬 변경의 로컬 적용: 이 저장소는 디렉토리 마켓플레이스(autoUpdate)로 등록돼 있으나 **신규 플러그인(카테고리)은 자동 설치되지 않는다** — `claude plugin install <category>@aha-skills` 1회 필요, 이후 변경은 `claude plugin update <category>@aha-skills`. 로드 확인은 헤드리스 `claude -p` 새 세션으로 한다.
+
 - 프로젝트 공유 도메인 용어집(엔티티·명명된 프로세스·상태 개념). 코드베이스에 적응하거나 도메인 개념을 논의할 때 참고: @CONCEPTS.md
 
 ### 스킬 구조 (중요)
@@ -341,8 +344,10 @@ GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니�
 
 | 스크립트 언어 | 프레임워크 | 실행 방법 |
 |---------------|-----------|-----------|
-| Shell (Bash) | BATS | `bats *.bats` |
+| Shell (Bash) | 평문 bash 러너(저장소 전례) 또는 BATS | `scripts/tests/run.sh` 진입점 |
 | Python | pytest + uv | `uv run pytest` |
+
+저장소 전례는 bats가 아닌 `set -euo pipefail` 평문 bash 러너다 — stub PATH 주입 + `mktemp -d` 격리 + assert(blog-interviewer·social-posting 참조).
 
 ### 핵심 원칙
 
@@ -350,6 +355,7 @@ GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니�
 - **테스트 격리**: `mktemp -d` + `HOME` 재지정으로 환경 오염 방지
 - **PATH stub**: 외부 CLI는 가짜 바이너리로 대체해서 테스트
 - **CI 자동 연동**: `scripts/tests/run.sh`가 있으면 CI에서 자동 실행 (등록 불필요)
+- **`set -e` 함정**: `cmd && fail` 패턴(기대 실패 시 스크립트 전체가 죽음)과 실패하는 `var="$(cmd)"` 대립(다음 줄의 `|| fail`이 무력화됨)은 쓰지 않는다 — `if cmd; then fail; fi`와 `{ cmd || true; } | jq` 형태로 쓴다
 
 ### 명령어
 
