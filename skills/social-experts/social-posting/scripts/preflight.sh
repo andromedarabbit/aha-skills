@@ -13,6 +13,8 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # aside 하위 명령 출력을 안전하게 모은다(부재·실패 → 빈 값)
 capture() {
   local cmd="$1"
@@ -34,6 +36,15 @@ if command -v aside >/dev/null 2>&1; then
   account_list_json="$(capture aside account list | jq -R -s -c 'split("\n") | map(select(length > 0))' 2>/dev/null || printf '[]')"
   account_status="$(capture aside account status | head -1)"
 fi
+
+# aside 권한 바인딩(활성 계정) — 상태 계산은 aside-permissions.sh 에 맡긴다(유일한 구현).
+# 실패는 에러가 아니라 ok:false 필드로 보고한다(soft-fail).
+permissions_json='{"ok":false,"reason":"aside_not_available"}'
+if [[ "$aside_available" == "true" ]]; then
+  permissions_json="$(bash "$SCRIPT_DIR/aside-permissions.sh" status 2>/dev/null \
+    || printf '{"ok":false,"reason":"permission_check_failed"}')"
+fi
+permissions_json="$(printf '%s' "$permissions_json" | jq -c . 2>/dev/null || printf '{"ok":false,"reason":"permission_check_failed"}')"
 
 uv_ok=false
 command -v uv >/dev/null 2>&1 && uv_ok=true
@@ -72,6 +83,7 @@ jq -n \
   --arg aside_version "$aside_version" \
   --argjson account_list "$(printf '%s' "$account_list_json" | jq -c . 2>/dev/null || printf '[]')" \
   --arg account_status "$account_status" \
+  --argjson permissions "$permissions_json" \
   --argjson uv "$uv_ok" \
   --argjson python3 "$python3_ok" \
   --argjson jq_ok "$jq_ok" \
@@ -79,7 +91,7 @@ jq -n \
   --arg social_root "$social_root" \
   --argjson has_voice_profile "$has_voice_profile" \
   --argjson md_candidates "$(printf '%s' "$md_candidates_json" | jq -c . 2>/dev/null || printf '[]')" \
-  '{aside: {available: $aside_available, version: $aside_version, account_list: $account_list, account_status: $account_status},
+  '{aside: {available: $aside_available, version: $aside_version, account_list: $account_list, account_status: $account_status, permissions: $permissions},
     uv: $uv, python3: $python3, jq: $jq_ok,
     workspace: {cwd: $cwd, social_root: $social_root, has_voice_profile: $has_voice_profile, md_candidates: $md_candidates}}'
 

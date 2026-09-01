@@ -9,6 +9,7 @@
 | 스크립트 | 호출 | 역할 |
 | --- | --- | --- |
 | `preflight.sh` | `bash $SKILL_DIR/scripts/preflight.sh` | 환경 스냅샷 JSON 1줄 (항상 exit 0) |
+| `aside-permissions.sh` | `bash $SKILL_DIR/scripts/aside-permissions.sh status\|grant [--account u0]` | aside 권한 바인딩 — 지원 4사이트 allow 규칙 대조·부여 (status 항상 exit 0, grant 실패 시 exit 1) |
 | `check-deps.sh` | PreToolUse 훅 (`if: Bash(aside *)`) | aside 존재·계정 상태 확인 (편의 — 강제력 없음) |
 | `post-state.sh` | `bash $SKILL_DIR/scripts/post-state.sh <sub>` | 영수증·활성 작업 관리 |
 | `record-approval.sh` | PostToolUse 훅 (matcher: AskUserQuestion) | 승인 digest + 계정 스냅샷 기록 (승인의 유일한 입구) |
@@ -29,6 +30,18 @@ clear                 영수증 삭제
 ```
 
 **approved_\*는 post-state.sh로 기록할 수 없다.** record-approval.sh 훅(PostToolUse, matcher: AskUserQuestion)만 lib/receipt.sh를 직접 호출해 기록한다.
+
+## aside 권한 바인딩 (aside-permissions.sh)
+
+aside의 게시 권한은 settings.json 최상위 `permission` 키다(`rules.allow/deny/ask` + `default`). CLI·MCP에 설정 커맨드는 없고 repl의 `aside.settings.get/set`이 유일한 프로그램 경로다 — 이 스크립트가 그 경로를 감싼다.
+
+- `status`: 활성(또는 `--account`) 계정의 권한을 읽어 필수 규칙과 대조한다. `bound:true` = 필수 규칙이 전부 allow에 있고 같은 모양의 ask/deny가 없다. 항상 exit 0 (soft-fail)
+- `grant`: 없는 필수 규칙을 추가하고 같은 모양(키 정렬 JSON 동일)의 ask/deny를 allow로 대체한 뒤 재조회로 검증한다. 실패 시 exit 1
+- 필수 규칙: X는 `twitter.tweet`/`twitter.reply`/`twitter.deleteTweet` 도구 + `x.com` browser-modify·network. linkedin·facebook·bluesky는 각 사이트 browser-modify·network (정의는 스크립트의 `REQUIRED_JSON` — 유일한 지점)
+- repl은 `--account`를 무시하므로 계정 전환은 `aside account use`로 하고 작업 뒤 원복한다 (원복 실패는 결과에 남긴다)
+- Stage 2에서 "일괄 허용"으로만 호출한다 — grant는 사용자 동의 없이 실행하지 않는다
+
+> 규칙 문법(zod 판별 유니언)·스키마 검증·`default: "allow"` 과허용 실태는 2026-09-01 실측이다.
 
 ## Ready 판정식
 

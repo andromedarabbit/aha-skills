@@ -37,11 +37,16 @@ echo "$out" | jq -e '(.aside.account_list | length) == 2' >/dev/null \
   || fail "account_list 라인 수 불일치: $out"
 echo "$out" | jq -e '.aside.account_status | test("u0")' >/dev/null \
   || fail "account_status 미반영: $out"
+# stub aside에는 repl이 없어 권한 바인딩은 soft-fail(ok:false)이어야 한다
+echo "$out" | jq -e '.aside.permissions.ok == false' >/dev/null \
+  || fail "권한 바인딩 soft-fail 미반영: $out"
 
 # --- 2. aside 부재 → exit 0 + available=false ---
 out2="$(PATH="/usr/bin:/bin" bash "$PREFLIGHT")" || fail "aside 부재에도 exit 0이어야 한다"
 echo "$out2" | jq -e '.aside.available == false' >/dev/null \
   || fail "부재 시 available=false 여야 한다: $out2"
+echo "$out2" | jq -e '.aside.permissions.reason == "aside_not_available"' >/dev/null \
+  || fail "부재 시 권한 필드 미반영: $out2"
 
 # --- 3. 워크스페이스 탐지: social/ 폴더 → social_root·voice_profile 반영 ---
 mkdir -p "$sandbox/social/job"
