@@ -71,15 +71,16 @@ link: https://example.com # 선택. 본문에 넣을 링크
 
 요건:
 
-- frontmatter `platform`은 파일명과 같아야 한다.
+- frontmatter `platform`은 파일명과 같아야 한다(불일치·파싱 불가 형식은 하드 제약 위반 — fail-closed).
 - 스레드 경계는 **정확히 `=== POST ===` 한 줄**이다 — check-drafts.py가 이 경계로 게시물을 분리해 길이를 각각 검사한다.
-- 본문은 게시 그대로의 문구다. publish.sh가 이 파일을 동결해 aside에 verbatim으로 넘긴다.
+- 본문은 게시 그대로의 문구다. **게시 실행은 본문만 전달된다**(publish.sh가 frontmatter를 제거한 페이로드를 동결하고 media/link는 지시로 전달) — 반면 승인 digest는 **초안 전체 파일**(frontmatter 포함) 기준이라 검증 대상과 게시 대상이 원본 하나로 묶인다.
 
 ## 4. receipt.json (영수증)
 
 ```json
 {
   "approved_digests": {"x": "sha256...", "linkedin": "sha256..."},
+  "approved_accounts": "{x: u0, linkedin: u1}",
   "approved_at": "2026-09-01T00:00:00Z",
   "approved_via": "posttooluse-hook",
   "posted_x": "https://x.com/...",
@@ -89,7 +90,8 @@ link: https://example.com # 선택. 본문에 넣을 링크
 
 불변식:
 
-- `approved_*` 세 키는 **record-approval.sh 훅만** 기록한다(PostToolUse, matcher: AskUserQuestion, header `게시 승인` 계약). post-state.sh로는 set/unset 불가다.
+- `approved_*` 네 키(digests·accounts·at·via)는 **record-approval.sh 훅만** 기록한다(PostToolUse, matcher: AskUserQuestion, header `게시 승인` 계약). post-state.sh로는 set/unset 불가다.
+- `approved_accounts`는 승인 시점 job-state의 accounts flow-map 라인 원문이다 — 승인은 **초안 전체 파일 digest + 계정 매핑**을 함께 묶고, publish.sh가 두 값 모두 현재 상태와 대조한다(계정 재타깃 차단).
 - `posted_<platform>`는 게시 성공 후 에이전트가 `post-state.sh set posted_x <url>`로 기록한다. 실패한 게시는 기록하지 않는다.
 - 영수증은 활성 작업 하나를 가리킨다 — 동시에 여러 작업을 활성화하면 섞이므로 금지.
 

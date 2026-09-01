@@ -24,7 +24,9 @@
 # 문구를 그대로 써야 훅이 인식한다.
 #
 # 기록 내용: 활성 작업 drafts/ 아래 모든 <platform>.md의 sha256을
-# approved_digests 객체로 남긴다(승인 시점에 존재하는 초안 전부가 승인 대상).
+# approved_digests 객체로 남기고(승인 시점에 존재하는 초안 전부가 승인 대상),
+# 승인 시점의 accounts 매핑을 approved_accounts로 스냅샷한다 — 승인 후 계정이
+# 바뀌면 publish.sh가 이 값과의 불일치로 게시를 거부한다(계정 재타깃 가드).
 # 승인 대상 플랫폼을 좁히려면 Stage 2에서 platforms를 줄이면 된다.
 #
 # 한계(문서화): 로컬 bash 스크립트라 에이전트가 이 스크립트를 직접 호출하며
@@ -87,6 +89,13 @@ main() {
   receipt_set_json approved_digests "$digests"
   receipt_set approved_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   receipt_set approved_via "posttooluse-hook"
+
+  # 승인 시점 계정 매핑 스냅샷 (계정 재타깃 가드 — publish.sh가 대조한다)
+  local accounts_line
+  accounts_line="$(sed -n 's/^accounts:[[:space:]]*//p' "$job/job-state.md" 2>/dev/null | head -1)"
+  if [ -n "$accounts_line" ]; then
+    receipt_set approved_accounts "$accounts_line"
+  fi
 
   exit 0
 }

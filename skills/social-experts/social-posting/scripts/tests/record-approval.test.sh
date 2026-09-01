@@ -15,6 +15,15 @@ job="$sandbox/job"
 mkdir -p "$job/drafts"
 printf 'draft-x\n' >"$job/drafts/x.md"
 printf 'draft-li\n' >"$job/drafts/linkedin.md"
+cat >"$job/job-state.md" <<'EOF'
+---
+stage: 8
+slug: t
+platforms: [x, linkedin]
+accounts: {x: u0, linkedin: u1}
+status: {x: draft, linkedin: draft}
+---
+EOF
 
 receipt="$job/receipt.json"
 
@@ -38,6 +47,8 @@ run_hook "$approval_json"
 
 jq -e '.approved_via == "posttooluse-hook" and (.approved_at | type == "string")' "$receipt" >/dev/null \
   || fail "정상 승인에서 approved_via/approved_at이 기록되지 않았다"
+[ "$(jq -r '.approved_accounts' "$receipt")" = "{x: u0, linkedin: u1}" ] \
+  || fail "승인 시점 accounts 스냅샷(approved_accounts)이 기록되지 않았다: $(cat "$receipt")"
 [ "$(jq -r '.approved_digests.x' "$receipt")" = "$(hash_of "$job/drafts/x.md")" ] \
   || fail "approved_digests.x가 실측 sha256과 불일치"
 [ "$(jq -r '.approved_digests.linkedin' "$receipt")" = "$(hash_of "$job/drafts/linkedin.md")" ] \

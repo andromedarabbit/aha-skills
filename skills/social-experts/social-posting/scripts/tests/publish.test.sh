@@ -1,5 +1,6 @@
 #!/bin/bash
-# publish.sh — 게시 가드 검증. digest·플랫폼·계정·하드 제약 가드가 실제로 막는지.
+# publish.sh — 게시 가드 검증. digest·플랫폼·계정(바인딩 포함)·TOCTOU·하드 제약·
+# 페이로드 분리·URL 감지 가드가 실제로 막는지. aside stub은 동결 파일을 읽어 검증한다.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,7 +8,8 @@ SKILL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PUBLISH="$SKILL_DIR/scripts/publish.sh"
 
 sandbox="$(mktemp -d)"
-trap 'rm -rf "$sandbox"' EXIT
+cleanup() { rm -rf "$sandbox"; }
+trap cleanup EXIT
 export TMPDIR="$sandbox/tmp"
 mkdir -p "$TMPDIR"
 
@@ -17,13 +19,20 @@ if ! command -v uv >/dev/null 2>&1; then
   echo "❌ 오류: uv 가 없습니다 — 하드 제약 재실행 검증을 실행할 수 없습니다" >&2
   exit 1
 fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "❌ 오류: jq 가 없습니다" >&2
+  exit 1
+fi
 
-# aside stub: 호출 로그만 남긴다
+# aside stub: 호출 로그 + 프롬프트에서 동결 파일 경로를 추출해 내용을 캡처한다
 mkdir -p "$sandbox/bin"
 export SOCIAL_ASIDE_LOG="$sandbox/aside-calls.log"
+export SOCIAL_ASIDE_PAYLOAD="$sandbox/last-payload.md"
 cat >"$sandbox/bin/aside" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
+f="$(printf '%s' "$*" | sed -n 's/.*파일 \([^ ]*\) 의 내용.*/\1/p')"
+[ -n "$f" ] && [ -f "$f" ] && cp "$f" "$SOCIAL_ASIDE_PAYLOAD"
 echo "게시 완료: https://stub.example/post/1"
 exit 0
 EOF
@@ -38,6 +47,8 @@ hash_of() {
   fi
 }
 
+aside_call_count() { { cat "$SOCIAL_ASIDE_LOG" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'; }
+
 make_job() { # $1=dir  $2=platforms  $3=accounts
   mkdir -p "$1/drafts"
   cat >"$1/job-state.md" <<EOF
@@ -51,28 +62,56 @@ status: {$2: draft}
 EOF
 }
 
-# --- 1. 승인 정상 → dry-run 통과, 실제 실행은 exec 1회 ---
+approve() { # $1=job  $2=accounts 내부(예: "x: u0") — 승인 영수증(digest+계정 스냅샷) 작성.
+  # approved_accounts는 훅이 job-state에서 캡처하는 flow-map 원문 라인(중괄호 포함) 기준
+  printf '{"approved_digests":{"x":"%s"},"approved_accounts":"{%s}"}' \
+    "$(hash_of "$1/drafts/x.md")" "$2" >"$1/receipt.json"
+}
+
+# --- 1. 승인 정상 → dry-run 통과(페이로드 요약), 실행은 exec 1회 + 페이로드 본문만 ---
 job="$sandbox/job-ok"
 make_job "$job" "x" "x: u0"
-printf -- '---\nplatform: x\nformat: single\n---\n스파크 잡을 3배 빠르게 만든 이야기\n' >"$job/drafts/x.md"
-printf '{"approved_digests":{"x":"%s"}}' "$(hash_of "$job/drafts/x.md")" >"$job/receipt.json"
+cat >"$job/drafts/x.md" <<'EOF'
+---
+platform: x
+format: single
+media:
+  - path: ./plot.png
+    alt: 런타임 그래프
+link: https://example.com/post
+---
+스파크 잡을 3배 빠르게 만든 이야기
+EOF
+touch "$job/plot.png"
+approve "$job" "x: u0"
 
 bash "$PUBLISH" --job "$job" --platform x --dry-run >/dev/null || fail "승인 정상 dry-run이 통과해야 한다"
-
-aside_call_count() { { cat "$SOCIAL_ASIDE_LOG" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'; }
-
 [ "$(aside_call_count)" = "0" ] || fail "dry-run은 aside를 호출하면 안 된다"
 
+rm -f "$SOCIAL_ASIDE_LOG"
 bash "$PUBLISH" --job "$job" --platform x >/dev/null || fail "승인 정상 실행이 실패했다"
 [ "$(aside_call_count)" = "1" ] || fail "aside exec는 정확히 1회 호출되어야 한다"
-grep -q -- "--account u0" "$SOCIAL_ASIDE_LOG" || fail "job-state 계정(u0)으로 호출해야 한다"
-grep -q "그대로" "$SOCIAL_ASIDE_LOG" || fail "변경 금지 지시가 프롬프트에 담겨야 한다"
+last_call="$(cat "$SOCIAL_ASIDE_LOG")"
+grep -q -- "--account u0" <<<"$last_call" || fail "job-state 계정(u0)으로 호출해야 한다"
+grep -q "그대로" <<<"$last_call" || fail "변경 금지 지시가 프롬프트에 담겨야 한다"
+# 페이로드 검증: 동결 파일은 본문만(frontmatter 제거), media는 절대경로 지시로 전달
+[ -f "$SOCIAL_ASIDE_PAYLOAD" ] || fail "stub이 동결 파일을 캡처해야 한다"
+grep -q "스파크 잡을" "$SOCIAL_ASIDE_PAYLOAD" || fail "동결 파일에 본문이 담겨야 한다"
+if head -1 "$SOCIAL_ASIDE_PAYLOAD" | grep -q '^---'; then
+  fail "동결 파일에 frontmatter가 남아 있으면 안 된다"
+fi
+if grep -q "platform: x" "$SOCIAL_ASIDE_PAYLOAD"; then
+  fail "frontmatter 메타데이터가 게시 페이로드에 섞였다"
+fi
+grep -qF "$job/plot.png" <<<"$last_call" || fail "media 절대경로가 프롬프트에 명시되어야 한다"
+grep -q "런타임 그래프" <<<"$last_call" || fail "media alt가 프롬프트에 명시되어야 한다"
+grep -q "https://example.com/post" <<<"$last_call" || fail "link가 프롬프트에 명시되어야 한다"
 
-# --- 2. digest 불일치 (승인 후 수정) → 거부 ---
+# --- 2. digest 불일치 (승인 후 수정) → 가드 2/6 거부 ---
 job2="$sandbox/job-tampered"
 make_job "$job2" "x" "x: u0"
 printf -- '---\nplatform: x\nformat: single\n---\n원본 문구\n' >"$job2/drafts/x.md"
-printf '{"approved_digests":{"x":"%s"}}' "$(hash_of "$job2/drafts/x.md")" >"$job2/receipt.json"
+approve "$job2" "x: u0"
 printf -- '---\nplatform: x\nformat: single\n---\n승인 후 몰래 수정한 문구\n' >"$job2/drafts/x.md"
 if bash "$PUBLISH" --job "$job2" --platform x >/dev/null 2>&1; then
   fail "승인 후 수정된 초안은 거부되어야 한다 (실패-닫힘)"
@@ -87,31 +126,61 @@ if bash "$PUBLISH" --job "$job3" --platform x >/dev/null 2>&1; then
   fail "승인 digest가 없으면 거부되어야 한다"
 fi
 
-# --- 4. 대상 밖 플랫폼 → 거부 ---
+# --- 4. 대상 밖 플랫폼 → 가드 1 거부 (선조기 '초안 없음'이 대신 죽지 않게 초안 생성) ---
+printf -- '---\nplatform: linkedin\nformat: single\n---\n본문\n' >"$job/drafts/linkedin.md"
 if bash "$PUBLISH" --job "$job" --platform linkedin >/dev/null 2>&1; then
-  fail "platforms에 없는 플랫폼은 거부되어야 한다"
+  fail "platforms에 없는 플랫폼은 가드 1에서 거부되어야 한다"
 fi
+rm -f "$job/drafts/linkedin.md"
 
 # --- 5. 계정 미지정 → 거부 ---
 job5="$sandbox/job-noaccount"
 make_job "$job5" "x" "linkedin: u1"
 printf -- '---\nplatform: x\nformat: single\n---\n본문\n' >"$job5/drafts/x.md"
-printf '{"approved_digests":{"x":"%s"}}' "$(hash_of "$job5/drafts/x.md")" >"$job5/receipt.json"
+printf '{"approved_digests":{"x":"%s"},"approved_accounts":"{x: u0}"}' "$(hash_of "$job5/drafts/x.md")" >"$job5/receipt.json"
 if bash "$PUBLISH" --job "$job5" --platform x >/dev/null 2>&1; then
   fail "accounts에 해당 플랫폼 계정이 없으면 거부되어야 한다"
 fi
 
-# --- 6. 하드 제약 위반 (승인은 유효) → 가드 3이 거부 ---
-job6="$sandbox/job-violating"
-make_job "$job6" "x" "x: u0"
-k141="$(printf '가%.0s' $(seq 1 141))"
-printf -- '---\nplatform: x\nformat: single\n---\n%s\n' "$k141" >"$job6/drafts/x.md"
-printf '{"approved_digests":{"x":"%s"}}' "$(hash_of "$job6/drafts/x.md")" >"$job6/receipt.json"
+# --- 6. 승인 후 계정 변경 (계정 재타깃) → 가드 5 거부 ---
+job6="$sandbox/job-retarget"
+make_job "$job6" "x" "x: u1"
+printf -- '---\nplatform: x\nformat: single\n---\n본문\n' >"$job6/drafts/x.md"
+printf '{"approved_digests":{"x":"%s"},"approved_accounts":"{x: u0}"}' "$(hash_of "$job6/drafts/x.md")" >"$job6/receipt.json"
 if bash "$PUBLISH" --job "$job6" --platform x >/dev/null 2>&1; then
+  fail "승인 시점 계정(u0)과 현재(u1)가 다르면 거부되어야 한다"
+fi
+
+# --- 6b. approved_accounts 스냅샷 없음(구계약 승인) → 가드 5 거부 ---
+job6b="$sandbox/job-legacy"
+make_job "$job6b" "x" "x: u0"
+printf -- '---\nplatform: x\nformat: single\n---\n본문\n' >"$job6b/drafts/x.md"
+printf '{"approved_digests":{"x":"%s"}}' "$(hash_of "$job6b/drafts/x.md")" >"$job6b/receipt.json"
+if bash "$PUBLISH" --job "$job6b" --platform x >/dev/null 2>&1; then
+  fail "approved_accounts 없는 구계약 승인은 거부되어야 한다"
+fi
+
+# --- 7. 하드 제약 위반 (승인 유효) → 가드 3 거부 ---
+job7="$sandbox/job-violating"
+make_job "$job7" "x" "x: u0"
+k141="$(printf '가%.0s' $(seq 1 141))"
+printf -- '---\nplatform: x\nformat: single\n---\n%s\n' "$k141" >"$job7/drafts/x.md"
+approve "$job7" "x: u0"
+if bash "$PUBLISH" --job "$job7" --platform x >/dev/null 2>&1; then
   fail "하드 제약 위반(282>280)은 가드 3에서 거부되어야 한다"
 fi
 
-# --- 7. aside 실패 → exit 1 ---
+# --- 8. uv 부재 → fail-closed 거부 ---
+nouv="$sandbox/nouv"
+mkdir -p "$nouv"
+ln -s "$(command -v jq)" "$nouv/jq"
+ln -s "$(command -v shasum || command -v sha256sum)" "$nouv/" 2>/dev/null || true
+cp "$sandbox/bin/aside" "$nouv/aside"
+if PATH="$nouv:/usr/bin:/bin" bash "$PUBLISH" --job "$job" --platform x >/dev/null 2>&1; then
+  fail "uv 부재 시 fail-closed로 거부되어야 한다"
+fi
+
+# --- 9. aside 실패 / URL 미반환(침묵 실패) → exit 1 ---
 cat >"$sandbox/bin/aside" <<'EOF'
 #!/bin/bash
 echo "aside 오류" >&2
@@ -119,6 +188,14 @@ exit 1
 EOF
 if bash "$PUBLISH" --job "$job" --platform x >/dev/null 2>&1; then
   fail "aside 실행 실패 시 exit 1이어야 한다"
+fi
+cat >"$sandbox/bin/aside" <<'EOF'
+#!/bin/bash
+echo "게시했음 (URL 없음)"
+exit 0
+EOF
+if bash "$PUBLISH" --job "$job" --platform x >/dev/null 2>&1; then
+  fail "URL 미반환(침묵 실패) 시 exit 1이어야 한다"
 fi
 
 echo "✅ publish.test.sh 통과"

@@ -1,7 +1,7 @@
 ---
 name: social-posting
 description: 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text)을 기계 검증한 뒤 승인을 받아 aside 브라우저 실행 계층으로 실제 계정에 게시한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 SNS용으로 변환해줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 aside로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser 스킬 소관이다.
-version: 0.1.0
+version: 0.1.1
 context: inline
 language: "korean"
 dependencies:
@@ -136,7 +136,7 @@ canonical을 각 플랫폼 플레이북(`docs/playbook-x.md` 등 4종)에 따라
 - header: **게시 승인** — 이 문자열이 훅 계약이다. 정확히 이 문구여야 record-approval.sh 훅이 승인을 기록한다
 - 선택지: 게시 / 수정 / 취소
 
-"게시" 응답이 오면 PostToolUse 훅이 승인 시점의 초안 sha256을 영수증에 기록한다. **에이전트가 승인을 직접 기록하는 방법은 없다** — `post-state.sh`로는 `approved_*` 키를 set할 수 없다. "수정"이면 Stage 6으로 돌아가 고치고 다시 이 게이트로 온다.
+"게시" 응답이 오면 PostToolUse 훅이 승인 시점의 초안 sha256과 계정 매핑을 영수증에 기록한다(approved_digests + approved_accounts). **에이전트가 승인을 직접 기록하는 방법은 없다** — `post-state.sh`로는 `approved_*` 키를 set할 수 없다. "수정"이면 Stage 6으로 돌아가 고치고 다시 이 게이트로 온다.
 
 Ready 판정식(기계 판정, publish.sh가 강제한다): **`approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치**
 
@@ -148,7 +148,7 @@ Ready 판정식(기계 판정, publish.sh가 강제한다): **`approved_digests`
 bash "${CLAUDE_SKILL_DIR}/scripts/publish.sh" --job <job-dir> --platform x
 ```
 
-publish.sh가 게시 직전에 승인 플랫폼 여부 · digest 일치 · 하드 제약 재실행 · 계정 매핑을 검사하고, 하나라도 어긋나면 거부한다(실패-닫힘 가드 — 승인 후 초안이 바뀌었으면 재승인 필요). 통과하면 초안을 동결 파일(0400)로 만들어 `aside exec --account <id>`에 **변경·요약 없이 그대로 게시**를 지시한다. 대상 플랫폼마다 한 번씩 호출한다.
+publish.sh가 게시 직전에 6중 가드를 검사한다 — 승인 플랫폼 여부 · digest 일치 · 하드 제약 재실행 · 계정 매핑 · **승인 시점 계정 스냅샷 일치** · **본문 동결 직후 원본 digest 재검증**. 하나라도 어긋나면 거부한다(실패-닫힘 가드 — 승인 후 초안이나 계정이 바뀌었으면 재승인 필요). 통과하면 **본문만**(frontmatter 제거, media/link는 절대경로·alt 지시로 전달) 동결 파일(0400)에 담아 `aside exec --account <id>`에 **변경·요약 없이 그대로 게시**를 지시하고, 출력에서 게시 URL(`https?://`)을 기계 감지한다 — URL이 없으면 "게시 여부 불명"으로 실패 종료된다. 대상 플랫폼마다 한 번씩 호출한다.
 
 ### Stage 10 게시 후 검증 (read-back)
 

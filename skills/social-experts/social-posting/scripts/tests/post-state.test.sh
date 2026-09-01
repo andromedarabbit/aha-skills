@@ -5,10 +5,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 STATE="$SKILL_DIR/scripts/post-state.sh"
-POINTER="${TMPDIR:-/tmp}/social-posting-current-job"
 
 sandbox="$(mktemp -d)"
-cleanup() { rm -rf "$sandbox" "$POINTER"; }
+# 포인터 파일 경로도 샌드박스 안으로 — 전역 활성 포인터를 건드리지 않게 격리
+# (publish.test.sh·record-approval.test.sh와 동일 패턴)
+export TMPDIR="$sandbox/tmp"
+mkdir -p "$TMPDIR"
+POINTER="${TMPDIR}/social-posting-current-job"
+cleanup() { rm -rf "$sandbox"; }
 trap cleanup EXIT
 job="$sandbox/job"
 

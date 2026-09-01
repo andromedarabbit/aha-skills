@@ -11,9 +11,10 @@
 | `preflight.sh` | `bash $SKILL_DIR/scripts/preflight.sh` | 환경 스냅샷 JSON 1줄 (항상 exit 0) |
 | `check-deps.sh` | PreToolUse 훅 (`if: Bash(aside *)`) | aside 존재·계정 상태 확인 (편의 — 강제력 없음) |
 | `post-state.sh` | `bash $SKILL_DIR/scripts/post-state.sh <sub>` | 영수증·활성 작업 관리 |
-| `record-approval.sh` | PostToolUse 훅 (matcher: AskUserQuestion) | 승인 digest 기록 (승인의 유일한 입구) |
-| `check-drafts.py` | `uv run --with grapheme --with pyyaml $SKILL_DIR/scripts/check-drafts.py <job-dir>` | 하드 제약 검사 (위반 exit 1) |
-| `publish.sh` | `bash $SKILL_DIR/scripts/publish.sh --job <dir> --platform <p>` | 게시 단일 진입점 (가드 후 aside exec) |
+| `record-approval.sh` | PostToolUse 훅 (matcher: AskUserQuestion) | 승인 digest + 계정 스냅샷 기록 (승인의 유일한 입구) |
+| `check-drafts.py` | `uv run --with grapheme --with pyyaml $SKILL_DIR/scripts/check-drafts.py <job-dir>` | 하드 제약 검사 (위반·파싱 불가 exit 1) |
+| `check-drafts.py` (페이로드) | 위 명령에 `--platform <p>` 추가 | 게시 페이로드 JSON: 본문(frontmatter 제거)·절대경로 media·link·format |
+| `publish.sh` | `bash $SKILL_DIR/scripts/publish.sh --job <dir> --platform <p>` | 게시 단일 진입점 (6중 가드 후 aside exec, URL 감지) |
 
 ## post-state.sh 서브커맨드
 
@@ -33,13 +34,24 @@ clear                 영수증 삭제
 
 > **`approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치**
 
-publish.sh가 게시 직전 이 판정식을 강제하고, 하드 제약(check-drafts.py)도 재실행한다(이중 검사).
+publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 재검증 포함), 하드 제약(check-drafts.py)도 재실행한다(이중 검사). 승인 digest는 초안 전체 파일 기준이고 게시 페이로드는 본문만 담는다 — 검증 대상과 게시 대상이 원본 하나로 묶인다.
+
+## publish.sh 6중 가드
+
+1. 플랫폼이 job-state platforms 안에 있는가
+2. 승인 digest 존재·일치 (Ready 판정식)
+3. 하드 제약 재실행 (check-drafts.py)
+4. 계정은 job-state accounts 기재값만
+5. 승인 시점 계정 스냅샷(`approved_accounts`)과 현재 accounts 일치 — 승인 후 계정 변경 거부
+6. 본문 동결 직후 원본 전체 digest 재검증 — 검사→동결 사이 변경(TOCTOU) 거부
+
+게시 페이로드: 본문만 `mktemp 0400` 동결(EXIT trap으로 항상 정리), media/link는 프롬프트 지시(절대경로·alt 포함). 성공 신호는 aside 출력의 URL(`https?://`) 기계 감지 — URL 없으면 exit 1 "게시 여부 불명".
 
 ## 훅 계약 (record-approval.sh)
 
 - 이벤트: PostToolUse, matcher: `AskUserQuestion`
 - 인식 조건: `tool_input.questions` 중 header가 **정확히 `게시 승인`** 인 문항의 답변이 **정확히 `게시`** 일 때만 승인으로 기록
-- 기록 내용: 활성 작업 `drafts/*.md` 전부의 sha256 → `approved_digests` 객체
+- 기록 내용: 활성 작업 `drafts/*.md` 전부의 sha256 → `approved_digests` 객체, 승인 시점 accounts 라인 → `approved_accounts`
 - Stage 8의 질문 문구는 이 계약을 지켜야 한다 — header를 바꾸면 훅이 승인을 못 본다
 
 ## 문자 수 단위 (하드 제약)
