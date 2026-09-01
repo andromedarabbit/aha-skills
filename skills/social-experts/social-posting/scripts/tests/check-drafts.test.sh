@@ -56,6 +56,16 @@ printf -- '---\nplatform: x\nformat: single\n---\n%s https://example.com/very/lo
 # 100*2 + 1(공백) + 23 = 224
 [ "$(post_count "$job2" x)" = "224" ] || fail "URL 23 고정 가중이 적용되지 않았다: $(post_count "$job2" x)"
 
+# --- 3b. X 가중 길이(twitter-text v3): 이모지=2, 곡따옴표·em dash·그리스=1 ---
+printf -- '---\nplatform: x\nformat: single\n---\na😊a\n' >"$job2/drafts/x.md"
+[ "$(post_count "$job2" x)" = "4" ] || fail "이모지 1개는 grapheme 1개=2로 계산되어야 한다 (a😊a=4): $(post_count "$job2" x)"
+printf -- '---\nplatform: x\nformat: single\n---\na👨‍👩‍👧‍👦a\n' >"$job2/drafts/x.md"
+[ "$(post_count "$job2" x)" = "4" ] || fail "ZWJ 이모지 시퀀스는 grapheme 1개=2로 계산되어야 한다 (a👨‍👩‍👧‍👦a=4): $(post_count "$job2" x)"
+printf -- '---\nplatform: x\nformat: single\n---\na“b’c—d\n' >"$job2/drafts/x.md"
+[ "$(post_count "$job2" x)" = "7" ] || fail "곡따옴표·em dash는 1로 계산되어야 한다 (a“b’c—d=7): $(post_count "$job2" x)"
+printf -- '---\nplatform: x\nformat: single\n---\naαb\n' >"$job2/drafts/x.md"
+[ "$(post_count "$job2" x)" = "3" ] || fail "그리스 문자는 화이트리스트 범위(0x0000-0x10FF) 안이라 1로 계산되어야 한다 (aαb=3): $(post_count "$job2" x)"
+
 # --- 4. Bluesky grapheme: ZWJ 이모지 가족 1개 = grapheme 1 ---
 job4="$sandbox/job-bs"; mkdir -p "$job4/drafts"
 emoji="$(printf '👨‍👩‍👧‍👦%.0s' $(seq 1 10))"  # 10 graphemes (ZWJ 결합)
@@ -101,6 +111,43 @@ EOF
 counts="$({ run_check "$job7" || true; } | jq -c '.platforms.x.counts')"
 [ "$counts" = "[280,282]" ] || fail "스레드 게시물별 카운트가 [280,282]이어야 한다: $counts"
 if run_check "$job7" >/dev/null 2>&1; then fail "스레드 2번째 게시물 초과 — exit 1이어야 한다"; fi
+
+# --- 7b. 스레드 format 정합: thread+1세그먼트 / single+2세그먼트 / 미지원 플랫폼 thread ---
+job7b="$sandbox/job-thread-rules"; mkdir -p "$job7b/drafts"
+printf -- '---\nplatform: x\nformat: thread\n---\n훅 하나뿐인 스레드\n' >"$job7b/drafts/x.md"
+violations="$({ run_check "$job7b" || true; } | jq -r '.platforms.x.violations[]')"
+grep -q "2개 이상" <<<"$violations" || fail "thread인데 게시물 1개는 위반이어야 한다: $violations"
+printf -- '---\nplatform: x\nformat: single\n---\n하나\n\n=== POST ===\n\n둘\n' >"$job7b/drafts/x.md"
+violations="$({ run_check "$job7b" || true; } | jq -r '.platforms.x.violations[]')"
+grep -q "format: thread" <<<"$violations" || fail "single인데 게시물 2개는 위반이어야 한다: $violations"
+printf -- '---\nplatform: linkedin\nformat: thread\n---\n하나\n\n=== POST ===\n\n둘\n' >"$job7b/drafts/linkedin.md"
+rm -f "$job7b/drafts/x.md"
+violations="$({ run_check "$job7b" || true; } | jq -r '.platforms.linkedin.violations[]')"
+grep -q "스레드 게시를 지원하지 않는다" <<<"$violations" || fail "linkedin thread는 위반이어야 한다: $violations"
+
+# --- 7c. X 스레드 게시물 수: 26개 거부, 25개 통과 ---
+job7c="$sandbox/job-thread-max"; mkdir -p "$job7c/drafts"
+thread_of() { # $1=게시물 수
+  { printf -- '---\nplatform: x\nformat: thread\n---\n'
+    for i in $(seq 1 "$1"); do
+      [[ $i -gt 1 ]] && printf '\n=== POST ===\n\n'
+      printf 'p%d' "$i"
+    done
+    printf '\n'
+  }
+}
+thread_of 26 >"$job7c/drafts/x.md"
+violations="$({ run_check "$job7c" || true; } | jq -r '.platforms.x.violations[]')"
+grep -q "상한 25" <<<"$violations" || fail "X 스레드 26게시물은 상한 위반이어야 한다: $violations"
+thread_of 25 >"$job7c/drafts/x.md"
+run_check "$job7c" >/dev/null || fail "X 스레드 25게시물은 통과해야 한다"
+
+# --- 7d. thread 3세그먼트 정상 통과 + 게시물별 카운트 유지 ---
+job7d="$sandbox/job-thread3"; mkdir -p "$job7d/drafts"
+printf -- '---\nplatform: bluesky\nformat: thread\n---\n가나다\n\n=== POST ===\n\n라마\n\n=== POST ===\n\n바사\n' >"$job7d/drafts/bluesky.md"
+counts="$({ run_check "$job7d" || true; } | jq -c '.platforms.bluesky.counts')"
+[ "$counts" = "[3,2,2]" ] || fail "thread 3세그먼트 카운트가 [3,2,2]이어야 한다: $counts"
+run_check "$job7d" >/dev/null || fail "thread 3세그먼트 정상 초안은 exit 0이어야 한다"
 
 # --- 8. 의존성 부재 → fail-closed (uv 없는 python 직접 실행) ---
 if python3 "$CHECK" "$job" >/dev/null 2>&1; then

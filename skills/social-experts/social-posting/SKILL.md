@@ -1,7 +1,7 @@
 ---
 name: social-posting
-description: 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text)을 기계 검증한 뒤 승인을 받아 aside 브라우저 실행 계층으로 실제 계정에 게시한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 SNS용으로 변환해줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 aside로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser 스킬 소관이다.
-version: 0.1.1
+description: 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text·스레드 규칙)을 기계 검증한 뒤 승인을 받아 aside 브라우저 실행 계층으로 실제 계정에 게시한다. 스레드(X·Bluesky 답글 체인)도 지원한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 스레드로 변환해줘", "스레드로 뽑아줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 aside로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser 스킬 소관이다.
+version: 0.2.0
 context: inline
 language: "korean"
 dependencies:
@@ -119,6 +119,8 @@ material과 voice profile으로 **하나의 canonical message**(`canonical.md`)�
 
 canonical을 각 플랫폼 플레이북(`docs/playbook-x.md` 등 4종)에 따라 **별도로 작성**한다. 같은 문장을 복사하지 않는다. 초안 파일 형식(frontmatter, 스레드 경계 `=== POST ===`)은 `assets/state-schema.md`를 따른다.
 
+스레드로 쓸 때는 **x·bluesky만 지원한다** — linkedin·facebook은 네이티브 스레딩이 없어 하드 제약이 거부한다(단일 게시물로 쓴다). 스레드 구조(훅→바디→클로저 3존, 번호 매기기)는 플레이북의 스레드 규칙을 따른다.
+
 ### Stage 7 검증
 
 1. **하드 제약(기계 판정)**:
@@ -148,15 +150,16 @@ Ready 판정식(기계 판정, publish.sh가 강제한다): **`approved_digests`
 bash "${CLAUDE_SKILL_DIR}/scripts/publish.sh" --job <job-dir> --platform x
 ```
 
-publish.sh가 게시 직전에 6중 가드를 검사한다 — 승인 플랫폼 여부 · digest 일치 · 하드 제약 재실행 · 계정 매핑 · **승인 시점 계정 스냅샷 일치** · **본문 동결 직후 원본 digest 재검증**. 하나라도 어긋나면 거부한다(실패-닫힘 가드 — 승인 후 초안이나 계정이 바뀌었으면 재승인 필요). 통과하면 **본문만**(frontmatter 제거, media/link는 절대경로·alt 지시로 전달) 동결 파일(0400)에 담아 `aside exec --account <id>`에 **변경·요약 없이 그대로 게시**를 지시하고, 출력에서 게시 URL(`https?://`)을 기계 감지한다 — URL이 없으면 "게시 여부 불명"으로 실패 종료된다. 대상 플랫폼마다 한 번씩 호출한다.
+publish.sh가 게시 직전에 6중 가드를 검사한다 — 승인 플랫폼 여부 · digest 일치 · 하드 제약 재실행 · 계정 매핑 · **승인 시점 계정 스냅샷 일치** · **본문 동결 직후 원본 digest 재검증**. 하나라도 어긋나면 거부한다(실패-닫힘 가드 — 승인 후 초안이나 계정이 바뀌었으면 재승인 필요). 통과하면 **본문만**(frontmatter 제거, media/link는 절대경로·alt 지시로 전달) 동결 파일(0400)에 담아 `aside exec --account <id>`에 **변경·요약 없이 그대로 게시**를 지시하고, 출력에서 게시 URL(`https?://`)을 기계 감지한다 — URL이 없으면 "게시 여부 불명"으로 실패 종료된다. **스레드(`format: thread`)는 세그먼트를 이전 게시물에 대한 답글으로 연결해 하나의 스레드로 게시하도록 지시**하고, 게시 URL이 세그먼트 수만큼 감지되지 않으면 "부분 게시 가능성"으로 실패 종료한다. 대상 플랫폼마다 한 번씩 호출한다.
 
 ### Stage 10 게시 후 검증 (read-back)
 
 게시 URL로 본문을 다시 읽어 승인 문구와 일치하는지 확인한다:
 
 - read-back은 repl로 한다: 먼저 `aside account use <id>`로 계정을 전환한다(**repl은 `--account`를 무시한다**), 게시글 URL를 연 뒤 snapshot으로 본문을 읽는다. 액션은 새 snapshot이 예상 상태를 보여주기 전까지 미확정이다
+- **스레드는 첫 게시물 URL에서 답글 체인 전체를 확인한다** — 게시물 수·순서·각 본문이 승인 문구와 일치하는지. 게시된 게시물 URL 목록 전체를 `post-log.md`에 남긴다
 - **불일치하면 즉시 사용자에게 보고한다** — 플랫폼의 삭제·수정 창이 닫히기 전이다. 조용히 넘기지 않는다
-- 결과를 `post-log.md`에 남기고 `post-state.sh set posted_<platform> <url>`로 기록한다
+- 결과를 `post-log.md`에 남기고 `post-state.sh set posted_<platform> <url>`로 기록한다(스레드는 첫 게시물 URL)
 
 ## 압축(compaction) 대비 재개
 

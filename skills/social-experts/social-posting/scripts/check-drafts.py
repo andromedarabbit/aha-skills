@@ -23,7 +23,6 @@ import json
 import os
 import re
 import sys
-import unicodedata
 
 try:
     import grapheme
@@ -47,28 +46,49 @@ LIMITS = {
     "linkedin": {"unit": "codepoint", "max": 3000, "media_max": 9},
     "facebook": {"unit": "codepoint", "max": 63206, "media_max": None},
 }
+THREAD_SUPPORTED = {"x", "bluesky"}  # 답글 체인이 네이티브인 플랫폼만 스레드 지원
+THREAD_MAX = {"x": 25}  # X 스레드 게시물 상한. bluesky는 근거 없는 상한을 두지 않는다
 ALT_REQUIRED = {"bluesky"}  # 이미지 alt text 필수 플랫폼
 HASHTAG_MAX = {"bluesky": 1}
-URL_WEIGHT = 23  # X: URL은 길이와 무관하게 23
+URL_WEIGHT = 23  # X: URL은 길이와 무관하게 23 (transformedURLLength)
+
+# X 가중 규칙 — twitter-text v3(config/v3.json, X 공식 카운팅 라이브러리) 화이트리스트 방식:
+# 아래 4개 범위의 코드포인트만 weight 100(=1자), 나머지 전부 default 200(=2자).
+# 한글·한자·이모지·비라틴 문자가 전부 2로 계산되고, 이모지는 grapheme cluster
+# (ZWJ 시퀀스 포함) 1개 = 2다. 근거: https://github.com/twitter/twitter-text config/v3.json
+X_LIGHT_RANGES = (
+    (0x0000, 0x10FF),  # 라틴·라틴 확장·조합 기호
+    (0x2000, 0x200D),  # 공백류·범용 구두점 일부
+    (0x2010, 0x201F),  # 하이픈·따옴표
+    (0x202F, 0x2037),  # 좁은 공백·프라임
+)
 
 
 class DraftFormatError(Exception):
     """초안 형식이 파싱 불가 — fail-closed 위반으로 취급한다."""
 
 
-def _char_weight(ch: str) -> int:
-    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+def _grapheme_weight(g: str) -> int:
+    """grapheme cluster 1개의 X 가중치 — 구성 코드포인트 전부가 light 범위면 1, 하나라도 밖이면 2."""
+    for ch in g:
+        cp = ord(ch)
+        if not any(lo <= cp <= hi for lo, hi in X_LIGHT_RANGES):
+            return 2
+    return 1
 
 
 def x_weighted_length(text: str) -> int:
-    """X 가중 길이 — URL은 23 고정, 동아시아 전각(W/F) 글자는 2."""
+    """X 가중 길이 — twitter-text v3: URL 23 고정, 나머지는 grapheme별 light(1)/default(2)."""
     total = 0
     pos = 0
+    segments = []
     for m in URL_RE.finditer(text):
-        total += sum(_char_weight(c) for c in text[pos : m.start()])
+        segments.append(text[pos : m.start()])
         total += URL_WEIGHT
         pos = m.end()
-    total += sum(_char_weight(c) for c in text[pos:])
+    segments.append(text[pos:])
+    for seg in segments:
+        total += sum(_grapheme_weight(g) for g in grapheme.graphemes(seg))
     return total
 
 
@@ -140,6 +160,29 @@ def check_platform(platform: str, draft_path: str) -> dict:
         result["violations"].append(
             f"frontmatter platform({meta.get('platform')!r})이 파일명({name})과 다릅니다"
         )
+
+    # format·게시물 수 정합 — 스레드 지원 플랫폼·상한 포함
+    fmt = str(meta.get("format") or "single")
+    if fmt == "thread":
+        if platform not in THREAD_SUPPORTED:
+            result["violations"].append(
+                f"{platform}은(는) 스레드 게시를 지원하지 않는다 — format: single로 작성하세요"
+            )
+        if len(posts) < 2:
+            result["violations"].append(
+                f"스레드(format: thread)인데 게시물이 {len(posts)}개다 — 2개 이상이 필요하다"
+            )
+        tmax = THREAD_MAX.get(platform)
+        if tmax is not None and len(posts) > tmax:
+            result["violations"].append(f"스레드 게시물 {len(posts)}개 (상한 {tmax})")
+    elif fmt == "single":
+        if len(posts) > 1:
+            result["violations"].append(
+                f"단일 게시물(format: single)인데 게시물이 {len(posts)}개다 — "
+                "'=== POST ===' 구분자를 지우거나 format: thread로 쓰세요"
+            )
+    else:
+        result["violations"].append(f"알 수 없는 format: {fmt!r} (single | thread 중 하나)")
 
     limits = LIMITS[platform]
     result["unit"] = limits["unit"]

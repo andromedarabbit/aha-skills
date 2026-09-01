@@ -126,10 +126,23 @@ link_prompt=""
 link="$(printf '%s' "$payload_json" | jq -r '.link // ""')"
 [[ -n "$link" ]] && link_prompt=" 본문의 자연스러운 위치에 이 링크를 포함한다: $link"
 
-prompt="파일 $frozen 의 내용을 그대로 $platform 에 게시해줘. 텍스트를 변경·요약·추가·삭제하지 마세요. '=== POST ===' 줄은 스레드 경계다 — 각 세그먼트를 순서대로 별도 게시물로 게시한다.$media_prompt$link_prompt 완료 후 게시된 게시물 URL을 반환해줘."
+# --- 게시 형식 분기: 스레드는 답글 체인으로 연결 지시 (흩어진 게시물 방지) ---
+format="$(printf '%s' "$payload_json" | jq -r '.format // "single"')"
+# 세그먼트 수는 check-drafts.py parse_draft와 같은 방식으로 센다(공백 세그먼트 제외) —
+# 개수 기준이 어긋나면 URL 가드가 오탐한다
+segments="$(printf '%s' "$payload_json" | jq -r '[.body | split("\n=== POST ===\n")[] | gsub("^\\s+|\\s+$";"") | select(length > 0)] | length')"
+if [[ "$format" == "thread" ]]; then
+  post_prompt="'=== POST ===' 줄은 스레드 경계다 — 세그먼트를 순서대로 게시하되, 두 번째 세그먼트부터는 바로 앞 게시물에 대한 답글로 달아 하나의 스레드(답글 체인)로 연결한다."
+  [[ "$media_count" -gt 0 ]] && media_prompt="$media_prompt 미디어는 첫 게시물에만 첨부한다."
+else
+  post_prompt="'=== POST ===' 줄은 스레드 경계다 — 각 세그먼트를 순서대로 별도 게시물로 게시한다."
+fi
+
+prompt="파일 $frozen 의 내용을 그대로 $platform 에 게시해줘. 텍스트를 변경·요약·추가·삭제하지 마세요. $post_prompt$media_prompt$link_prompt 완료 후 게시된 게시물 URL을 반환해줘."
 
 if [[ "$dry_run" == "true" ]]; then
-  echo "가드 통과 (dry-run): platform=$platform account=$account"
+  echo "가드 통과 (dry-run): platform=$platform account=$account format=$format"
+  [[ "$format" == "thread" ]] && echo "스레드: 세그먼트 $segments개, 답글 체인으로 연결 게시"
   echo "동결 본문: $frozen ($(wc -c <"$frozen" | tr -d ' ') bytes)"
   echo "media: $media_count, link: ${link:-없음}"
   echo "aside exec --account $account \"$prompt\""
@@ -137,14 +150,20 @@ if [[ "$dry_run" == "true" ]]; then
   exit 0
 fi
 
-echo "게시 지시: platform=$platform account=$account"
+echo "게시 지시: platform=$platform account=$account format=$format"
 out="$(aside exec --account "$account" "$prompt")" \
   || die "aside exec 실패 — 게시되지 않았을 가능성이 크다. aside 출력을 확인하고 성공 여부를 판별한 뒤, 성공했을 때만 Stage 10 read-back을 진행하세요"
 
 # --- 게시 성공 신호: aside 출력에서 게시 URL을 기계 확인한다 (침묵 실패 차단) ---
-if ! printf '%s' "$out" | grep -qE 'https?://'; then
+url_count="$(printf '%s' "$out" | grep -oE 'https?://' | wc -l | tr -d '[:space:]')"
+if [[ "$url_count" -eq 0 ]]; then
   printf '%s\n' "$out"
   die "aside 출력에서 게시 URL(https?://)을 찾지 못했다 — 게시 여부 불명. 위 출력을 즉시 확인하고, 게시가 확인된 경우에만 read-back 후 posted 기록, 아니면 사용자에게 보고하세요"
+fi
+# 스레드는 세그먼트 수만큼 URL이 나와야 한다 — 부분 게시 감지
+if [[ "$format" == "thread" && "$url_count" -lt "$segments" ]]; then
+  printf '%s\n' "$out"
+  die "스레드 세그먼트 $segments개 중 게시 URL $url_count개 — 부분 게시 가능성. 위 출력을 확인해 이미 게시된 게시물을 파악하고 사용자에게 즉시 보고하세요"
 fi
 
 printf '%s\n' "$out"

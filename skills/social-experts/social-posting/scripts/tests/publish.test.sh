@@ -198,4 +198,69 @@ if bash "$PUBLISH" --job "$job" --platform x >/dev/null 2>&1; then
   fail "URL 미반환(침묵 실패) 시 exit 1이어야 한다"
 fi
 
+# --- 10. 스레드 게시: 답글 체인 지시 + 세그먼트 수만큼 URL ---
+cat >"$sandbox/bin/aside" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
+f="$(printf '%s' "$*" | sed -n 's/.*파일 \([^ ]*\) 의 내용.*/\1/p')"
+# 동결 파일은 0400이라 cp가 대상 모드까지 물려받는다 — 재캡처를 위해 먼저 지운다
+if [ -n "$f" ] && [ -f "$f" ]; then rm -f "$SOCIAL_ASIDE_PAYLOAD"; cp "$f" "$SOCIAL_ASIDE_PAYLOAD"; fi
+printf '1/3 https://stub.example/post/1\n2/3 https://stub.example/post/2\n3/3 https://stub.example/post/3\n'
+exit 0
+EOF
+job10="$sandbox/job-thread"
+make_job "$job10" "x" "x: u0"
+cat >"$job10/drafts/x.md" <<'EOF'
+---
+platform: x
+format: thread
+media:
+  - path: ./plot.png
+    alt: 런타임 그래프
+---
+첫 게시물 훅
+
+=== POST ===
+
+두 번째 게시물
+
+=== POST ===
+
+세 번째 게시물(클로저)
+EOF
+touch "$job10/plot.png"
+approve "$job10" "x: u0"
+rm -f "$SOCIAL_ASIDE_LOG"
+bash "$PUBLISH" --job "$job10" --platform x >/dev/null || fail "스레드 3세그먼트·URL 3개는 통과해야 한다"
+last_call="$(cat "$SOCIAL_ASIDE_LOG")"
+grep -q "답글로" <<<"$last_call" || fail "thread 프롬프트에 답글 체인 지시가 담겨야 한다"
+grep -q "하나의 스레드" <<<"$last_call" || fail "thread 프롬프트에 스레드 연결 지시가 담겨야 한다"
+grep -q "첫 게시물에만 첨부" <<<"$last_call" || fail "thread+미디어는 첫 게시물 첨부 지시가 담겨야 한다"
+# 동결 페이로드는 구분자를 유지한 본문만
+grep -q "=== POST ===" "$SOCIAL_ASIDE_PAYLOAD" || fail "동결 파일에 스레드 구분자가 유지되어야 한다"
+
+# --- 11. 스레드 부분 게시: URL이 세그먼트 수보다 적으면 exit 1 ---
+cat >"$sandbox/bin/aside" <<'EOF'
+#!/bin/bash
+echo "게시 완료: https://stub.example/post/1 https://stub.example/post/2"
+exit 0
+EOF
+if bash "$PUBLISH" --job "$job10" --platform x >/dev/null 2>&1; then
+  fail "세그먼트 3개인데 URL 2개면 부분 게시 가능성 — exit 1이어야 한다"
+fi
+
+# --- 12. single 회귀: single 프롬프트에는 답글 지시가 없다 ---
+cat >"$sandbox/bin/aside" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"$SOCIAL_ASIDE_LOG"
+echo "게시 완료: https://stub.example/single/1"
+exit 0
+EOF
+rm -f "$SOCIAL_ASIDE_LOG"
+bash "$PUBLISH" --job "$job" --platform x >/dev/null || fail "single 정상 게시가 실패했다"
+last_call="$(cat "$SOCIAL_ASIDE_LOG")"
+if grep -q "답글로" <<<"$last_call"; then
+  fail "single 프롬프트에는 답글 체인 지시가 없어야 한다"
+fi
+
 echo "✅ publish.test.sh 통과"

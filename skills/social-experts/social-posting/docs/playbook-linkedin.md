@@ -10,6 +10,9 @@ canonical message를 LinkedIn용 문안으로 바꾸는 규칙. 등급 정의와
 | --- | --- |
 | 본문 길이 | 게시물당 ≤ 3000 codepoint |
 | 미디어 개수 | ≤ 9 |
+| format | `single`만 — LinkedIn에는 네이티브 스레딩이 없다 |
+
+`format: thread`는 하드 제약으로 거부된다. 늘릴 이야기는 단일 게시물 상한(3000 codepoint) 안에서 구조화한다.
 
 ### Platform convention (권고 — 차단하지 않는다)
 

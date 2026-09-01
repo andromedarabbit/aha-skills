@@ -43,9 +43,18 @@ aside(에이전트 브라우저)를 실행 계층으로 사용해 X·LinkedIn·F
 
 초안은 `draft`로 태어나고, 승인받으면 Ready가 된다. **Ready 판정식**: `approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치. 승인 후 문안을 고치면 digest가 어긋나 게시가 거부된다 — 다시 승인받아야 한다.
 
+## 스레드 (X·Bluesky)
+
+초안 frontmatter에 `format: thread`를 두고 게시물 사이를 `=== POST ===` 한 줄로 구분하면, 게시 시 각 세그먼트가 **이전 게시물에 대한 답글로 연결된 하나의 스레드**로 게시된다.
+
+- 게시물 2개 이상(X는 25개 이하). 길이 제한은 게시물별로 각각 적용된다 — X는 게시물당 280 가중(twitter-text v3 규칙: 한글·이모지·비라틴은 2로 계산), Bluesky는 300 grapheme.
+- **LinkedIn·Facebook은 스레드를 지원하지 않는다**(네이티브 스레딩 없음) — 단일 게시물로 쓴다.
+- 게시 성공 신호도 세그먼트 수 기준이다: 게시 URL이 세그먼트 수보다 적으면 "부분 게시 가능성"으로 실패 보고된다.
+- 구조 규칙(훅→바디→클로저 3존, 번호 매기기)은 `docs/playbook-x.md`·`docs/playbook-bluesky.md`의 스레드 섹션 참조.
+
 ## 게시는 되돌릴 수 없다
 
-- 모든 게시는 `scripts/publish.sh`의 4중 가드(플랫폼·digest·하드 제약·계정) 뒤에서만 일어난다.
+- 모든 게시는 `scripts/publish.sh`의 6중 가드(플랫폼·digest·하드 제약·계정·승인 시점 계정 스냅샷·동결 직후 재검증) 뒤에서만 일어난다.
 - 승인은 AskUserQuestion 훅만 기록한다 — 에이전트가 승인을 자기 신고하는 경로는 없다.
 - 게시 후 read-back에서 문구 불일치가 발견되면 즉시 보고된다 (플랫폼 삭제 창이 닫히기 전에).
 

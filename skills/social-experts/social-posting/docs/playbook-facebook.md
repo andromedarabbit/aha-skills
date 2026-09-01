@@ -9,6 +9,9 @@ canonical message를 Facebook용 문안으로 바꾸는 규칙. 등급 정의와
 | 규칙 | 값 |
 | --- | --- |
 | 본문 길이 | 게시물당 ≤ 63206 codepoint |
+| format | `single`만 — Facebook에는 네이티브 스레딩이 없다 |
+
+`format: thread`는 하드 제약으로 거부된다. 늘릴 이야기는 단일 게시물 상한(63206 codepoint) 안에서 구조화한다.
 
 미디어 개수 상한을 두지 않는다 — 근거가 불분명한 규칙을 하드로 만들면 정당한 게시를 막는다. 필요하면 근거를 확보한 뒤 `check-drafts.py`에 추가한다.
 

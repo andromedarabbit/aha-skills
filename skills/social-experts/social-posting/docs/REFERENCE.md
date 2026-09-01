@@ -45,7 +45,7 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 5. 승인 시점 계정 스냅샷(`approved_accounts`)과 현재 accounts 일치 — 승인 후 계정 변경 거부
 6. 본문 동결 직후 원본 전체 digest 재검증 — 검사→동결 사이 변경(TOCTOU) 거부
 
-게시 페이로드: 본문만 `mktemp 0400` 동결(EXIT trap으로 항상 정리), media/link는 프롬프트 지시(절대경로·alt 포함). 성공 신호는 aside 출력의 URL(`https?://`) 기계 감지 — URL 없으면 exit 1 "게시 여부 불명".
+게시 페이로드: 본문만 `mktemp 0400` 동결(EXIT trap으로 항상 정리), media/link는 프롬프트 지시(절대경로·alt 포함). 성공 신호는 aside 출력의 URL(`https?://`) 기계 감지 — URL 없으면 exit 1 "게시 여부 불명". **스레드(`format: thread`)**는 프롬프트가 세그먼트를 이전 게시물에 대한 **답글로 연결**하도록 지시하고(미디어는 첫 게시물에만), URL 개수 ≥ 세그먼트 수를 요구한다 — 미달이면 exit 1 "부분 게시 가능성". 세그먼트 수는 check-drafts.py의 파싱과 같은 방식(공백 세그먼트 제외)으로 센다.
 
 ## 훅 계약 (record-approval.sh)
 
@@ -58,12 +58,13 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 
 | 플랫폼 | 단위 | 상한 | 비고 |
 | --- | --- | --- | --- |
-| X | weighted | 280 | URL은 23으로 고정, CJK 계열 글자는 2로 가중 |
+| X | weighted | 280 | twitter-text v3 규칙 — 라틴 등 일부 범위만 1, 한글·한자·이모지·비라틴은 2. URL은 23 고정 |
 | Bluesky | grapheme | 300 | 유니코드 grapheme cluster 단위 (자소 결합·ZWJ 이모지 포함) |
 | LinkedIn | codepoint | 3000 | |
 | Facebook | codepoint | 63206 | |
 
-- X weighted 규칙은 aside 설계 문서가 아니라 실제 X 동작에서 온 값이다 — 플레이북에 근거를 표기하고, 플랫폼 정책이 바뀌면 `check-drafts.py` 상수와 플레이북을 함께 갱신한다.
+- X weighted 규칙은 X 공식 카운팅 라이브러리 twitter-text v3(`config/v3.json`)에서 온 값이다 — 화이트리스트 4개 범위(`X_LIGHT_RANGES`)만 1로 세고 나머지 전부는 2로 센다(한글 음절 140자가 상한). 플랫폼 정책이 바뀌면 `check-drafts.py` 상수와 플레이북을 함께 갱신한다.
+- 스레드 하드 제약: `format: thread`는 세그먼트 2개 이상 + **x·bluesky만 지원**(linkedin·facebook은 거부), X는 게시물 ≤ 25. `format: single`은 세그먼트 정확히 1개. 게시물별 길이·해시태그·alt 검사는 게시물 단위로 각각 적용된다.
 - 미디어·alt: Bluesky는 이미지 alt text 필수(하드). 해시태그: Bluesky 0~1개(하드). 미디어 개수 상한: X 4, Bluesky 4, LinkedIn 9(하드). Facebook은 개수 상한을 두지 않는다(근거 불명확한 규칙을 하드로 만들지 않는다).
 
 ## 게시 실행 계약 (aside)
