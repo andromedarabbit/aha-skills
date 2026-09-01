@@ -12,7 +12,7 @@
 | `check-deps.sh` | PreToolUse 훅 (`if: Bash(aside *)`) | aside 존재·계정 상태 확인 (편의 — 강제력 없음) |
 | `post-state.sh` | `bash $SKILL_DIR/scripts/post-state.sh <sub>` | 영수증·활성 작업 관리 |
 | `record-approval.sh` | PostToolUse 훅 (matcher: AskUserQuestion) | 승인 digest + 계정 스냅샷 기록 (승인의 유일한 입구) |
-| `check-drafts.py` | `uv run --with grapheme --with pyyaml $SKILL_DIR/scripts/check-drafts.py <job-dir>` | 하드 제약 검사 (위반·파싱 불가 exit 1) |
+| `check-drafts.py` | `uv run --with grapheme --with pyyaml $SKILL_DIR/scripts/check-drafts.py <job-dir>` | 하드 제약 검사 (위반·파싱 불가 exit 1) + 플랫폼 간 문형 중복 경고(`warnings` — 차단 안 함) |
 | `check-drafts.py` (페이로드) | 위 명령에 `--platform <p>` 추가 | 게시 페이로드 JSON: 본문(frontmatter 제거)·절대경로 media·link·format |
 | `publish.sh` | `bash $SKILL_DIR/scripts/publish.sh --job <dir> --platform <p>` | 게시 단일 진입점 (6중 가드 후 aside exec, URL 감지) |
 

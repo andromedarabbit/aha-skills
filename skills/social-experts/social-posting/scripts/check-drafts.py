@@ -5,8 +5,9 @@ Usage:
     uv run --with grapheme --with pyyaml check-drafts.py <job-dir>                # 하드 제약 검사
     uv run --with grapheme --with pyyaml check-drafts.py <job-dir> --platform <p> # 게시 페이로드 JSON
 
-하드 제약(Hard constraint)만 검사한다 — 위반 시 exit 1. Convention·Heuristic 규칙은
-docs/playbook-*.md 지침이 담당하며 이 검사가 게시를 차단하지 않는다. 플랫폼별 단위와
+하드 제약(Hard constraint)만 차단한다 — 위반 시 exit 1. 플랫폼 간 문형 중복은 warnings
+배열로 알릴 뿐 게시를 차단하지 않는다(convention 등급 — ok·exit code에 영향 없음).
+그 외 Convention·Heuristic 규칙은 docs/playbook-*.md 지침이 담당한다. 플랫폼별 단위와
 근거는 docs/REFERENCE.md 참조.
 
 파서는 fail-closed다: frontmatter가 --- 로 시작하는데 닫는 구분자가 없거나, 매핑이
@@ -51,6 +52,7 @@ THREAD_MAX = {"x": 25}  # X 스레드 게시물 상한. bluesky는 근거 없는
 ALT_REQUIRED = {"bluesky"}  # 이미지 alt text 필수 플랫폼
 HASHTAG_MAX = {"bluesky": 1}
 URL_WEIGHT = 23  # X: URL은 길이와 무관하게 23 (transformedURLLength)
+DUP_WINDOW = 10  # 플랫폼 간 문형 중복 경고 임계값 (정규화 글자 수)
 
 # X 가중 규칙 — twitter-text v3(config/v3.json, X 공식 카운팅 라이브러리) 화이트리스트 방식:
 # 아래 4개 범위의 코드포인트만 weight 100(=1자), 나머지 전부 default 200(=2자).
@@ -141,6 +143,30 @@ def _media_items(meta: dict):
             raise DraftFormatError("media 항목이 'path:'/'alt:' 매핑이 아닙니다")
         items.append(item)
     return items
+
+
+def _normalized_body(posts) -> str:
+    """게시물 본문 → 중복 비교용 정규화 문자열 (URL·공백·문장부호 제거, 한글·숫자 유지)."""
+    text = URL_RE.sub("", "\n".join(posts))
+    return re.sub(r"[\W_]+", "", text, flags=re.UNICODE)
+
+
+def _dup_fragment(a: str, b: str):
+    """두 정규화 본문의 공통 10자 연속 구간 — 있으면 그 조각, 없으면 None.
+
+    ponytail: 고정 길이 윈도우 집합 비교(O(n+m))라 표현만 바꾼 패러프레이즈 중복은
+    못 잡는다 — 경고는 신호이고 차등화 판단은 Stage 7 에이전트 몫이다.
+    """
+    if len(a) < DUP_WINDOW or len(b) < DUP_WINDOW:
+        return None
+    if len(a) > len(b):
+        a, b = b, a
+    windows = {a[i : i + DUP_WINDOW] for i in range(len(a) - DUP_WINDOW + 1)}
+    for i in range(len(b) - DUP_WINDOW + 1):
+        w = b[i : i + DUP_WINDOW]
+        if w in windows:
+            return w
+    return None
 
 
 def check_platform(platform: str, draft_path: str) -> dict:
@@ -260,6 +286,7 @@ def main() -> int:
         return 1
 
     report = {}
+    bodies = {}
     for fname in sorted(os.listdir(drafts_dir)):
         if not fname.endswith(".md"):
             continue
@@ -270,10 +297,27 @@ def main() -> int:
                 "violations": [f"알 수 없는 플랫폼: {platform}"],
             }
             continue
-        report[platform] = check_platform(platform, os.path.join(drafts_dir, fname))
+        draft_path = os.path.join(drafts_dir, fname)
+        report[platform] = check_platform(platform, draft_path)
+        try:
+            _, posts = parse_draft(draft_path)
+            bodies[platform] = _normalized_body(posts)
+        except DraftFormatError:
+            pass  # 파싱 불가 초안은 하드 위반으로 이미 보고됐다
+
+    # 플랫폼 간 문형 중복 — 경고만 (ok·exit code에 영향 없음)
+    warnings = []
+    names = sorted(bodies)
+    for i, p1 in enumerate(names):
+        for p2 in names[i + 1 :]:
+            frag = _dup_fragment(bodies[p1], bodies[p2])
+            if frag:
+                warnings.append({"platforms": [p1, p2], "fragment": frag})
 
     ok = bool(report) and all(r.get("ok") for r in report.values())
-    print(json.dumps({"ok": ok, "platforms": report}, ensure_ascii=False))
+    print(
+        json.dumps({"ok": ok, "platforms": report, "warnings": warnings}, ensure_ascii=False)
+    )
     return 0 if ok else 1
 
 

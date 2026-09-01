@@ -218,4 +218,51 @@ echo "$payload" | jq -e '.body == "첫 게시물 훅\n\n=== POST ===\n\n두 번�
 echo "$payload" | jq -e --arg p "$job14/plot.png" '.media[0].path == $p and .media[0].alt == "파티션 수별 런타임 그래프"' >/dev/null || fail "페이로드 media가 절대경로·alt를 담아야 한다: $payload"
 echo "$payload" | jq -e '.link == "https://example.com/run" and .format == "thread"' >/dev/null || fail "페이로드 link·format이 담겨야 한다: $payload"
 
+# --- 15. 플랫폼 간 문형 중복: 10자 이상 공유 → 경고 (exit 0·ok true 유지) ---
+job15="$sandbox/job-dup"; mkdir -p "$job15/drafts"
+cat >"$job15/drafts/x.md" <<'EOF'
+---
+platform: x
+format: single
+---
+스파크 잡을 3배 빠르게 만들었다. 비결은 코드가 아니라 파티션 수였다.
+EOF
+cat >"$job15/drafts/bluesky.md" <<'EOF'
+---
+platform: bluesky
+format: single
+---
+비결은 코드가 아니라 파티션 수였다 — 오늘의 트레이드오프.
+EOF
+run_check "$job15" >/dev/null || fail "문형 중복은 경고일 뿐 exit 0이어야 한다"
+out="$(run_check "$job15")"
+[ "$(jq -r '.ok' <<<"$out")" = "true" ] || fail "경고는 ok에 영향을 주지 않는다: $out"
+[ "$(jq '.warnings | length' <<<"$out")" -ge 1 ] || fail "10자 이상 공유 문형은 warnings에 잡혀야 한다: $out"
+pair="$(jq -r '.warnings[0].platforms | join(",")' <<<"$out")"
+[ "$pair" = "bluesky,x" ] || fail "중복 경고가 플랫폼 쌍을 담아야 한다: $out"
+jq -e '.warnings[0].fragment | length >= 10' <<<"$out" >/dev/null || fail "경고 조각(fragment)이 10자 이상이어야 한다: $out"
+
+# --- 16. 서로 다른 초안 → warnings 빈 배열 ---
+job16="$sandbox/job-distinct"; mkdir -p "$job16/drafts"
+printf -- '---\nplatform: x\nformat: single\n---\n가장 느린 조인은 코드가 아니라 통계에서 왔다.\n' >"$job16/drafts/x.md"
+printf -- '---\nplatform: bluesky\nformat: single\n---\n새 캐싱 레이어로 p99가 절반으로 떨어졌다.\n' >"$job16/drafts/bluesky.md"
+out="$(run_check "$job16")"
+[ "$(jq '.warnings | length' <<<"$out")" = "0" ] || fail "다른 초안은 경고 없어야 한다: $out"
+
+# --- 17. 같은 URL만 공유 → 경고 없음 (URL은 비교에서 제거) ---
+job17="$sandbox/job-url"; mkdir -p "$job17/drafts"
+printf -- '---\nplatform: x\nformat: single\n---\n오늘 배운 팩트 하나. https://example.com/blog/partition-post\n' >"$job17/drafts/x.md"
+printf -- '---\nplatform: bluesky\nformat: single\n---\n완전히 다른 주제의 짧은 기록. https://example.com/blog/partition-post\n' >"$job17/drafts/bluesky.md"
+out="$(run_check "$job17")"
+[ "$(jq '.warnings | length' <<<"$out")" = "0" ] || fail "공유 URL은 중복 경고 대상이 아니다: $out"
+
+# --- 18. 중복 경고 + 하드 제약 위반 동반 → 여전히 exit 1, 두 층은 독립 ---
+job18="$sandbox/job-dup-violation"; mkdir -p "$job18/drafts"
+k126="$(printf '가%.0s' $(seq 1 126))"
+printf -- '---\nplatform: x\nformat: single\n---\n%s 비결은 코드가 아니라 파티션 수였다\n' "$k126" >"$job18/drafts/x.md"
+printf -- '---\nplatform: bluesky\nformat: single\n---\n비결은 코드가 아니라 파티션 수였다 — 오늘의 트레이드오프.\n' >"$job18/drafts/bluesky.md"
+if run_check "$job18" >/dev/null 2>&1; then fail "하드 제약 위반(141자)은 경고와 무관하게 exit 1이어야 한다"; fi
+out="$({ run_check "$job18" || true; } | jq -c '{ok, warnings: (.warnings | length)}')"
+[ "$out" = '{"ok":false,"warnings":1}' ] || fail "위반(ok:false)과 경고(warnings:1)가 동시에 보고돼야 한다: $out"
+
 echo "✅ check-drafts.test.sh 통과"
