@@ -60,6 +60,12 @@ jobs:
       - name: 본문 경로 검증
         run: ./tools/validate-body-paths.sh
 
+      - name: aside 페이로드 인라인 검증
+        run: ./tools/validate-aside-payloads.sh
+
+      - name: mktemp 템플릿 검증
+        run: ./tools/validate-mktemp-templates.sh
+
       - name: marketplace 정합성 검증
         run: ./tools/validate-marketplace.sh
 

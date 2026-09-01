@@ -46,7 +46,7 @@ skills/meta-experts/skill-author/scripts/scaffold.sh --help
 pre-commit run --all-files && ./tools/run-all-tests.sh && git diff --exit-code
 ```
 
-- `pre-commit run --all-files` — 검증기 8종이 실제 입력으로 돈다
+- `pre-commit run --all-files` — 검증기 10종이 실제 입력으로 돈다
 - `./tools/run-all-tests.sh` — 스킬 테스트 스위트가 실제로 발견되고 실행된다
 - `git diff --exit-code` — 인덱스 드리프트와 fixer 재작성이 없다
 
@@ -69,6 +69,8 @@ for f in tools/test-*.sh; do bash "$f" || break; done
 | `tools/validate-gate-context.sh` | AskUserQuestion 게이트 컨텍스트 (`allowed-tools`에 있으면 `context: inline` 강제) |
 | `tools/validate-hook-paths.sh` | 프론트매터 훅의 스크립트 경로 (`${CLAUDE_PLUGIN_ROOT}` 형태) |
 | `tools/validate-body-paths.sh` | SKILL.md 본문·딸린 문서의 스크립트 경로 (`${CLAUDE_SKILL_DIR}` vs `$SKILL_DIR`) |
+| `tools/validate-aside-payloads.sh` | 자연어 실행 계층(aside) 페이로드 인라인 — 파일 경로 전달 지시 차단, `# aside-path-ok` 경고 억제 |
+| `tools/validate-mktemp-templates.sh` | mktemp 템플릿 `XXXXXX` 접미사(macOS BSD 비랜덤화 사고 방지) |
 | `tools/validate-marketplace.sh` | marketplace.json 스키마 + `skills/` 양방향 정합성 |
 | `tools/generate-index.sh` | SKILLS.md 재생성 |
 | `tools/run-all-tests.sh` | 스킬 테스트 스위트 탐색·실행 |

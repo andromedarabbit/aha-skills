@@ -24,6 +24,8 @@
 ./tools/validate-gate-context.sh
 ./tools/validate-hook-paths.sh
 ./tools/validate-body-paths.sh
+./tools/validate-aside-payloads.sh
+./tools/validate-mktemp-templates.sh
 
 # marketplace.json ↔ skills/ 양방향 정합성 검증
 ./tools/validate-marketplace.sh
@@ -47,7 +49,7 @@ for f in tools/test-*.sh; do bash "$f" || break; done
 pre-commit run --all-files && ./tools/run-all-tests.sh && git diff --exit-code
 ```
 
-- `pre-commit run --all-files` — 검증기 8종이 실제 입력으로 돈다
+- `pre-commit run --all-files` — 검증기 10종이 실제 입력으로 돈다
 - `./tools/run-all-tests.sh` — 스킬 테스트 스위트가 실제로 발견되고 실행된다
 - `git diff --exit-code` — `generate-index.sh`가 드리프트를 만들지 않았고 fixer가 파일을 다시 쓰지 않았다
 
@@ -262,7 +264,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/x.sh"        # 본문에서는 치�
 
 GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니다.
 
-- `checks` — 검증기 전량 + 검증기 자신의 회귀 테스트 5종. bats 없이 돌아갑니다(검증 스택의 무결성을 서드파티 설치 없이 증명). `generate-index.sh` 실행 후 `git diff --exit-code`로 **인덱스 드리프트도 게이트**합니다
+- `checks` — 검증기 전량 + 검증기 자신의 회귀 테스트 7종. bats 없이 돌아갑니다(검증 스택의 무결성을 서드파티 설치 없이 증명). `generate-index.sh` 실행 후 `git diff --exit-code`로 **인덱스 드리프트도 게이트**합니다
 - `tests` — bats 설치 후 `./tools/run-all-tests.sh`
 
 실행 대상: PR, `main` push, 수동 트리거(`workflow_dispatch`).
@@ -281,10 +283,12 @@ GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니�
 - `validate-matchers` - 훅 matcher·이벤트 이름 검증
 - `validate-hook-paths` - 프론트매터 훅 경로 검증
 - `validate-body-paths` - SKILL.md 본문·딸린 문서의 스크립트 경로 검증
+- `validate-aside-payloads` - 자연어 실행 계층(aside) 페이로드 인라인 검증 — 파일 경로 전달 지시 오류, 기타 경로 경고(`# aside-path-ok` 억제)
+- `validate-mktemp-templates` - mktemp 템플릿 `XXXXXX` 접미사 검증 (macOS BSD 랜덤화 우회 차단)
 - `validate-marketplace` - marketplace.json ↔ skills/ 정합성 검증
 - `fix-shell-permissions` - scripts/ 셸 스크립트 실행 권한 부여
 
-`tools/test-*.sh`(검증기 회귀 테스트 5종)는 pre-commit에도 `run-all-tests.sh`에도 들어있지 않습니다 — CI의 `checks` 잡이 명시적으로 호출합니다. 검증기를 고쳤으면 로컬에서 직접 돌리세요.
+`tools/test-*.sh`(검증기 회귀 테스트 7종)는 pre-commit에도 `run-all-tests.sh`에도 들어있지 않습니다 — CI의 `checks` 잡이 명시적으로 호출합니다. 검증기를 고쳤으면 로컬에서 직접 돌리세요.
 
 ## 언어 가이드라인
 

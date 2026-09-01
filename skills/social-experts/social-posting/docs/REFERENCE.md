@@ -69,7 +69,7 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 
 ## 게시 실행 계약 (aside)
 
-- 게시: `aside exec --account <id>`에 동결된 초안 파일 경로를 전달, **변경·요약 없이 그대로 게시** 지시. 직접 exec를 호출하지 않고 publish.sh 경유만.
+- 게시: `aside exec --account <id>`에 동결 본문을 프롬프트에 인라인으로 실어 **변경·요약 없이 그대로 게시** 지시(파일 경로 전달 금지 — 무인 read_file 정지 원인). 직접 exec를 호출하지 않고 publish.sh 경유만.
 - 검증(read-back): `aside account use <id>`로 먼저 계정 전환(**repl은 `--account`를 무시한다**), 게시글 URL를 열어 snapshot으로 본문 확인.
 - 계정 식별자는 `aside account list`의 프로필 값(`u0`, `u1`)만 쓴다. 이메일은 무시된다.
 

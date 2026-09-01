@@ -96,6 +96,25 @@ repos:
         always_run: true
         files: ^skills/.*\.md$
 
+      # 자연어 실행 계층 페이로드 — 본문을 파일 경로로 넘기면 aside exec가 무인
+      # read_file 권한 확인에 무한 정지한다(2026-09-01 사고). 인라인 전달을 강제.
+      - id: validate-aside-payloads
+        name: Validate aside payload inlining
+        entry: ./tools/validate-aside-payloads.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: ^skills/.*\.(md|sh)$
+
+      # macOS BSD mktemp는 XXXXXX 뒤 접미사를 랜덤화하지 않는다(병렬 실행 충돌 사고).
+      - id: validate-mktemp-templates
+        name: Validate mktemp templates
+        entry: ./tools/validate-mktemp-templates.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: ^skills/.*\.sh$
+
       # Validate marketplace.json schema
       - id: validate-marketplace
         name: Validate marketplace.json schema

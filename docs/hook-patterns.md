@@ -520,6 +520,20 @@ bash ${CLAUDE_SKILL_DIR}/scripts/x.sh                     # 따옴표 없음
 > `isSkillMode` 조건이 붙어 있다는 게 핵심입니다 — 스킬로 로드될 때만 치환되고, 딸린 문서를
 > Read로 읽는 경로에는 이 코드가 관여하지 않습니다.
 
+## 자연어 실행 계층 페이로드 규칙
+
+자연어 실행 계층(aside exec/repl처럼 브라우저 에이전트에 위임하는 CLI)에 페이로드를 넘기는 규칙. 2026-09-01 social-posting 게시 정지 사고(4건 전부 수 분~15분 무응답)에서 확정된 전제 오류를 기계 검증으로 막는다.
+
+**본문은 인라인으로, 파일 경로는 금지.** aside exec는 프롬프트의 로컬 파일 경로를 `read_file`하려다 무인(unattended) 권한 확인에 무한 정지한다 — 승인할 주체가 없기 때문이다. 텍스트 페이로드는 프롬프트에 구분 마커(예: `<<<게시 텍스트 시작>>> … <<<게시 텍스트 끝>>>`)로 감싸 직접 싣는다. 동결 파일이 필요하면 audit 증거로만 남기고 경로는 환경변수(예: `SOCIAL_POSTING_FROZEN`)로 하위 프로세스에 전달한다.
+
+- 미디어 첨부 등 경로 전달이 불가피한 경우: 줄 끝 `# aside-path-ok` 주석으로 명시하고 알려진 제약으로 문서화한다.
+- 마크다운에서 "파일 … 경로를 전달"류 지시형 서술은 금지 — 인라인 규칙과 모순되는 낡은 문서가 되는 즉시 잡힌다.
+- 장시간 실행 계층 호출은 상한 타임아웃(예: `SOCIAL_ASIDE_TIMEOUT`)으로 감싸 무한 정지를 기명 실패로 바꾼다.
+
+**mktemp 템플릿의 `XXXXXX`는 마지막 문자여야 한다.** macOS BSD mktemp는 `XXXXXX` 뒤에 접미사가 붙으면 랜덤화하지 않고 템플릿을 그대로 파일명으로 쓴다 — 모든 실행이 같은 고정 경로를 공유해 병렬 실행에서 페이로드가 뒤섞인다(같은 날 게시 뒤섞임 사고의 원인). 접미사가 필요하면 직접 이어붙이기 전에 `XXXXXX`로 생성한다.
+
+기계 검증: `tools/validate-aside-payloads.sh`(파일 경로 전달 오류 + 기타 경로 경고), `tools/validate-mktemp-templates.sh`(접미사 템플릿 오류). 근거: [machine-checked-doc-invariants](solutions/skill-design/machine-checked-doc-invariants.md), [irreversible-publish-approval-guards](solutions/skill-design/irreversible-publish-approval-guards.md).
+
 ## 모범 사례
 
 ### 1. 빠른 실패

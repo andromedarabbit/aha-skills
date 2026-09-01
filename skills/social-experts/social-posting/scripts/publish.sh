@@ -119,7 +119,7 @@ media_count="$(printf '%s' "$payload_json" | jq '.media | length')"
 if [[ "$media_count" -gt 0 ]]; then
   media_prompt=" 첨부 미디어:"
   while IFS=$'\t' read -r mp ma; do
-    media_prompt="$media_prompt 파일 '$mp' (alt text: $ma),"
+    media_prompt="$media_prompt 파일 '$mp' (alt text: $ma),"  # aside-path-ok — 미디어 첨부는 경로 전달이 불가피(알려진 제약)
   done < <(printf '%s' "$payload_json" | jq -r '.media[] | "\(.path)\t\(.alt)"')
   media_prompt="${media_prompt%,} — 본문과 함께 첨부해 게시한다."
 fi
