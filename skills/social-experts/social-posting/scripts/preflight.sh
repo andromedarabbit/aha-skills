@@ -62,7 +62,7 @@ if [[ -n "$social_root" ]]; then
 fi
 # 소재 후보: CWD 주변의 .md 몇 개 (Stage 2 '기존 문서' 선택지 재료)
 if [[ "$jq_ok" == "true" ]]; then
-  md_candidates_json="$(find "$cwd" -maxdepth 2 -name '*.md' -type f -not -path '*/.git/*' 2>/dev/null \
+  md_candidates_json="$( { find "$cwd" -maxdepth 2 -name '*.md' -type f -not -path '*/.git/*' 2>/dev/null || true; } \
     | head -5 \
     | jq -R -s -c 'split("\n") | map(select(length > 0))' 2>/dev/null || printf '[]')"
 fi
