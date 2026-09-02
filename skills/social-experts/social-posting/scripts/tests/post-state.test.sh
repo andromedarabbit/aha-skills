@@ -76,4 +76,17 @@ fi
 bash "$STATE" clear
 [ "$(bash "$STATE" get)" = "{}" ] || fail "clear 후 영수증이 비어 있어야 한다"
 
+# --- 병렬 posted_* 기록: receipt 락이 lost update를 막는지 (2개 동시 set → 둘 다 생존) ---
+SOCIAL_POSTING_JOB="$job" SOCIAL_POSTING_RECEIPT="$job/receipt.json" \
+  bash "$STATE" set posted_x "https://x.com/a/1" >/dev/null &
+pa=$!
+SOCIAL_POSTING_JOB="$job" SOCIAL_POSTING_RECEIPT="$job/receipt.json" \
+  bash "$STATE" set posted_bluesky "https://bsky.app/b/2" >/dev/null &
+pb=$!
+wait $pa; wait $pb
+out="$(SOCIAL_POSTING_JOB="$job" SOCIAL_POSTING_RECEIPT="$job/receipt.json" bash "$STATE" get)"
+echo "$out" | jq -e '.posted_x == "https://x.com/a/1" and .posted_bluesky == "https://bsky.app/b/2"' >/dev/null \
+  || fail "병렬 set에서 키가 유실됨(락 미작동): $out"
+[ ! -d "$job/receipt.json.lock" ] || fail "receipt 락이 해제 후 잔존한다"
+
 echo "✅ post-state.test.sh 통과"

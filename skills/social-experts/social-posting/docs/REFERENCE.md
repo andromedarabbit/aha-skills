@@ -9,7 +9,7 @@
 | 스크립트 | 호출 | 역할 |
 | --- | --- | --- |
 | `preflight.sh` | `bash $SKILL_DIR/scripts/preflight.sh` | 환경 스냅샷 JSON 1줄 (항상 exit 0) |
-| `aside-permissions.sh` | `bash $SKILL_DIR/scripts/aside-permissions.sh status\|grant [--account u0]` | aside 권한 바인딩 — 지원 4사이트 allow 규칙 대조·부여 (status 항상 exit 0, grant 실패 시 exit 1) |
+| `aside-permissions.sh` | `bash $SKILL_DIR/scripts/aside-permissions.sh status\|grant\|revoke [--account u0]` | aside 권한 바인딩 — 대조·부여·회수 (status 항상 exit 0, grant/revoke 실패 시 exit 1, grant는 `SOCIAL_PERMISSION_GRANT=1` 필요) |
 | `check-deps.sh` | PreToolUse 훅 (`if: Bash(aside *)`) | aside 존재·계정 상태 확인 (편의 — 강제력 없음) |
 | `post-state.sh` | `bash $SKILL_DIR/scripts/post-state.sh <sub>` | 영수증·활성 작업 관리 |
 | `record-approval.sh` | PostToolUse 훅 (matcher: AskUserQuestion) | 승인 digest + 계정 스냅샷 기록 (승인의 유일한 입구) |
@@ -36,7 +36,9 @@ clear                 영수증 삭제
 aside의 게시 권한은 settings.json 최상위 `permission` 키다(`rules.allow/deny/ask` + `default`). CLI·MCP에 설정 커맨드는 없고 repl의 `aside.settings.get/set`이 유일한 프로그램 경로다 — 이 스크립트가 그 경로를 감싼다.
 
 - `status`: 활성(또는 `--account`) 계정의 권한을 읽어 필수 규칙과 대조한다. `bound:true` = 필수 규칙이 전부 allow에 있고 같은 모양의 ask/deny가 없다. 항상 exit 0 (soft-fail)
-- `grant`: 없는 필수 규칙을 추가하고 같은 모양(키 정렬 JSON 동일)의 ask/deny를 allow로 대체한 뒤 재조회로 검증한다. 실패 시 exit 1
+- `grant`: 없는 필수 규칙을 추가하고 같은 모양(키 정렬 JSON 동일)의 ask/deny를 allow로 대체한 뒤 재조회로 검증한다. 실패 시 exit 1. **`SOCIAL_PERMISSION_GRANT=1` 환경변수가 없으면 거부한다** — Stage 2 '일괄 허용' 동의의 운반체(산문 계약의 코드 강제)
+- `revoke`: 부여했던 필수 규칙(정확히 일치하는 것)만 allow에서 제거하고 재조회로 검증한다. ask/deny·사용자 소유 규칙(host가 붙은 등 정확히 일치하지 않는 것)은 불가침. 권한 축소 방향이라 토큰 불필요
+- **비교는 전부 exact 매칭**이다 — host가 붙은 사용자 규칙은 대체·제거·dedup 대상이 아니며 보존된다(모르는 규칙을 파괴하지 않는다). 부수 효과: 사용자가 남긴 비-정확 겹침 규칙(예: 좁은 network url의 ask)은 게시 중 승인 창을 유발할 수 있다
 - 필수 규칙: X는 `twitter.tweet`/`twitter.reply`/`twitter.deleteTweet` 도구 + 4개 사이트 network url 패턴 + browser-modify **1건(전역)** — aside가 저장 시 browser 규칙의 `host`를 제거하므로(2026-09-01 실측) 사이트 좁히기는 network 축으로만 가능하다 (정의는 스크립트의 `REQUIRED_JSON` — 유일한 지점)
 - repl은 `--account`를 무시하므로 계정 전환은 `aside account use`로 하고 작업 뒤 원복한다 (원복 실패는 결과에 남긴다)
 - Stage 2에서 "일괄 허용"으로만 호출한다 — grant는 사용자 동의 없이 실행하지 않는다
@@ -87,6 +89,9 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 - 계정 식별자는 `aside account list`의 프로필 값(`u0`, `u1`)만 쓴다. 이메일은 무시된다.
 
 ## 확인된 제약
+
+- network url 규칙이 browser 액션을 실제로 제한하는지는 미검증이다(aside의 규칙 판정 순서 불명) — network 패턴은 site 범위 제어의 유일한 수단이라는 **가정**으로 문서화돼 있다
+- 브라우저+브라우저 조합(linkedin+facebook) 병렬 게시는 경합으로 느린 플랫폼이 타임아웃 상한에 걸린다(2026-09-01 실측 wall 422초·LinkedIn 420초 초과 사망) — 병렬 이득이 실측된 것은 도구+브라우저 조합(X+Bluesky)뿐
 
 - 활성 작업 포인터(`${TMPDIR}/social-posting-current-job`)는 머신 전체 1개다 — 동시에 여러 작업을 활성화하면 승인이 섞인다. 한 번에 한 작업만.
 - 게시는 되돌릴 수 없다. 모든 게시는 publish.sh의 digest·제약·계정 가드 뒤에서만 일어난다.

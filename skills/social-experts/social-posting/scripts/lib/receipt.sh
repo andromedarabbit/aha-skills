@@ -60,16 +60,32 @@ receipt_get() {
 }
 
 # usage: receipt_set <key> <string value>
+
+# receipt.json은 read-modify-write+mv라 동시 쓰기가 lost update가 된다. 병렬 게시의
+# posted_* 기록(및 훅의 동시 기록)을 위해 mkdir 락으로 직렬화한다(macOS flock 부재).
+# 5분 넘은 락은 소유자 사망 잔여물로 보고 회수한다.
+_receipt_lock() {
+  local lock="$1.lock" waited=0
+  until mkdir "$lock" 2>/dev/null; do
+    if [[ -n "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ]]; then rm -rf "$lock"; continue; fi
+    sleep 0.05; waited=$((waited + 1))
+    if (( waited > 200 )); then return 1; fi
+  done
+}
+_receipt_unlock() { rmdir "$1.lock" 2>/dev/null || true; }
+
 receipt_set() {
   local key="$1" value="$2" p tmp
   p="$(receipt_path)" || return 1
   tmp="$(mktemp)"
+  _receipt_lock "$p" || { rm -f "$tmp"; return 1; }
   if ! jq --arg k "$key" --arg v "$value" '.[$k] = $v' <(receipt_read) >"$tmp" 2>/dev/null; then
-    rm -f "$tmp"
+    _receipt_unlock "$p"; rm -f "$tmp"
     return 1
   fi
   mkdir -p "$(dirname "$p")"
   mv "$tmp" "$p"
+  _receipt_unlock "$p"
 }
 
 # usage: receipt_set_json <key> <json value>  (approved_digests 객체 등)
@@ -77,12 +93,14 @@ receipt_set_json() {
   local key="$1" json="$2" p tmp
   p="$(receipt_path)" || return 1
   tmp="$(mktemp)"
+  _receipt_lock "$p" || { rm -f "$tmp"; return 1; }
   if ! jq --arg k "$key" --argjson v "$json" '.[$k] = $v' <(receipt_read) >"$tmp" 2>/dev/null; then
-    rm -f "$tmp"
+    _receipt_unlock "$p"; rm -f "$tmp"
     return 1
   fi
   mkdir -p "$(dirname "$p")"
   mv "$tmp" "$p"
+  _receipt_unlock "$p"
 }
 
 receipt_unset() {

@@ -1,7 +1,7 @@
 ---
 name: social-posting
 description: 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text·스레드 규칙)을 기계 검증한 뒤 승인을 받아 aside 브라우저 실행 계층으로 실제 계정에 게시한다. 스레드(X·Bluesky 답글 체인)도 지원한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 스레드로 변환해줘", "스레드로 뽑아줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 aside로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser 스킬 소관이다.
-version: 0.6.0
+version: 0.7.0
 context: inline
 language: "korean"
 dependencies:
@@ -90,10 +90,10 @@ preflight 결과를 바탕으로 **AskUserQuestion 한 번에 묶어** 묻는다
 preflight의 `aside.permissions.bound`가 `false`면 위 묶음에 권한 문항을 추가한다 — **게시 권한 일괄 허용(전역 browser 권한 포함)** (허용 / 건너뛰기). "허용"을 고르면 계정 확정 뒤에 부여한다:
 
 ```bash
-bash "${CLAUDE_SKILL_DIR}/scripts/aside-permissions.sh" grant --account <id>
+SOCIAL_PERMISSION_GRANT=1 bash "${CLAUDE_SKILL_DIR}/scripts/aside-permissions.sh" grant --account <id>
 ```
 
-부여는 X 도구 3종(`twitter.tweet`/`twitter.reply`/`twitter.deleteTweet`) + 지원 4개 사이트 network url 패턴 + browser-modify **1건(전역)**을 한 번에 추가하고 같은 모양의 ask 규칙을 allow로 대체한다 — 게시 중 승인 창이 뜨지 않게 첫 사용 시점에 끝내는 게 목적이다. **aside가 저장 시 browser 규칙의 `host`를 지우므로 browser 권한은 사이트로 좁힐 수 없다** — 부여하면 로그인된 모든 사이트의 브라우저 수정이 승인 없이 열린다는 점을 동의 문항에서 그대로 보여준다(사이트 제한은 network url 축에만 가능). "건너뛰기"해도 진행할 수 있지만, aside 승인 창이 `SOCIAL_ASIDE_TIMEOUT` 창과 충돌해 게시 타임아웃 실패가 될 수 있다.
+부여는 X 도구 3종(`twitter.tweet`/`twitter.reply`/`twitter.deleteTweet`) + 지원 4개 사이트 network url 패턴 + browser-modify **1건(전역)**을 한 번에 추가하고 같은 모양의 ask 규칙을 allow로 대체한다(비교는 exact 매칭 — host가 붙은 사용자 소유 규칙은 건드리지 않는다). `SOCIAL_PERMISSION_GRANT=1`은 이 동의의 운반체로 grant가 없으면 실행을 거부한다 — 게시 중 승인 창이 뜨지 않게 첫 사용 시점에 끝내는 게 목적이다. **aside가 저장 시 browser 규칙의 `host`를 지우므로 browser 권한은 사이트로 좁힐 수 없다** — 부여하면 로그인된 모든 사이트의 브라우저 수정이 승인 없이 열린다는 점을 동의 문항에서 그대로 보여준다(사이트 제한은 network url 축에만 가능). "건너뛰기"해도 진행할 수 있지만, aside 승인 창이 `SOCIAL_ASIDE_TIMEOUT` 창과 충돌해 게시 타임아웃 실패가 될 수 있다. 부여했던 권한 회수는 `bash "${CLAUDE_SKILL_DIR}/scripts/aside-permissions.sh" revoke --account <id>`로 한다(부여한 필수 규칙만 제거, 토큰 불필요).
 
 응답이 확정되면 작업 공간을 만들고 활성화한다:
 
@@ -164,7 +164,7 @@ Ready 판정식(기계 판정, publish.sh가 강제한다): **`approved_digests`
 bash "${CLAUDE_SKILL_DIR}/scripts/publish.sh" --job <job-dir> --platform x
 ```
 
-publish.sh가 게시 직전에 6중 가드를 검사한다 — 승인 플랫폼 여부 · digest 일치 · 하드 제약 재실행 · 계정 매핑 · **승인 시점 계정 스냅샷 일치** · **본문 동결 직후 원본 digest 재검증**. 하나라도 어긋나면 거부한다(실패-닫힘 가드 — 승인 후 초안이나 계정이 바뀌었으면 재승인 필요). 통과하면 **본문만**(frontmatter 제거, media/link는 절대경로·alt 지시로 전달) 동결 파일(0400)에 담아 `aside exec --account <id>`에 **변경·요약 없이 그대로 게시**를 지시하고, 출력에서 게시 URL(`https?://`)을 기계 감지한다 — URL이 없으면 "게시 여부 불명"으로 실패 종료된다. **스레드(`format: thread`)는 세그먼트를 이전 게시물에 대한 답글으로 연결해 하나의 스레드로 게시하도록 지시**하고, 게시 URL이 세그먼트 수만큼 감지되지 않으면 "부분 게시 가능성"으로 실패 종료한다. 대상 플랫폼마다 한 번씩 호출하되, 플랫폼이 여럿이면 **백그라운드 잡으로 동시에 병렬 실행**한다 — 각 호출은 가드·동결 파일(mktemp)을 독립적으로 거치고 receipt는 읽기만 하므로 병렬이 안전하다(실측 2026-09-01: X+Bluesky 동시 wall-clock 192.7초, 순차 합산 대비 절반 이하). 실행 형태: 각 호출을 `> <job>/publish-<platform>.log 2>&1 &`로 띄우고 개별 `wait $pid; rc=$?`로 회수한다 — **무인자 `wait`는 항상 0을 돌려주어 실패를 삼키므로 금지**다. 한 플랫폼의 실패는 나머지를 중단하지 않고(bulkhead) 전 플랫폼의 종료 코드·로그를 보고한 뒤 Stage 10으로 간다. **하네스 Bash 도구의 기본 타임아웃(120초)이 `SOCIAL_ASIDE_TIMEOUT`(기본 420초)보다 짧다 — 하나의 전경 Bash 호출에 묶어 wait하면 게시 도중 프로세스가 강제 종료된다.** `posted_*` 기록(`post-state.sh set`)은 각 호출 완료 후 **순차로** 한다 — receipt.json 동시 쓰기를 만들지 않는다.
+publish.sh가 게시 직전에 6중 가드를 검사한다 — 승인 플랫폼 여부 · digest 일치 · 하드 제약 재실행 · 계정 매핑 · **승인 시점 계정 스냅샷 일치** · **본문 동결 직후 원본 digest 재검증**. 하나라도 어긋나면 거부한다(실패-닫힘 가드 — 승인 후 초안이나 계정이 바뀌었으면 재승인 필요). 통과하면 **본문만**(frontmatter 제거, media/link는 절대경로·alt 지시로 전달) 동결 파일(0400)에 담아 `aside exec --account <id>`에 **변경·요약 없이 그대로 게시**를 지시하고, 출력에서 게시 URL(`https?://`)을 기계 감지한다 — URL이 없으면 "게시 여부 불명"으로 실패 종료된다. **스레드(`format: thread`)는 세그먼트를 이전 게시물에 대한 답글으로 연결해 하나의 스레드로 게시하도록 지시**하고, 게시 URL이 세그먼트 수만큼 감지되지 않으면 "부분 게시 가능성"으로 실패 종료한다. 대상 플랫폼마다 한 번씩 호출하되, 플랫폼이 여럿이면 **백그라운드 잡으로 동시에 병렬 실행**한다 — 각 호출은 가드·동결 파일(mktemp)을 독립적으로 거치고 receipt는 읽기만 하므로 병렬이 안전하다(실측 2026-09-01: X+Bluesky 동시 wall-clock 192.7초, 순차 합산 대비 절반 이하. 단 브라우저+브라우저 조합(linkedin+facebook)은 경합으로 느린 플랫폼이 상한에 걸려 이득이 없었다 — wall 422초·LinkedIn 420초 초과). 실행 형태: 각 호출을 `> <job>/publish-<platform>.log 2>&1 &`로 띄우고 개별 `wait $pid; rc=$?`로 회수한다 — **무인자 `wait`는 항상 0을 돌려주어 실패를 삼키므로 금지**다. 한 플랫폼의 실패는 나머지를 중단하지 않고(bulkhead) 전 플랫폼의 종료 코드·로그를 보고한 뒤 Stage 10으로 간다. **하네스 Bash 도구의 기본 타임아웃(120초)이 `SOCIAL_ASIDE_TIMEOUT`(기본 420초)보다 짧다 — 하나의 전경 Bash 호출에 묶어 wait하면 게시 도중 프로세스가 강제 종료된다.** `posted_*` 기록(`post-state.sh set`)은 각 호출 완료 후 **순차로** 한다 — receipt.json 동시 쓰기를 만들지 않는다.
 
 ### Stage 10 게시 후 검증 (read-back)
 

@@ -2,8 +2,8 @@
 # aside-permissions.sh — 권한 바인딩 상태·부여·ask 대체·계정 원복·soft-fail 검증.
 #
 # 회귀(2026-09-01 실측 반영): aside 스키마는 저장 시 browser 규칙의 host 필드를
-# 제거한다 — stub도 이 정규화를 흉내 내야 실물 동작을 재현한다. host 포함
-# REQUIRED를 그대로 검증하면 부여 후 재조회에서 불일치로 실패한다.
+# 제거한다 — stub도 이 정규화를 흉내 낸다. 비교는 exact 매칭: host가 붙은 사용자
+# 규칙은 대체·제거되지 않고 보존된다. grant는 SOCIAL_PERMISSION_GRANT=1 토큰 필요.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -55,9 +55,9 @@ EOF
 chmod +x "$sandbox/bin/aside"
 export STUB_STATE="$sandbox/state"
 
-# 시작 상태: allow 비어 있고 ask 충돌 2건. browser-modify는 host 포함 형태로 시드한다 —
-# 실제 저장 상태(host 소실)와 달라도 canon이 host를 벗겨 REQUIRED(전역)와 일치해야 한다.
-# 이 host가 없으면 canon의 host 제거 분기가 무발화가 된다(변이: 필터 제거 시 아래 단언이 red).
+# 시작 상태: allow 비어 있고 ask에 (a) 필수 규칙과 exact 일치하는 twitter.tweet,
+# (b) host가 붙은 사용자 소유 browser-modify를 시드한다 — (b)는 exact 매칭에서
+# 충돌이 아니므로 grant가 절대 대체·제거하지 않아야 한다(사용자 규칙 불가침).
 cat >"$sandbox/state/permission.json" <<'EOF'
 {"rules":{"allow":[],"deny":[],"ask":[{"type":"tool","tool":"twitter.tweet"},{"type":"browser","action":"modify","host":"x.com"}],"default":"allow"},"files":{"outsideRead":"ask","outsideWrite":"ask"},"sandbox":{"enabled":false}}
 EOF
@@ -66,28 +66,45 @@ echo "u0" >"$sandbox/state/active"
 # --- 1. status: 미부여 + ask 충돌 감지 ---
 out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" status)"
 echo "$out" | jq -e '.ok == true and .bound == false and .account == "u0"' >/dev/null || fail "status 기본 필드 불일치: $out"
-echo "$out" | jq -e '(.missing | length) == 8 and (.ask_conflicts | length) == 2' >/dev/null || fail "missing/ask_conflicts 탐지 실패: $out"
+echo "$out" | jq -e '(.missing | length) == 8 and (.ask_conflicts | length) == 1' >/dev/null || fail "missing/ask_conflicts 탐지 실패: $out"
 echo "$out" | jq -e '.default_allow == true' >/dev/null || fail "default_allow 미반영: $out"
 
-# --- 2. grant (--account u1): 부여 + ask 대체 + host 정규화 스키마에서 검증 통과 + 활성 계정 원복 ---
-out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" grant --account u1)"
+# --- 2. grant (--account u1, 토큰): 부여 + exact 대체만 + 검증 통과 + 활성 계정 원복 ---
+out="$(STUB_STATE="$STUB_STATE" SOCIAL_PERMISSION_GRANT=1 PATH="$sandbox/bin:$PATH" bash "$PERM" grant --account u1)"
 echo "$out" | jq -e '.ok == true and .written == true and .verified == true and .account == "u1"' >/dev/null || fail "grant 결과 불일치: $out"
-echo "$out" | jq -e '(.ask_replaced | length) == 2 and (.added | length) == 8' >/dev/null || fail "ask 대체/added 불일치: $out"
+echo "$out" | jq -e '(.ask_replaced | length) == 1 and (.added | length) == 8' >/dev/null || fail "ask 대체/added 불일치: $out"
 [[ "$(cat "$sandbox/state/active")" == "u0" ]] || fail "활성 계정이 u0으로 원복되지 않음: $(cat "$sandbox/state/active")"
+# 사용자 소유 browser ask 규칙은 grant 후에도 ask 목록에 남아야 한다 (exact 외 엔트리 불가침).
+# 주의: aside 저장 정규화(stub이 흉내)가 host를 벗겨 저장하므로 남는 형태는 host 없는 것 —
+# 보존 계약은 "엔트리를 제거하지 않는다"이지 저장 형태를 보장하는 게 아니다.
+python3 - "$sandbox/state/permission.json" <<'PYEOF' || fail "사용자 browser ask 규칙이 제거됨"
+import json, sys
+ask = json.load(open(sys.argv[1]))["rules"]["ask"]
+bm = [r for r in ask if r.get("type") == "browser" and r.get("action") == "modify"]
+assert len(bm) == 1, f"사용자 browser ask 규칙 소실/중복: {ask}"
+assert not any(r.get("tool") == "twitter.tweet" for r in ask), "exact 교체 대상이 남음"
+PYEOF
 
-# --- 3. grant 후 status: bound ---
+# --- 3. 저장 정규화 수렴: host가 벗겨진 사용자 ask는 이제 exact 충돌 → 재grant로 수렴 ---
+# 첫 grant는 계획 시점에서 exact인 twitter.tweet만 대체한다. 남은 사용자 browser ask는
+# 저장 정규화로 host가 벗겨져 다음 status에서 exact 충돌로 나타난다 — 보수적 exact
+# 매칭은 자기수렴한다: 재grant(동의)가 그것을 allow로 바꾸고 bound가 닫힌다.
 out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" status)"
-echo "$out" | jq -e '.bound == true and (.ask_conflicts | length) == 0' >/dev/null || fail "grant 후에도 bound:false: $out"
+echo "$out" | jq -e '.bound == false and (.ask_conflicts | length) == 1' >/dev/null || fail "저장 정규화 후 exact 충돌 1건이어야 한다: $out"
+out="$(STUB_STATE="$STUB_STATE" SOCIAL_PERMISSION_GRANT=1 PATH="$sandbox/bin:$PATH" bash "$PERM" grant)"
+echo "$out" | jq -e '.ok == true and .verified == true and (.ask_replaced | length) == 1' >/dev/null || fail "수렴 grant 실패: $out"
+out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" status)"
+echo "$out" | jq -e '.bound == true and (.ask_conflicts | length) == 0' >/dev/null || fail "수렴 후에도 bound:false: $out"
 
 # --- 4. 재부여: 변경 없음 → written:false ---
-out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" grant)"
+out="$(STUB_STATE="$STUB_STATE" SOCIAL_PERMISSION_GRANT=1 PATH="$sandbox/bin:$PATH" bash "$PERM" grant)"
 echo "$out" | jq -e '.ok == true and .written == false and .verified == true' >/dev/null || fail "no-op grant 불일치: $out"
 
 # --- 5. 중복 정리: 실패한 첫 grant가 남긴 실제 상태(중복 browser-modify 4개 + 전역 ask 잔존)에서 복구 ---
 cat >"$sandbox/state/permission.json" <<'EOF'
 {"rules":{"allow":[{"type":"browser","action":"modify"},{"type":"browser","action":"modify"},{"type":"browser","action":"modify"},{"type":"browser","action":"modify"},{"type":"network","url":"https://example.com/*"},{"type":"network","url":"https://example.com/*"}],"deny":[],"ask":[{"type":"browser","action":"modify"}],"default":"allow"},"files":{"outsideRead":"ask","outsideWrite":"ask"},"sandbox":{"enabled":false}}
 EOF
-out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" grant)"
+out="$(STUB_STATE="$STUB_STATE" SOCIAL_PERMISSION_GRANT=1 PATH="$sandbox/bin:$PATH" bash "$PERM" grant)"
 echo "$out" | jq -e '.ok == true and .written == true and .verified == true' >/dev/null || fail "중복 상태 복구 grant 실패: $out"
 python3 - "$sandbox/state/permission.json" <<'PYEOF' || fail "중복 제거/ask 청소 불일치"
 import json, sys
@@ -99,6 +116,20 @@ ex = [r for r in allow if r == {"type": "network", "url": "https://example.com/*
 assert len(ex) == 1, f"필수 아닌 동일 규칙(network example.com) dedup 미적용: {len(ex)}개"
 assert not [r for r in (rules.get("ask") or []) if r.get("type") == "browser"], "전역 browser ask 잔존"
 PYEOF
+
+# --- 5b. 토큰 없는 grant → exit 1 (동의 계약 코드 강제) ---
+if STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" grant >/dev/null 2>&1; then
+  fail "토큰 없는 grant는 exit 1이어야 한다"
+fi
+
+# --- 5c. revoke: 부여했던 필수 규칙만 회수 → status bound:false ---
+out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" revoke)"
+echo "$out" | jq -e '.ok == true and .written == true and .verified == true and (.removed | length) == 8' >/dev/null || fail "revoke 결과 불일치: $out"
+out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" status)"
+echo "$out" | jq -e '.bound == false and (.missing | length) == 8' >/dev/null || fail "revoke 후 bound:false+missing 8이어야 한다: $out"
+# revoke 후 재부여(토큰)로 다시 bound 복구되는지 — 왕복 무결성
+out="$(STUB_STATE="$STUB_STATE" SOCIAL_PERMISSION_GRANT=1 PATH="$sandbox/bin:$PATH" bash "$PERM" grant)"
+echo "$out" | jq -e '.ok == true and .verified == true' >/dev/null || fail "revoke 후 재부여 실패: $out"
 
 # --- 6. repl 응답 없음 → status soft-fail(exit 0), grant fail-fast(exit 1) ---
 cat >"$sandbox/bin/aside" <<'EOF'
@@ -117,7 +148,7 @@ if out="$(STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" status
   && ! echo "$out" | jq -e '.ok == false' >/dev/null; then
   fail "repl 부재 시 status는 ok:false + exit 0이어야 한다: $out"
 fi
-if STUB_STATE="$STUB_STATE" PATH="$sandbox/bin:$PATH" bash "$PERM" grant >/dev/null 2>&1; then
+if STUB_STATE="$STUB_STATE" SOCIAL_PERMISSION_GRANT=1 PATH="$sandbox/bin:$PATH" bash "$PERM" grant >/dev/null 2>&1; then
   fail "repl 부재 시 grant는 exit 1이어야 한다"
 fi
 
