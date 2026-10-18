@@ -19,3 +19,4 @@ __pycache__/
 # 플러그인 마켓플레이스라 사용자가 설치·업데이트마다 내려받으므로 제외한다.
 graphify-out/
 .graphify_*.json
+.context/compound-engineering/

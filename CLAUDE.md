@@ -336,6 +336,12 @@ GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니�
 3. 명시적으로 필요한 경우에만 `docs/` 파일 읽기
 4. 사용 가능한 문서 확인은 `docs/INDEX.md` 활용
 
+### 문제를 해결한 후
+
+After a solved, verified problem, offer once to invoke the `ce-compound` skill at the completion checkpoint only when the work produced durable project reasoning that is not readily recoverable from the final code, tests, types, comments, or existing documentation, and losing it would plausibly cause recurrence, material risk, or substantial rediscovery. Apply this counterfactual: if the learning document disappeared, would a future engineer reading the final implementation still be likely to repeat the mistake or redo substantial investigation? If not, do not offer. Completion, effort, and diff size alone are not enough. Offer at the checkpoint so a qualifying learning can ship in the PR that produced it, and only where the repository treats captured learnings as tracked, committed knowledge.
+
+Write every report, summary, or handoff to the user through the `ce-noslop` skill. This applies when you are the top-level agent writing to the user, not when you are a subagent reporting to its caller. Do not apply it to code, config, verbatim quotes, or text the user asked to post as written.
+
 ## 테스트 규칙
 
 ### 필수 조건
