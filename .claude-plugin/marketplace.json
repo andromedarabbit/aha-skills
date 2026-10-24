@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "개인용 Claude Code Agent Skills 모음 — 메타(스킬 작성) 스킬 제공",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "plugins": [
     {

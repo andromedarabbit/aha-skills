@@ -40,3 +40,12 @@
    이식 시 누락됐다. 상류 접근이 불가능해 기존 검증기 패턴(python3 heredoc + frontmatter
    파싱)에 맞춰 새로 작성했고, pre-commit 훅·CI 스텝·회귀 테스트를 함께 붙였다. 상류에서
    다시 가져올 일이 생기면 이 항목은 차이가 아니라 동기화 대상이 된다.
+
+6. **훅 등록 모델 — frontmatter `hooks:` → 카테고리 `hooks/hooks.json` (상류 실측 수용)**
+   상류는 2026-10-08에 "frontmatter hooks: 는 하네스에서 발동되지 않는다"는 실측을 기록하고
+   전 스킬 훅을 hooks.json으로 이관했다. 본 저장소는 2026-10-24에 같은 프로브(frontmatter
+   PostToolUse 훅 vs hooks.json PostToolUse 훅, 헤드리스 세션)로 재현해 확인했다 — frontmatter
+   미발동, hooks.json 발동. social-posting의 승인 영수증 훅이 이 버그로 죽어 있었으므로
+   hooks.json으로 이관했다. validate-skill·validate-matchers의 hooks.json 인정·검증은
+   상류 수정을 이식했다. frontmatter `hooks:` 예시를 가르치던 CLAUDE.md·hook-patterns도
+   함께 정정했다.

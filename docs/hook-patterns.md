@@ -416,10 +416,18 @@ CI 도 전부 통과시켰습니다.
 
 | 파일 | 쓸 것 | 왜 |
 |---|---|---|
-| 프론트매터 `hooks:` (플러그인 `hooks/hooks.json` 포함) | `${CLAUDE_PLUGIN_ROOT}/<skill>/scripts/...` | 훅 실행 시 env 로 주입된다. 플러그인(= 카테고리) 루트라 뒤에 스킬 이름이 온다 |
+| 훅 등록 (카테고리 `hooks/hooks.json`) | `${CLAUDE_PLUGIN_ROOT}/<skill>/scripts/...` | 훅 실행 시 env 로 주입된다. 플러그인(= 카테고리) 루트라 뒤에 스킬 이름이 온다 |
 | SKILL.md **본문**, `allowed-tools` | `${CLAUDE_SKILL_DIR}/scripts/...` | 하네스가 프롬프트를 만들 때 **절대경로로 미리 치환**한다. 스킬 디렉토리 자체라 바로 `scripts/` |
 | **딸린 문서** — `docs/*.md`, `README.md`, `WORKER.md` | `$SKILL_DIR/scripts/...` **+ 그 값을 정하는 방법 안내** | 치환이 **없다.** 누가 읽든 Read 도구로 읽히므로 하네스를 거치지 않는다 |
 | **스크립트 내부** | `$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)` 기준 | 서브프로세스라 치환도 env 주입도 없다. 스스로 위치를 찾아야 한다 |
+
+**훅 "등록"은 어디에 하나 — `hooks/hooks.json`이 정규 경로입니다(2026-10-08 상류 실측, 2026-10-24 본 저장소 프로브 재현).** 위 표는
+"경로를 어떻게 쓰나"의 규칙이고, "훅을 어디에 선언하나"는 별개 질문이다. SKILL.md frontmatter의
+`hooks:` 선언은 이 환경의 하네스가 발동시키지 않는다(같은 조건 프로브에서 frontmatter 훅은
+미발동, hooks.json 훅은 발동 — social-posting의 승인 영수증 훅이 이 버그로 죽어 있었다).
+하네스가 실제로 발동하는 플러그인 훅 등록 경로는 플러그인 루트의 `hooks/hooks.json`이고,
+`validate-hook-paths.sh`(구조·경로)와 `validate-matchers.sh`(이벤트·matcher)가 이 경로를
+검증한다. 새 훅은 hooks.json에 등록하고, frontmatter `hooks:`는 쓰지 않는다.
 
 **`$SKILL_DIR`은 SKILL.md 본문에서는 구식이고, 딸린 문서에서는 정답입니다.** 본문에서는
 하네스가 `${CLAUDE_SKILL_DIR}`를 미리 치환하므로 변수를 손으로 담는 준비 단계가 불필요하고,

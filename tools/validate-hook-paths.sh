@@ -355,6 +355,92 @@ if [ "$hook_summary_found" -ne 1 ]; then
   ERRORS=$((ERRORS + 1))
 fi
 
+# ── 2.5 카테고리 hooks/hooks.json 훅 경로 검증 ────────────────────────
+# 훅 등록의 정규 경로가 hooks/hooks.json이다(docs/UPSTREAM.md #6 — frontmatter
+# hooks: 는 하네스에서 발동되지 않는 실측). 이 경로의 command도 같은 규약으로
+# 검증하지 않으면 옛 `.claude/skills/...` 버그가 조용히 재발한다 — 훅은 경로가
+# 틀려도 에러 없이 실행되지 않기 때문이다.
+hooks_json_errors=0
+hooks_json_out=$(python3 - "$PROJECT_ROOT" <<'PY'
+import glob
+import json
+import os
+import re
+import sys
+
+project_root = sys.argv[1]
+files = sorted(glob.glob(os.path.join(project_root, "skills", "*", "hooks", "hooks.json")))
+
+for hooks_json in files:
+    rel = os.path.relpath(hooks_json, project_root)
+    category_dir = os.path.dirname(os.path.dirname(hooks_json))  # <root>/skills/<category>
+    try:
+        with open(hooks_json, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        print(f"ERR\t{rel}\tJSON 파싱 실패: {exc}")
+        continue
+
+    root = data.get("hooks") if isinstance(data, dict) else None
+    if not isinstance(root, dict):
+        print(f"ERR\t{rel}\t'hooks' 키가 없거나 객체가 아님")
+        continue
+
+    commands = []
+
+    def collect(node):
+        if isinstance(node, dict):
+            cmd = node.get("command")
+            if isinstance(cmd, str):
+                commands.append(cmd)
+            for value in node.values():
+                collect(value)
+        elif isinstance(node, list):
+            for value in node:
+                collect(value)
+
+    collect(root)
+
+    problems = []
+    for cmd in commands:
+        if ".claude/skills/" in cmd:
+            problems.append(f"옛 규약(CWD 상대경로): {cmd}")
+        if "${CLAUDE_SKILL_DIR}" in cmd or "$SKILL_DIR" in cmd:
+            problems.append(f"훅에서 치환되지 않는 변수: {cmd}")
+        m = re.search(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"\s]+)", cmd)
+        if not m:
+            problems.append(f"${{CLAUDE_PLUGIN_ROOT}}/<skill>/... 형태가 아님: {cmd}")
+            continue
+        target_rel = m.group(1).rstrip("\"'")
+        if not os.path.exists(os.path.join(category_dir, target_rel)):
+            problems.append(f"참조 대상 없음: {target_rel}")
+        m_skill = re.search(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^/\"']+)/", cmd)
+        if m_skill and not os.path.isdir(os.path.join(category_dir, m_skill.group(1))):
+            problems.append(f"참조 스킬 디렉토리 없음: {m_skill.group(1)}")
+
+    if problems:
+        for problem in problems:
+            print(f"ERR\t{rel}\t{problem}")
+    else:
+        print(f"OK\t{rel} (command {len(commands)}건)")
+PY
+) || true
+
+while IFS=$'\t' read -r code field1 field2; do
+  [ -z "$code" ] && continue
+  case "$code" in
+    OK) echo "  ✅ $field1" ;;
+    ERR)
+      echo "  ❌ 오류: $field1 — $field2"
+      hooks_json_errors=$((hooks_json_errors + 1))
+      ;;
+  esac
+done <<< "$hooks_json_out"
+
+if [ "$hooks_json_errors" -gt 0 ]; then
+  ERRORS=$((ERRORS + hooks_json_errors))
+fi
+
 # ── 3. marketplace.json의 스킬 경로 검증 ───────────────────────────────
 echo ""
 echo "🔍 검증: marketplace.json 스킬 경로"

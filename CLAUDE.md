@@ -157,16 +157,10 @@ context: fork                # fork (권장) 또는 inline
 agent: general-purpose       # context: fork일 때만 필수
 background: true             # 선택, context: fork 전용, 기본값 true
 language: "korean"           # 필수
-hooks:                       # 강력 권장
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(some-cmd *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/script.sh\""
-          description: "What this hook does"
 ---
 ```
+
+훅은 frontmatter에 선언하지 않는다 — **카테고리 `hooks/hooks.json`이 유일한 발동 경로**다(아래 "훅 시스템" 참고).
 
 **중요:**
 - `description`은 "무엇을 하는지 + 언제 쓰는지(when-to-use 트리거)"를 구체적으로 담으세요. Claude가 여러 스킬 중 올바른 것을 고르는 근거이며, 트리거가 빈약하면 스킬을 안 쓰고 넘어가는 undertrigger가 생깁니다. 공식 한도는 1024자이고, 그 안에서 불필요하게 장황하지 않게 씁니다 (임의의 짧은 글자 수 제한은 두지 않습니다)
@@ -177,6 +171,8 @@ hooks:                       # 강력 권장
 - **`context: fork` 스킬은 `AskUserQuestion`을 쓸 수 없습니다** (모든 서브에이전트 공통). 사용자 확인은 `PENDING_DECISION:` 반환-재개 방식으로, 호출 전 모호성 해소 질문은 `description`에 담습니다 — `docs/frontmatter-reference.md`의 "fork 스킬에서 사용자 확인받기" 참고
 
 ### 훅 시스템
+
+**훅 등록은 카테고리 `hooks/hooks.json`이 정규 경로다.** SKILL.md frontmatter의 `hooks:` 선언은 하네스에서 발동되지 않는다 — 상류 실측(2026-10-08)을 본 저장소 프로브로 재현 확인했다(2026-10-24: 같은 조건에서 frontmatter 훅 미발동, hooks.json 훅 발동). social-posting의 승인 영수증 훅이 이 버그로 한동안 죽어 있었다. 검증기: `validate-skill`이 hooks.json 참조를 훅 정의로 인정하고, `validate-matchers`가 hooks.json의 이벤트·matcher를 검증한다.
 
 Claude Code는 이벤트 기반 자동화를 위해 여러 훅 타입을 지원합니다:
 
@@ -219,7 +215,8 @@ Stage 4 승인 영수증 훅이 한 번도 실행되지 않은 채 "승인 게�
 > (스킬 프론트매터 훅 자체가 문서화되지 않은 기능입니다). 근거는 Claude Code v2.1.220
 > 바이너리의 문자열입니다: `but only ${CLAUDE_PLUGIN_ROOT} is available for skill hooks
 > (${CLAUDE_PLUGIN_DATA} is plugin-only).` 공식 문서는 플러그인의 `hooks/hooks.json`
-> 문맥에서만 이 변수를 설명합니다.
+> 문맥에서만 이 변수를 설명합니다. 다만 frontmatter 훅은 애초에 발동되지 않으므로(위
+> 실측 참고) 이 문맥은 역사적 기록으로만 유효합니다.
 
 ### SKILL.md 본문 경로 규약
 
@@ -383,43 +380,33 @@ Write every report, summary, or handoff to the user through the `ce-noslop` skil
 
 ## 일반적인 패턴
 
-### 의존성 자동 설치 (PreToolUse)
+카테고리 `hooks/hooks.json`에 등록한다(이벤트 → matcher 목록 → 훅 배열). 아래 세 패턴을 하나의 파일에 담은 예:
 
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(*gradlew*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill/scripts/check-deps.sh\""
-          description: "의존성이 없을 때 설치"
-```
-
-### 로그 요약 (PostToolUse)
-
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh run *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill/scripts/summarize-log.sh\""
-          description: "CI 로그 요약"
-```
-
-### Python 스크립트 실행 (PreToolUse)
-
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(*python*analyze*)"
-          command: "uv run \"${CLAUDE_PLUGIN_ROOT}/skill/scripts/analyze.py\""
-          description: "Python 분석 스크립트 실행"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "if": "Bash(*gradlew*)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill/scripts/check-deps.sh\"" },
+          { "type": "command", "if": "Bash(*python*analyze*)",
+            "command": "uv run \"${CLAUDE_PLUGIN_ROOT}/skill/scripts/analyze.py\"" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "if": "Bash(gh run *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill/scripts/summarize-log.sh\"" }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **참고**: Python 스크립트는 가상 환경 관리 문제를 피하기 위해 `uv run`(또는 `uvx`)을 사용하세요.

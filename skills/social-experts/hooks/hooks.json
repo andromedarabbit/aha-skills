@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(aside *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/social-posting/scripts/check-deps.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/social-posting/scripts/record-approval.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

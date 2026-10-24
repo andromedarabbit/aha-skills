@@ -369,8 +369,12 @@ if [[ -f "$SKILL_PATH/SKILL.md" ]]; then
         if [[ $hook_bad -eq 0 ]]; then
             :
         fi
+    elif grep -qF "/$(basename "$SKILL_PATH")/" "$(dirname "$SKILL_PATH")/hooks/hooks.json" 2>/dev/null; then
+        # 2026-10-08 실측(상류): frontmatter hooks: 는 하네스에서 발동되지 않는다.
+        # 발동 경로인 카테고리 hooks/hooks.json 이 이 스킬을 참조하면 훅 정의로 인정한다.
+        echo -e "  ${GREEN}✅ hooks: 카테고리 hooks/hooks.json이 이 스킬을 참조 (정규 등록 경로)${NC}"
     else
-        echo -e "  ${YELLOW}⚠️  hooks: 정의되지 않음 (강력 권장)${NC}"
+        echo -e "  ${YELLOW}⚠️  hooks: 정의되지 않음 (강력 권장 — 카테고리 hooks/hooks.json 등록)${NC}"
     fi
 else
     echo -e "${YELLOW}⚠️  SKILL.md이 없어서 프론트매터 확인을 건너뜁니다${NC}"

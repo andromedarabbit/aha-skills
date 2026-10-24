@@ -1,27 +1,13 @@
 ---
 name: social-posting
 description: 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text·스레드 규칙)을 기계 검증한 뒤 승인을 받아 aside 브라우저 실행 계층으로 실제 계정에 게시한다. 스레드(X·Bluesky 답글 체인)도 지원한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 스레드로 변환해줘", "스레드로 뽑아줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 aside로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser 스킬 소관이다.
-version: 0.7.0
+version: 0.8.0
 context: inline
 language: "korean"
 dependencies:
   - aside>=1.26.717
   - uv>=0.4.0
   - jq>=1.6
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(aside *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/social-posting/scripts/check-deps.sh\""
-          description: "aside CLI 존재·계정 상태 확인"
-  PostToolUse:
-    - matcher: "AskUserQuestion"
-      hooks:
-        - type: command
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/social-posting/scripts/record-approval.sh\""
-          description: "게시 승인 응답 관측 시 초안 digest를 영수증에 기록"
 ---
 
 # 소셜미디어 포스팅 (aside 연동)

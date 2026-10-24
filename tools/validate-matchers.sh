@@ -45,6 +45,8 @@ echo "🔍 matcher/event 정적 검증 시작... ($SCAN_ROOT)"
 echo ""
 
 python3 - "$SCAN_ROOT" <<'PY'
+import glob
+import json
 import os
 import re
 import sys
@@ -217,6 +219,65 @@ for sf in skills:
     else:
         print(f"✅ {rel}")
 
+# ── 플러그인 hooks/hooks.json — 이벤트·matcher 검증 ──────────────────
+# SKILL.md frontmatter의 hooks 선언은 이 환경에서 발동되지 않는 실측이 있고
+# (상류 2026-10-08, 본 저장소 2026-10-24 프로브 재현), 하네스가 실제로 발동하는
+# 등록 경로인 hooks/hooks.json에는 이벤트·matcher 검증이 없었다. frontmatter와
+# 같은 버그 클래스(미지 이벤트, 발동 불가 matcher)를 같은 집합·같은 판정으로 잡는다.
+for hooks_json in sorted(glob.glob(os.path.join(project_root, "skills", "*", "hooks", "hooks.json"))):
+    rel = os.path.relpath(hooks_json, project_root)
+    try:
+        with open(hooks_json, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        print(f"❌ {rel}")
+        print(f"   - JSON 파싱 실패: {exc}")
+        errors += 1
+        continue
+
+    root = data.get("hooks") if isinstance(data, dict) else None
+    if not isinstance(root, dict):
+        print(f"❌ {rel}")
+        print("   - 'hooks' 키가 없거나 객체가 아님")
+        errors += 1
+        continue
+
+    issues = []
+    for event, entries in root.items():
+        if event not in VALID_EVENTS:
+            issues.append(
+                f"존재하지 않는 hook 이벤트 '{event}' — 공식 이벤트가 아님 "
+                f"(PostToolUse/FileChanged 등 실재 이벤트로 이전)"
+            )
+            continue
+        if event not in TOOL_EVENTS:
+            continue  # 비-tool 이벤트는 matcher 의미가 달라 이벤트 검사로 충분
+        if not isinstance(entries, list):
+            issues.append(f"[{event}] 항목 목록이 배열이 아님")
+            continue
+        for matcher_entry in entries:
+            if not isinstance(matcher_entry, dict):
+                issues.append(f"[{event}] 항목이 객체가 아님")
+                continue
+            matcher = matcher_entry.get("matcher", "")
+            checked += 1
+            res = matcher_can_fire(matcher)
+            if res is None:
+                issues.append(f'[{event}] matcher 정규식 오류: "{matcher}"')
+            elif res is False:
+                issues.append(
+                    f'[{event}] matcher가 어떤 도구 이름과도 매칭 불가 → 절대 발동 안 함: '
+                    f'"{matcher}"  (matcher는 도구 이름만 비교 — 내용/경로 필터는 if 필드나 스크립트로)'
+                )
+
+    if issues:
+        print(f"❌ {rel}")
+        for it in issues:
+            print(f"   - {it}")
+            errors += 1
+    else:
+        print(f"✅ {rel}")
+
 print("")
 print("────────────────────────────────────")
 print(f"📊 검증 결과: tool matcher {checked}건 검사, 오류 {errors}건")
@@ -234,8 +295,8 @@ if declaring > 0 and checked == 0:
     print("❌ 오류: 훅을 선언한 스킬이 있는데 검사한 tool matcher가 0건입니다 "
           "— 스캔 경로나 프론트매터 파싱을 확인하세요")
     sys.exit(1)
-if declaring == 0:
-    print("ℹ️  훅을 선언한 스킬이 없습니다 — 검사 대상 0건")
+if declaring == 0 and checked == 0:
+    print("ℹ️  훅을 선언한 스킬·hooks.json이 없습니다 — 검사 대상 0건")
 
 sys.exit(1 if errors else 0)
 PY
