@@ -115,6 +115,14 @@ repos:
         always_run: true
         files: ^skills/.*\.sh$
 
+      # 파이썬 진입점의 의존성 선언 반쪽 상태(python3 셔뱅 + 서드파티 import). 커밋 대상 .py만 본다
+      - id: validate-python-scripts
+        name: Validate python script dependency declarations
+        entry: ./tools/validate-python-scripts.py
+        language: system
+        pass_filenames: true
+        files: ^skills/.*\.py$
+
       # Validate marketplace.json schema
       - id: validate-marketplace
         name: Validate marketplace.json schema

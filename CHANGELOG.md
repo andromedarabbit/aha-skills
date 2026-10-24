@@ -10,6 +10,8 @@
 - **훅 등록 경로를 frontmatter `hooks:`에서 카테고리 `hooks/hooks.json`으로 전환**. frontmatter 훅 선언은 하네스에서 발동되지 않는다(상류 2026-10-08 실측, 본 저장소 프로브 재현 2026-10-24 — 같은 조건에서 frontmatter 훅 미발동, hooks.json 훅 발동). 이 버그로 social-posting의 승인 영수증 훅이 발동하지 않고 있었으므로 hooks.json으로 이관했다
 - `validate-skill`이 hooks/hooks.json 참조를 훅 정의로 인정하고, `validate-matchers`가 hooks.json의 이벤트·matcher를 검증하며, `validate-hook-paths`가 hooks.json의 command 경로를 검증한다 (validate-skill·validate-matchers는 상류 수정 이식, hook-paths는 자체 확장)
 - social-posting을 0.8.0으로 올렸다 (훅 이관)
+- **Python 진입점 의존성 표준을 PEP 723(uv 스크립트) 방식으로 전환**. `tools/validate-python-scripts.py`와 회귀 테스트를 상류에서 이식해 pre-commit에 등록했고, python3 셔뱅 + 서드파티 import인 "반쪽 상태"를 잡는다. CLAUDE.md·skill-specification의 uvx+requirements.txt 안내를 정정했고 social-posting의 check-drafts.py를 uv 스크립트로 마이그레이션했다
+- `run-all-tests.sh`를 스위트 단위 병렬 실행(TEST_JOBS, 기본 4)으로 바꾸고 회귀 테스트를 붙였다 (상류 개념 이식·적응)
 - 잔존 사내 참조 3곳을 보편화했다 (record-approval.sh·receipt.sh·docs/solutions)
 
 ## 0.1.0 — 2026-08-04

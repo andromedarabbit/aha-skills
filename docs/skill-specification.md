@@ -365,34 +365,26 @@ context: inline
 
 ## Python 코드 작성 가이드라인
 
-### 패키지 관리
+### 의존성은 스크립트 안에 선언한다
 
-스킬에서 Python 코드를 작성할 때는 **uv**를 사용하여 의존성을 관리하세요.
+스킬의 Python 진입점은 **uv 스크립트**로 씁니다. 셔뱅이 `uv run --script`이면 `uv`가 헤더(PEP 723)에
+선언된 의존성을 실행 시 자동으로 설치하므로, 사용자가 환경을 따로 준비하지 않아도 됩니다.
 
-#### uv로 의존성 설치
-
-```bash
-# 가상 환경 생성
-uv venv
-
-# 의존성 설치
-uv pip install -r requirements.txt
+```python
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyyaml"]
+# ///
+import yaml
 ```
 
-#### uvx로 스크립트 실행
-
-**권장**: `uvx`를 사용하면 가상 환경 없이 스크립트를 실행할 수 있습니다.
-
-```bash
-# 단일 스크립트 실행
-uvx script.py
-
-# 패키지에서 실행
-uvx --from package-name script
-
-# 인자 전달
-uvx script.py --arg value
-```
+- 실행 권한(+x)을 부여합니다. 직접 실행하거나 `uv run <path>`로 실행합니다
+- 표준 라이브러리만 쓰면 `dependencies = []`로 둡니다
+- `python3` 셔뱅은 서드파티 패키지를 설치해 주지 않습니다 — 서드파티 import가 있는데 셔뱅이
+  `python3`인 "반쪽 상태"는 `tools/validate-python-scripts.py`가 잡습니다
+- `# uv-script: exempt — <사유>` 주석(첫 20줄 안)으로 예외 탈출이 가능합니다 — sys.path
+  조작으로 import 하거나 uv를 쓸 수 없는 실행 환경용입니다
 
 ### 훅에서 Python 사용
 

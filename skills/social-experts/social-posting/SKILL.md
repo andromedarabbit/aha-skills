@@ -123,7 +123,7 @@ canonical을 각 플랫폼 플레이북(`docs/playbook-x.md` 등 4종)에 따라
 
 1. **하드 제약(기계 판정)**:
    ```bash
-   uv run --with grapheme --with pyyaml "${CLAUDE_SKILL_DIR}/scripts/check-drafts.py" <job-dir>
+   uv run "${CLAUDE_SKILL_DIR}/scripts/check-drafts.py" <job-dir>
    ```
    exit 1이면 위반 항목(플랫폼, 항목, 실측값)을 보여주고 Stage 6으로 돌아가 고친다. uv가 없으면 검사 불능 — fail-closed로 게시를 진행할 수 없다
    결과의 `warnings`(플랫폼 간 문형 중복 등)도 함께 표시한다 — 하드 제약과 달리 게시를 차단하지 않는다. 겹친 문형은 차등화하거나, 사실 문장 등 의도적 공유면 확인하고 넘어간다

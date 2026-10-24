@@ -1,9 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["grapheme", "pyyaml"]
+# ///
 """check-drafts.py — 소셜 초안 하드 제약 검사기 (기계 판정) + 게시 페이로드 추출.
 
 Usage:
-    uv run --with grapheme --with pyyaml check-drafts.py <job-dir>                # 하드 제약 검사
-    uv run --with grapheme --with pyyaml check-drafts.py <job-dir> --platform <p> # 게시 페이로드 JSON
+    ./check-drafts.py <job-dir>                # 하드 제약 검사
+    ./check-drafts.py <job-dir> --platform <p> # 게시 페이로드 JSON
 
 하드 제약(Hard constraint)만 차단한다 — 위반 시 exit 1. 플랫폼 간 문형 중복은 warnings
 배열로 알릴 뿐 게시를 차단하지 않는다(convention 등급 — ok·exit code에 영향 없음).
@@ -31,7 +35,7 @@ try:
 except ImportError as exc:  # fail-closed
     print(
         f"검사 불능: 의존성이 없습니다 ({exc}). "
-        "uv run --with grapheme --with pyyaml 로 실행하세요.",
+        "uv run 으로 실행하세요 — 의존성은 PEP 723 헤더에 선언돼 있습니다.",
         file=sys.stderr,
     )
     sys.exit(1)

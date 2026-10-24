@@ -49,7 +49,7 @@ for f in tools/test-*.sh; do bash "$f" || break; done
 pre-commit run --all-files && ./tools/run-all-tests.sh && git diff --exit-code
 ```
 
-- `pre-commit run --all-files` — 검증기 10종이 실제 입력으로 돈다
+- `pre-commit run --all-files` — 검증기 11종이 실제 입력으로 돈다
 - `./tools/run-all-tests.sh` — 스킬 테스트 스위트가 실제로 발견되고 실행된다
 - `git diff --exit-code` — `generate-index.sh`가 드리프트를 만들지 않았고 fixer가 파일을 다시 쓰지 않았다
 
@@ -72,17 +72,17 @@ cp -r skills/meta-experts/skill-author/assets/skill-template skills/your-categor
 # uv 설치 (미설치 시)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 스킬의 의존성 설치 (requirements.txt 는 스킬별 scripts/ 에 둔다 — 루트에는 없다)
-uv pip install -r skills/your-category/your-skill/scripts/requirements.txt
-
-# venv 없이 Python 스크립트 실행
-uvx scripts/analyze.py
+# 의존성은 스크립트 안에 선언한다 — 설치 명령이 필요 없다
+./skills/your-category/your-skill/scripts/analyze.py
+# 또는
+uv run skills/your-category/your-skill/scripts/analyze.py
 ```
 
 **스킬용 Python 스크립트를 만들 때:**
-- 훅에서 독립 실행형 스크립트 실행에는 `uvx` 사용
-- 스킬의 `scripts/` 디렉토리에 `requirements.txt` 포함
-- Shebang은 `#!/usr/bin/env python3`으로 설정
+- 진입점은 **uv 스크립트**로 쓴다: 셔뱅 `#!/usr/bin/env -S uv run --script` + PEP 723 헤더(`# /// script` 블록)에 `dependencies`를 선언 — 실행 시 uv가 의존성을 자동 설치한다
+- 표준 라이브러리만 쓰면 `dependencies = []`로 둔다. `python3` 셔뱅은 서드파티 import를 설치해 주지 않는다
+- `python3` 셔뱅 + 서드파티 import 같은 "반쪽 상태"는 `tools/validate-python-scripts.py`가 잡는다 (pre-commit `validate-python-scripts`)
+- 실행 권한(+x)을 부여하고, `#!/usr/bin/env python3`는 표준 라이브러리 전용 모듈에만
 
 ### Git 워크플로우
 
@@ -135,10 +135,10 @@ aha-skills/
 
 **스크립트 가이드라인:**
 - **Shell 스크립트**: 실행 가능 권한 (+x)이 필요하며, pre-commit 훅에 의해 자동으로 설정됩니다
-- **Python 스크립트**: 의존성 관리 및 실행을 위해 `uv`/`uvx`를 사용하세요
+- **Python 스크립트**: 진입점은 uv 스크립트(PEP 723 인라인 의존성)로 쓰세요 — 아래 "Python 개발" 참고
 - **Shebangs**:
   - Shell: `#!/bin/bash` 또는 `#!/usr/bin/env bash`
-  - Python: `#!/usr/bin/env python3` 또는 `#!/usr/bin/env -S uvx --from`
+  - Python 진입점: `#!/usr/bin/env -S uv run --script` (+ `# /// script` 블록)
 
 **핵심 아키텍처 원칙:** 스킬 실행 중 토큰 사용량을 최소화하기 위해 에이전트에 필수적인 컨텍스트(SKILL.md, scripts/)와 참조 문서(docs/)를 분리하세요.
 
@@ -261,7 +261,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/x.sh"        # 본문에서는 치�
 
 GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니다.
 
-- `checks` — 검증기 전량 + 검증기 자신의 회귀 테스트 7종. bats 없이 돌아갑니다(검증 스택의 무결성을 서드파티 설치 없이 증명). `generate-index.sh` 실행 후 `git diff --exit-code`로 **인덱스 드리프트도 게이트**합니다
+- `checks` — 검증기 전량 + 검증기 자신의 회귀 테스트 9종. bats 없이 돌아갑니다(검증 스택의 무결성을 서드파티 설치 없이 증명). `generate-index.sh` 실행 후 `git diff --exit-code`로 **인덱스 드리프트도 게이트**합니다
 - `tests` — bats 설치 후 `./tools/run-all-tests.sh`
 
 실행 대상: PR, `main` push, 수동 트리거(`workflow_dispatch`).
@@ -285,7 +285,7 @@ GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니�
 - `validate-marketplace` - marketplace.json ↔ skills/ 정합성 검증
 - `fix-shell-permissions` - scripts/ 셸 스크립트 실행 권한 부여
 
-`tools/test-*.sh`(검증기 회귀 테스트 7종)는 pre-commit에도 `run-all-tests.sh`에도 들어있지 않습니다 — CI의 `checks` 잡이 명시적으로 호출합니다. 검증기를 고쳤으면 로컬에서 직접 돌리세요.
+`tools/test-*.sh`(검증기 회귀 테스트 9종)는 pre-commit에도 `run-all-tests.sh`에도 들어있지 않습니다 — CI의 `checks` 잡이 명시적으로 호출합니다. 검증기를 고쳤으면 로컬에서 직접 돌리세요.
 
 ## 언어 가이드라인
 
