@@ -122,28 +122,29 @@ frontmatter() {
   [ ! -f "$TEST_DIR/skills/t-cat/t-nodeps/scripts/example-hook.sh" ]
 }
 
-@test "dependencies emit a hook block matching on tool name only" {
+@test "dependencies emit deps block without frontmatter hooks" {
   scaffold t-deps none --dep 'gh>=2.0.0' --dep 'jq>=1.6'
   [ "$status" -eq 0 ]
   # values are emitted as YAML double-quoted scalars so colons/hashes stay safe
   frontmatter t-deps | grep -q '  - "gh>=2.0.0"'
   frontmatter t-deps | grep -q '  - "jq>=1.6"'
-  # matcher must be the bare tool name; command filtering belongs in `if`
-  frontmatter t-deps | grep -q 'matcher: "Bash"'
-  ! frontmatter t-deps | grep -q 'matcher: "Bash\.\*'
-  frontmatter t-deps | grep -q 'if: "Bash('
+  # frontmatter hooks: 는 발동되지 않으므로(UPSTREAM.md #6) deps가 있어도 생성하지 않는다
+  ! frontmatter t-deps | grep -q '^hooks:'
+  # 등록 예시로 쓸 수 있게 example-hook.sh 는 남긴다 — 등록은 카테고리 hooks/hooks.json 이 담당
   [ -x "$TEST_DIR/skills/t-cat/t-deps/scripts/example-hook.sh" ]
 }
 
-@test "hook command path is rooted at CLAUDE_PLUGIN_ROOT without the category" {
+@test "hook guidance teaches hooks.json registration at CLAUDE_PLUGIN_ROOT" {
   scaffold t-hookpath none --dep 'jq>=1.6'
   [ "$status" -eq 0 ]
-  # $CLAUDE_PLUGIN_ROOT is the plugin (= category) install root, so the category
-  # must NOT appear again in the path. Quotes are mandatory (install paths may contain spaces).
-  frontmatter t-hookpath | grep -qF 'command: "bash \"${CLAUDE_PLUGIN_ROOT}/t-hookpath/scripts/example-hook.sh\""'
+  local body="$TEST_DIR/skills/t-cat/t-hookpath/SKILL.md"
+  # 등록 경로는 카테고리 hooks/hooks.json 이다 (frontmatter hooks: 는 발동되지 않는다)
+  grep -qF 'hooks/hooks.json' "$body"
+  # 훅 경로는 CLAUDE_PLUGIN_ROOT 를 쓴다 — 카테고리는 경로에 다시 들어가지 않는다
+  grep -qF '${CLAUDE_PLUGIN_ROOT}' "$body"
   # the old CWD-relative form silently never runs -- it must not come back
-  ! frontmatter t-hookpath | grep -q '\.claude/skills/'
-  ! frontmatter t-hookpath | grep -q 'CLAUDE_PLUGIN_ROOT}/t-cat/'
+  ! grep -qF '.claude/skills/' "$body"
+  ! grep -qF 'CLAUDE_PLUGIN_ROOT}/t-cat/' "$body"
 }
 
 # --- body script paths ------------------------------------------------------
