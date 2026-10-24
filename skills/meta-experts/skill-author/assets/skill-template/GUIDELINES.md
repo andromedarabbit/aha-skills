@@ -101,67 +101,52 @@ SKILL.md **본문**에서 스크립트를 부를 때는 `${CLAUDE_SKILL_DIR}` �
 
 ### 일반적인 훅 패턴
 
+훅은 SKILL.md frontmatter 가 아니라 **카테고리 `hooks/hooks.json` 에 등록한다** — frontmatter
+`hooks:` 는 하네스에서 발동되지 않는다 (docs/UPSTREAM.md #6). 형식: 이벤트 → matcher 목록 → 훅 배열.
+
 **1. 자동 의존성 설치 (PreToolUse):**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(tool-name *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/check-deps.sh\""
-          description: "tool-name 자동 설치"
+```json
+{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command", "if": "Bash(tool-name *)",
+    "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/check-deps.sh\"" }
+] } ] } }
 ```
 
 **2. 로그 자동 요약 (PostToolUse):**
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(command * log*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/summarize-log.sh\""
-          description: "로그 요약"
+```json
+{ "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command", "if": "Bash(command * log*)",
+    "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/summarize-log.sh\"" }
+] } ] } }
 ```
 
 **3. 시크릿 마스킹 (PostToolUse):**
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(*api*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/sanitize-output.sh\""
-          description: "시크릿 마스킹"
+```json
+{ "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command", "if": "Bash(*api*)",
+    "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/sanitize-output.sh\"" }
+] } ] } }
 ```
 
 > `PostToolWrite`는 실재하는 이벤트가 아닙니다. 출력 후처리는 `PostToolUse` + `if`로 씁니다.
 
-**4. 훅 체이닝 (여러 훅 순차 실행):**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(kubectl *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/check-kubectl.sh\""
-          description: "kubectl 확인"
-        - type: command
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/verify-context.sh\""
-          description: "클러스터 확인"
-        - type: file
-          path: "${CLAUDE_PLUGIN_ROOT}/skill-name/context.json"
-          description: "컨텍스트 로드"
+**4. 훅 체이닝 (같은 matcher 안에 훅을 나열하면 순차 실행):**
+```json
+{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command", "if": "Bash(kubectl *)",
+    "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/check-kubectl.sh\"" },
+  { "type": "command",
+    "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/verify-context.sh\"" }
+] } ] } }
 ```
 
 ### 이 스킬의 Hooks
 
-(여기에 이 스킬이 사용하는 훅과 그 이유를 설명)
+(이 스킬이 쓰는 훅은 카테고리 `hooks/hooks.json` 에 등록돼 있다. 여기에 각 훅의 목적과
+동작 시점을 설명한다. 훅이 없으면 이 절을 지운다)
 
 **사용하는 훅:**
+- PreToolUse: (목적)**사용하는 훅:**
 - PreToolUse: (목적)
 - PostToolUse: (목적)
 

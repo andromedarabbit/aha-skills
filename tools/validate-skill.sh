@@ -335,7 +335,11 @@ if [[ -f "$SKILL_PATH/SKILL.md" ]]; then
 
     # hooks 확인 (강력 권장)
     if grep -q "^hooks:" "$SKILL_PATH/SKILL.md"; then
-        echo -e "  ${GREEN}✅ hooks: (강력 권장)${NC}"
+        # 2026-10-08 실측(상류)·2026-10-24 프로브(본 저장소): frontmatter hooks: 는
+        # 하네스에서 발동되지 않는다. 정의 자체는 향후 hooks.json 이관을 위해 남겨
+        # 보되, 발동 경로가 아니라는 경고를 출력한다.
+        echo -e "  ${YELLOW}⚠️  hooks: frontmatter에 선언됨 — 하네스에서 발동되지 않는다. 카테고리 hooks/hooks.json으로 이관할 것 (docs/UPSTREAM.md #6)${NC}"
+        WARNINGS=$((WARNINGS + 1))
 
         # 훅 경로 검사 (간이). 권위 있는 검사는 tools/validate-hook-paths.sh 이고 CI 가 그걸
         # 돌린다 — 여기서는 옛 규약이 남았는지만 빠르게 본다.

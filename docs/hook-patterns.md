@@ -18,15 +18,24 @@
 - 입력값 검증
 - 설정 파일 준비
 
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
-          description: "gh 설치 확인"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\"",
+            "description": "gh 설치 확인"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ### PostToolUse
@@ -39,15 +48,24 @@ hooks:
 - 상태 업데이트
 - 추가 처리
 
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh run *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
-          description: "CI 로그 요약"
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh run *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\"",
+            "description": "CI 로그 요약"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ### 비도구 이벤트 (UserPromptSubmit, SessionStart, Stop 등)
@@ -56,13 +74,22 @@ hooks:
 
 > 참고: `matcher`는 도구 이벤트 5종(PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, PermissionDenied)에만 적용됩니다. 비도구 이벤트에는 `matcher`를 쓰지 않습니다.
 
-```yaml
-hooks:
-  SessionStart:
-    - hooks:
-        - type: command
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/init-session.sh\""
-          description: "세션 시작 시 환경 초기화"
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/init-session.sh\"",
+            "description": "세션 시작 시 환경 초기화"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ## 일반적인 패턴
@@ -160,15 +187,24 @@ fi
 4. **Use Builtins**: `command -v` > `which` (성능)
 
 **SKILL.md 예시:**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
-          description: "의존성 자동 설치"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\"",
+            "description": "의존성 자동 설치"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ### 2. 환경 감지 패턴
@@ -194,15 +230,24 @@ fi
 필요한 설정 파일을 자동으로 생성합니다.
 
 **SKILL.md:**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: file
-          if: "Bash(brew *)"
-          path: "${CLAUDE_PLUGIN_ROOT}/brew-formula/brew-config.json"
-          description: "brew 설정 로드"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "file",
+            "if": "Bash(brew *)",
+            "path": "${CLAUDE_PLUGIN_ROOT}/brew-formula/brew-config.json",
+            "description": "brew 설정 로드"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ### 4. 로그 파싱 패턴
@@ -269,62 +314,92 @@ fi
 
 `if:`는 `matcher`가 아니라 **개별 훅 항목**(`type:`·`command:`와 같은 레벨)에 둡니다. Bash 명령 패턴은 끝에 `*`를 붙여 인자가 따라오는 호출까지 매칭합니다.
 
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"          # gh 명령만
-          command: "..."
-        - type: command
-          if: "Bash(git commit*)"     # git commit 계열만
-          command: "..."
-        - type: command
-          if: "Bash(gh run *)"       # gh ci 관련 명령만
-          command: "..."
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "..."
+          },
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "..."
+          },
+          {
+            "type": "command",
+            "if": "Bash(gh run *)",
+            "command": "..."
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ### 파일 경로로 좁히기 (if 사용)
 
 파일 경로는 `**/` 더블스타로 시작해 하위 디렉터리까지 매칭합니다 (단일 `*`는 경로 구분자를 넘지 못합니다).
 
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Read"
-      hooks:
-        - type: command
-          if: "Read(**/*.yaml)"       # yaml 파일을 읽을 때만
-          command: "..."
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Read(**/*.yaml)",
+            "command": "..."
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ## 훅 체이닝
 
 여러 훅을 순서대로 실행할 수 있습니다:
 
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        # 1. 의존성 확인
-        - type: command
-          if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\""
-          description: "brew 확인"
-
-        # 2. 탭 확인
-        - type: command
-          if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/verify-tap.sh\""
-          description: "현재 tap 확인"
-
-        # 3. 설정 로드
-        - type: file
-          if: "Bash(brew *)"
-          path: "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json"
-          description: "컨텍스트 정보 로드"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(brew *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\"",
+            "description": "brew 확인"
+          },
+          {
+            "type": "command",
+            "if": "Bash(brew *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/verify-tap.sh\"",
+            "description": "현재 tap 확인"
+          },
+          {
+            "type": "file",
+            "if": "Bash(brew *)",
+            "path": "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json",
+            "description": "컨텍스트 정보 로드"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ## 훅 경로 규칙
@@ -634,15 +709,24 @@ echo "# DEBUG: Args: $@"
 **실제 사용 사례**: ci-log-doctor 스킬
 
 **SKILL.md:**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
-          description: "gh 자동 설치"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\"",
+            "description": "gh 자동 설치"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **scripts/check-deps.sh:**
@@ -687,15 +771,24 @@ fi
 **실제 사용 사례**: PostToolUse 훅 + `if:`로 대상 명령을 좁혀 출력 후처리
 
 **SKILL.md:**
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/shared/scripts/sanitize-output.sh\""
-          description: "시크릿 마스킹"
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/shared/scripts/sanitize-output.sh\"",
+            "description": "시크릿 마스킹"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **scripts/sanitize-output.sh:**
@@ -734,15 +827,24 @@ done
 **실제 사용 사례**: ci-log-doctor 스킬
 
 **SKILL.md:**
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh run *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
-          description: "CI 로그 요약"
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh run *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\"",
+            "description": "CI 로그 요약"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **scripts/summarize-ci-log.sh:**
@@ -806,34 +908,42 @@ summarize_log "$log_content"
 **실제 사용 사례**: 다단계 검증 및 준비
 
 **SKILL.md:**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        # 1단계: 의존성 확인
-        - type: command
-          if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\""
-          description: "brew 설치 확인"
-
-        # 2단계: 탭 확인
-        - type: command
-          if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/verify-tap.sh\""
-          description: "현재 tap 확인"
-
-        # 3단계: 권한 확인
-        - type: command
-          if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-permissions.sh\""
-          description: "사용자 권한 확인"
-
-        # 4단계: 컨텍스트 정보 로드
-        - type: file
-          if: "Bash(brew *)"
-          path: "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json"
-          description: "tap 정보 로드"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(brew *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\"",
+            "description": "brew 설치 확인"
+          },
+          {
+            "type": "command",
+            "if": "Bash(brew *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/verify-tap.sh\"",
+            "description": "현재 tap 확인"
+          },
+          {
+            "type": "command",
+            "if": "Bash(brew *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-permissions.sh\"",
+            "description": "사용자 권한 확인"
+          },
+          {
+            "type": "file",
+            "if": "Bash(brew *)",
+            "path": "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json",
+            "description": "tap 정보 로드"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **실행 흐름:**
@@ -863,33 +973,54 @@ Git 변경 사항을 분석하여 Conventional Commits 형식의 커밋 메시�
 **실제 사용 사례**: commit-helper 스킬
 
 **SKILL.md:**
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(git commit*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/check-deps.sh\""
-          description: "git 및 jq 설치 확인"
-        - type: command
-          if: "Bash(git commit*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/validate-git-state.sh\""
-          description: "Git 저장소 상태 검증"
-
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(git diff*)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/analyze-staged-changes.sh\""
-          description: "staged 변경 사항 분석 및 타입 추론"
-    - matcher: "Write"
-      hooks:
-        - type: command
-          if: "Write(**/commit-message.txt)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/validate-commit-message.sh\" \"$FILE\""
-          description: "커밋 메시지 형식 검증"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/check-deps.sh\"",
+            "description": "git 및 jq 설치 확인"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/validate-git-state.sh\"",
+            "description": "Git 저장소 상태 검증"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git diff*)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/analyze-staged-changes.sh\"",
+            "description": "staged 변경 사항 분석 및 타입 추론"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Write(**/commit-message.txt)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/commit-helper/scripts/validate-commit-message.sh\" \"$FILE\"",
+            "description": "커밋 메시지 형식 검증"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **scripts/analyze-staged-changes.sh:**

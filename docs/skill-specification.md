@@ -44,15 +44,10 @@ version: 1.0.0
 context: fork
 agent: general-purpose
 language: "korean"
-hooks:
-  PreToolUse:
-    - matcher: "RegexPattern"
-      hooks:
-        - type: command
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/script.sh\""
-          description: "이 훅이 하는 일 설명"
 ---
 ```
+
+훅은 frontmatter에 선언하지 않는다 — **카테고리 `hooks/hooks.json`이 유일한 발동 경로**다(아래 "훅 (Hooks)" 참고).
 
 ### 필드 설명
 
@@ -66,11 +61,15 @@ hooks:
 | `agent` | string | △ | 실행할 에이전트 유형 (`context: fork`일 때만 필수) |
 | `background` | boolean | ❌ | `context: fork` 전용. 기본값 `true`, `false`면 호출한 턴 안에서 동기 실행 |
 | `language` | string | ✅ | 콘텐츠 언어 (예: `"korean"`) |
-| `hooks` | object | ❌ | 훅 정의 |
+| `hooks` | object | ❌ | **사용하지 않음** — frontmatter 훅은 발동되지 않는다. 카테고리 `hooks/hooks.json` 사용 |
 
 ## 훅 (Hooks)
 
 훅은 특정 이벤트가 발생할 때 실행되는 스크립트입니다. Claude Code의 핵심 차별화 기능 중 하나입니다.
+
+> **등록 경로: 카테고리 `hooks/hooks.json`.** SKILL.md frontmatter의 `hooks:` 선언은 하네스에서
+> 발동되지 않는다(상류 2026-10-08 실측, 본 저장소 2026-10-24 프로브 재현 — docs/UPSTREAM.md #6).
+> 아래 예제는 모두 hooks.json 형식이다.
 
 ### 사용 가능한 훅 타입
 
@@ -106,60 +105,96 @@ hooks:
 
 #### 1. 자동 의존성 설치 (PreToolUse)
 
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
-          description: "gh 자동 설치"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\"",
+            "description": "gh 자동 설치"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **효과**: 사용자가 수동으로 도구를 설치할 필요 없이 스킬이 자동으로 처리
 
 #### 2. 로그 요약 (PostToolUse)
 
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh run *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
-          description: "CI 로그 요약"
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh run *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\"",
+            "description": "CI 로그 요약"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **효과**: 긴 CI 로그를 자동으로 요약하여 핵심 정보만 표시
 
 #### 3. 시크릿 마스킹 (PostToolUse + if)
 
-```yaml
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/shared/scripts/sanitize-output.sh\""
-          description: "시크릿 마스킹"
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/shared/scripts/sanitize-output.sh\"",
+            "description": "시크릿 마스킹"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 **효과**: API 토큰, 비밀번호 등 민감한 정보를 자동으로 마스킹
 
 ### 훅 구조
 
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"              # 도구 이름만. 정규식이 아니다
-      hooks:
-        - type: command            # command 또는 file
-          if: "Bash(gh *)"       # 명령 내용은 여기서 거른다
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/check.sh\""
-          description: "설명"      # 훅 설명
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/check.sh\"",
+            "description": "설명"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 ### 훅 경로 규칙
@@ -390,15 +425,24 @@ import yaml
 
 #### Python 스크립트 훅 예시
 
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(*python*analyze*)"
-          command: "uvx \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/analyze.py\""
-          description: "로그 분석 스크립트 실행"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(*python*analyze*)",
+            "command": "uvx \"${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/analyze.py\"",
+            "description": "로그 분석 스크립트 실행"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 #### Python Shebang

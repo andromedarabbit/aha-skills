@@ -16,13 +16,6 @@ version: 1.0.0
 context: fork
 agent: general-purpose
 language: "korean"
-hooks:
-  PreToolUse:
-    - matcher: "pattern"
-      hooks:
-        - type: command
-          command: "bash script.sh"
-          description: "설명"
 ---
 ```
 
@@ -249,6 +242,10 @@ language: "english"   # 영어 스킬
 
 이벤트 기반 훅을 정의합니다. **Claude Code의 핵심 차별화 기능**입니다.
 
+> **주의: 이 필드는 발동되지 않습니다.** frontmatter `hooks:` 선언은 하네스에서 발동되지
+> 않는 실측이 있다(상류 2026-10-08, 본 저장소 2026-10-24 프로브 재현 — docs/UPSTREAM.md #6).
+> 정규 등록 경로는 카테고리 `hooks/hooks.json`이며, 아래 "훅 구조"와 같은 형식을 거기에 쓴다.
+
 #### 훅 타입
 
 | 훅 | 설명 | 주요 사용 사례 |
@@ -263,16 +260,27 @@ language: "english"   # 영어 스킬
 
 #### 훅 구조
 
-```yaml
-hooks:
-  PreToolUse:
-    - matcher: "RegexPattern"
-      hooks:
-        - type: command
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill/script.sh\""
-          description: "이 훅의 설명"
-        - type: file
-          path: "${CLAUDE_PLUGIN_ROOT}/skill/config.json"
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "RegexPattern",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill/script.sh\"",
+            "description": "이 훅의 설명"
+          },
+          {
+            "type": "file",
+            "path": "${CLAUDE_PLUGIN_ROOT}/skill/config.json"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 #### 언제 사용하는가? (적극 사용 권장)
@@ -291,46 +299,46 @@ hooks:
 - ✅ 민감정보 제거/포맷팅
 - ⚠️ `PostToolWrite`는 실재하는 이벤트가 아니다(`tools/validate-matchers.sh`가 거부). 파일 작성 후처리는 `PostToolUse`에 `if`로 대상 경로를 좁혀 구현한다
 
-**실제 활용 예제:**
+**실제 활용 예제 (카테고리 `hooks/hooks.json`):**
 
-```yaml
-# 패턴 1: 자동 의존성 설치
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
-          description: "gh 자동 설치"
-
-# 패턴 2: CI 로그 요약
-hooks:
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh run *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
-          description: "CI 로그 요약"
-
-# 패턴 3: 훅 체이닝 (여러 훅 순차 실행)
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\""
-          description: "brew 확인"
-        - type: command
-          if: "Bash(brew *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/verify-tap.sh\""
-          description: "tap 확인"
-        - type: file
-          path: "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json"
-          description: "컨텍스트 로드"
-```
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
+          },
+          {
+            "type": "command",
+            "if": "Bash(brew *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/brew-formula/scripts/check-brew.sh\""
+          },
+          {
+            "type": "file",
+            "path": "${CLAUDE_PLUGIN_ROOT}/brew-formula/context.json"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh run *)",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/summarize-ci-log.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
 
 #### matcher
 
@@ -387,21 +395,7 @@ version: 2.0.0
 context: fork
 agent: general-purpose
 language: "korean"
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/check-deps.sh\""
-          description: "gh 설치 확인"
-  PostToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh run *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/ci-log-doctor/scripts/analyze-ci-config.sh\""
-          description: "CI 설정 분석"
+# 훅은 카테고리 hooks/hooks.json 에 등록한다 — frontmatter hooks: 는 발동되지 않는다
 ---
 ```
 

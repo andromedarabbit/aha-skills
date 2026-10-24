@@ -325,7 +325,8 @@ PY
   scaffold t-redep none --dep 'jq>=1.6'
   [ "$status" -eq 0 ]
   [ -x "$TEST_DIR/skills/t-cat/t-redep/scripts/example-hook.sh" ]
-  frontmatter t-redep | grep -q '^hooks:'
+  # frontmatter hooks: 는 발동되지 않으므로(UPSTREAM.md #6) deps가 있어도 생성하지 않는다
+  ! frontmatter t-redep | grep -q '^hooks:'
 
   scaffold t-redep none --force
   [ "$status" -eq 0 ]

@@ -19,10 +19,11 @@ agent: general-purpose
 
 language: "korean"
 
-# Hooks: 이벤트 기반 자동화 (Claude Code 고유 기능)
-# PreToolUse: 도구 실행 전 (의존성 체크, 자동 설치, 환경 검증)
-# PostToolUse: 도구 실행 후 (결과 파싱, 로그 요약, 시크릿 마스킹·출력 후처리)
-# matcher는 도구 이름(Bash, Edit 등)만 매칭한다. 명령 내용은 if로 거른다
+# Hooks: 이벤트 기반 자동화는 SKILL.md frontmatter 가 아니라
+# 카테고리 hooks/hooks.json 에 등록한다 — frontmatter hooks: 는 하네스에서
+# 발동되지 않는다 (docs/UPSTREAM.md #6).
+# - PreToolUse: 도구 실행 전 (의존성 체크, 자동 설치) / PostToolUse: 도구 실행 후 (결과 파싱, 요약, 마스킹)
+# - matcher는 도구 이름(Bash, Edit 등)만 매칭한다. 명령 내용은 if로 거른다
 #
 # 훅 경로는 반드시 ${CLAUDE_PLUGIN_ROOT} 기준으로 쓴다 (본문은 다른 변수를 쓴다 — 아래 참고):
 #   - ${CLAUDE_PLUGIN_ROOT} 는 플러그인(= 카테고리) 설치 루트다.
@@ -30,24 +31,6 @@ language: "korean"
 #   - 따옴표는 필수다. 설치 경로에 공백이 들어갈 수 있다
 #   - ${CLAUDE_SKILL_DIR} 는 훅에서 치환되지 않는다 (본문·allowed-tools 전용)
 #   - CWD 기준 상대경로는 플러그인 설치 환경에서 조용히 실행되지 않는다 → 금지
-hooks:
-  PreToolUse:
-    # 예: gh 명령 실행 전 자동 설치
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          if: "Bash(gh *)"
-          command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/script-name.sh\""
-          description: "이 훅이 하는 일에 대한 설명"
-
-  # PostToolUse:
-  #   # 예: CI 로그 자동 요약
-  #   - matcher: "Bash"
-  #     hooks:
-  #       - type: command
-  #         if: "Bash(gh run *)"
-  #         command: "bash \"${CLAUDE_PLUGIN_ROOT}/skill-name/scripts/summarize-log.sh\""
-  #         description: "로그 요약"
 ---
 
 # skill-name 스킬

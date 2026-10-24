@@ -209,15 +209,8 @@ if (( ${#deps[@]} > 0 )); then
     for dep in "${deps[@]}"; do
         deps_block="$deps_block"$'\n'"  - $(yaml_dq "$dep")"
     done
-    # matcher 는 도구 이름만 매칭한다. 명령 내용은 if 로 거른다
-    deps_block="$deps_block"$'\n'"hooks:
-  PreToolUse:
-    - matcher: \"Bash\"
-      hooks:
-        - type: command
-          if: \"Bash(your-command *)\"
-          command: \"bash \\\"$hook_base/scripts/example-hook.sh\\\"\"
-          description: \"이 훅이 하는 일에 대한 설명\""
+    # 훅은 frontmatter 가 아니라 카테고리 hooks/hooks.json 에 등록한다 —
+    # frontmatter hooks: 는 하네스에서 발동되지 않는다 (docs/UPSTREAM.md #6)
 fi
 
 context_block="context: $context_value"
@@ -245,8 +238,8 @@ bash \"$skill_dir_ref/scripts/<script>.sh\"
 - 따옴표는 필수입니다. 치환된 설치 경로에 공백이 들어갈 수 있습니다
 - CWD 기준 상대경로로 부르지 마세요. 플러그인으로 설치된 환경에는 그 경로가 없어서 첫 호출부터
   \`No such file or directory\` 로 실패합니다
-- 프론트매터 \`hooks:\` 는 \`\${CLAUDE_PLUGIN_ROOT}\` 규약을 씁니다 — **본문과 훅의 변수가
-  다릅니다.** 서로 바꿔 쓰면 치환되지 않고 조용히 깨집니다"
+- 훅 등록(카테고리 \`hooks/hooks.json\`)은 \`\${CLAUDE_PLUGIN_ROOT}\` 규약을 씁니다 — **본문과 훅의 변수가
+  다릅니다.** 서로 바꿔 쓰면 치환되지 않고 조용히 깨집니다 (frontmatter \`hooks:\` 는 발동되지 않음 — docs/UPSTREAM.md #6)"
 
 # ── 본문의 사용자 확인 섹션 (실제로 실행 가능한 방식만 안내한다) ────────────
 case "$interaction" in

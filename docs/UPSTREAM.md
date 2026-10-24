@@ -49,3 +49,14 @@
    hooks.json으로 이관했다. validate-skill·validate-matchers의 hooks.json 인정·검증은
    상류 수정을 이식했다. frontmatter `hooks:` 예시를 가르치던 CLAUDE.md·hook-patterns도
    함께 정정했다.
+
+   **재현 절차** (하네스 업데이트로 실측이 뒤집혔는지 감지용 — 마켓플레이스 2개, 훅 1개씩):
+   1. 임시 마켓플레이스를 만든다: `/tmp/hook-probe/.claude-plugin/marketplace.json`에
+      플러그인 2개(probe-fm: SKILL.md frontmatter에 PostToolUse 훅, probe-hj:
+      `hooks/hooks.json`에 동일 훅) — 훅 command는 각자 다른 마커 파일에 `echo >>` 한다.
+   2. `claude plugin marketplace add /tmp/hook-probe` 후 두 플러그인 install.
+   3. `claude -p "Bash 도구로 echo probe-run 을 실행해줘" --allowedTools "Bash"` 실행.
+   4. 마커 파일 유무로 판정: frontmatter 쪽 미발동 + hooks.json 쪽 발동이면 실측 유효.
+      둘 다 발동하면 하네스가 바뀐 것이므로 이 항목을 다시 검토한다.
+   5. `claude plugin uninstall`·`marketplace remove`로 정리.
+   (2026-10-24 실측 결과: frontmatter 미발동, hooks.json 발동 — headroom 없는 순정 세션 기준)
