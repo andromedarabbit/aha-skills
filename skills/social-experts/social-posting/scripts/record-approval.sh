@@ -11,7 +11,7 @@
 # 채워지는 곳"(lib/receipt.sh)으로 제한한다 — post-state.sh로는 approved_*를
 # set할 수 없으므로, 이 훅이 승인 기록의 유일한 입구다.
 #
-# 하네스 계약(oh-my-skills gitlab-mr-creation의 record-stage4-approval.sh가
+# 하네스 계약(이전 포크의 record-stage4-approval.sh가
 # 실제 Claude Code 바이너리 zod 스키마로 확인한 것과 동일 구조):
 #   PostToolUse 이벤트: {hook_event_name, session_id, cwd, tool_name, tool_input,
 #     tool_response, ...}

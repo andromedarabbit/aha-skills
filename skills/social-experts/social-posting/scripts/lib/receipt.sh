@@ -4,8 +4,8 @@
 # 영수증은 <job-dir>/receipt.json 하나다. approved_* 세 키(approved_digests,
 # approved_at, approved_via)는 record-approval.sh(PostToolUse 훅, matcher:
 # AskUserQuestion)만 기록할 수 있다 — 하네스가 실제 AskUserQuestion 호출과
-# 사용자 응답을 관측했을 때만 승인이 남는다(oh-my-skills gitlab-mr-creation
-# MR !35 사고의 이식). 에이전트는 post-state.sh get으로 읽을 수만 있다.
+# 사용자 응답을 관측했을 때만 승인이 남는다(이전 포크 MR 사고의
+# 이식). 에이전트는 post-state.sh get으로 읽을 수만 있다.
 #
 # 승인이 게시를 여는 열쇠이므로 저장 위치가 훅과 CLI에서 같아야 한다:
 #   1. SOCIAL_POSTING_RECEIPT 환경변수 (테스트·publish.sh가 사용)
