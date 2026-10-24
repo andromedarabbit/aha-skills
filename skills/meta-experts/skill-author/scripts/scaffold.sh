@@ -157,10 +157,9 @@ fi
 
 target_dir="$REPO_ROOT/skills/$category/$skill_name"
 rel_target="skills/$category/$skill_name"
-# 훅 command 는 $CLAUDE_PLUGIN_ROOT 기준이다. 이 변수는 **플러그인(= 카테고리) 설치 루트**를
-# 가리키므로 경로에 카테고리를 다시 넣지 않는다. CWD 상대경로 형태는 플러그인 설치 환경에서
-# 조용히 실행되지 않는다 (tools/validate-hook-paths.sh 헤더 참고).
-hook_base="\${CLAUDE_PLUGIN_ROOT}/$skill_name"
+# 훅 command 는 $CLAUDE_PLUGIN_ROOT 기준이다 — 경로에 카테고리를 다시 넣지 않는다.
+# (예전엔 이 규약의 예시 훅을 deps_block 으로 생성했으나, frontmatter hooks: 가
+# 발동되지 않는 실측으로 생성을 끊으면서 이 변수도 함께 은퇴했다 — docs/UPSTREAM.md #6)
 # 반면 SKILL.md **본문**에서는 $CLAUDE_SKILL_DIR 이 치환된다 (훅에서는 안 된다). 이 변수는
 # **스킬 디렉토리 자체**라서 뒤에 카테고리도 스킬 이름도 붙이지 않는다
 # (tools/validate-body-paths.sh 가 CI 에서 잡는다).
