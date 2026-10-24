@@ -7,6 +7,7 @@
 
 ### 변경됨
 
+- **코드 리뷰 발견 전건 적용.** 독립 교차모델 심사를 포함한 7렌즈 리뷰가 낸 12건 중 맞는 발견을 모두 고쳤다: (1) run-all-tests의 공유 bats 라벨 슬래시가 로그 경로를 깨뜨려 스위트가 미실행·통과로 집계되던 결함 + 빈 SUITES 배열이 bash 3.2에서 크래시하던 결함(회귀 테스트 3케이스 추가), (2) CI checks에 validate-python-scripts 단계 추가 — "검증기 전량" 주장을 참으로, (3) skill-author 템플릿·scaffold·표준 문서 4종에 남아 발동 불가 frontmatter `hooks:`를 가르치던 예시를 hooks.json 형식으로 일괄 전환하고 validate-skill이 frontmatter 훅을 경고하도록 전환, (4) hooks.json 검증 확장 3곳의 회귀 테스트 신설(validate-matchers 7케이스·validate-hook-paths 5케이스), (5) check-drafts.py 실행 비트 부여·requirements.txt 제거(의존성 단일 출처), (6) 회귀 테스트 10종 등 문서 수치 정정, (7) frontmatter 훅 실측의 재현 절차를 UPSTREAM.md에 기록
 - **훅 등록 경로를 frontmatter `hooks:`에서 카테고리 `hooks/hooks.json`으로 전환**. frontmatter 훅 선언은 하네스에서 발동되지 않는다(상류 2026-10-08 실측, 본 저장소 프로브 재현 2026-10-24 — 같은 조건에서 frontmatter 훅 미발동, hooks.json 훅 발동). 이 버그로 social-posting의 승인 영수증 훅이 발동하지 않고 있었으므로 hooks.json으로 이관했다
 - `validate-skill`이 hooks/hooks.json 참조를 훅 정의로 인정하고, `validate-matchers`가 hooks.json의 이벤트·matcher를 검증하며, `validate-hook-paths`가 hooks.json의 command 경로를 검증한다 (validate-skill·validate-matchers는 상류 수정 이식, hook-paths는 자체 확장)
 - social-posting을 0.8.0으로 올렸다 (훅 이관)

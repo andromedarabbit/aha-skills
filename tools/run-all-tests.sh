@@ -70,6 +70,12 @@ while IFS= read -r bats_file; do
   SUITES+=("bats|$bats_file|shared/$suite_name")
 done < <(find skills -path "*/shared/tests/*.bats" -type f | sort)
 
+if [[ ${#SUITES[@]} -eq 0 ]]; then
+  echo "=== Done ==="
+  echo "⚠️  No tests found."
+  exit 0
+fi
+
 echo "▶️  ${#SUITES[@]} suite(s), $JOBS parallel"
 echo ""
 
@@ -79,7 +85,9 @@ export LOGDIR
 
 run_one() {
   local kind="$1" path="$2" label="$3"
-  local log="$LOGDIR/$label.log"
+  # 라벨의 슬래시는 로그 파일명이 아니라 경로로 해석된다 — shared/<이름> 라벨이
+  # 존재하지 않는 하위 디렉토리를 만들어 리다이렉트·.fail 마커가 조용히 실패한다.
+  local log="$LOGDIR/${label//\//__}.log"
   if [[ "$kind" == "bats" ]]; then
     bats "$path" >"$log" 2>&1
   else
@@ -92,7 +100,7 @@ export -f run_one
 set +e
 printf '%s\0' "${SUITES[@]}" | xargs -0 -n1 -P "$JOBS" bash -c '
   IFS="|" read -r kind path label <<< "$1"
-  run_one "$kind" "$path" "$label" || touch "$LOGDIR/$label.fail"
+  run_one "$kind" "$path" "$label" || touch "$LOGDIR/${label//\//__}.fail"
 ' _
 xargs_rc=$?
 set -e
@@ -102,10 +110,10 @@ FAILED=0
 for suite_entry in "${SUITES[@]}"; do
   IFS="|" read -r _ path label <<< "$suite_entry"
   relative_path="${path#"$REPO_ROOT/"}"
-  if [[ -f "$LOGDIR/$label.fail" ]]; then
+  if [[ -f "$LOGDIR/${label//\//__}.fail" ]]; then
     FAILED=$((FAILED + 1))
     echo "❌ [$label] $relative_path"
-    cat "$LOGDIR/$label.log"
+    cat "$LOGDIR/${label//\//__}.log"
     echo ""
   else
     echo "✅ [$label] $relative_path"

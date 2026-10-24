@@ -224,7 +224,7 @@ Stage 4 승인 영수증 훅이 한 번도 실행되지 않은 채 "승인 게�
 
 | 변수 | 치환되는 곳 | 가리키는 것 | 뒤에 붙는 것 |
 |---|---|---|---|
-| `${CLAUDE_PLUGIN_ROOT}` | 프론트매터 `hooks:` | 카테고리(플러그인) 루트 | `<skill>/scripts/...` |
+| `${CLAUDE_PLUGIN_ROOT}` | 훅 등록 (카테고리 `hooks/hooks.json`) | 카테고리(플러그인) 루트 | `<skill>/scripts/...` |
 | `${CLAUDE_SKILL_DIR}` | SKILL.md **본문**, `allowed-tools` | **스킬 디렉토리 자체** | 바로 `scripts/...` |
 | `$SKILL_DIR` | (치환 없음) | 읽는 쪽이 직접 정하는 값 | 바로 `scripts/...` |
 | 스크립트 내부 | (치환 없음) | `$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)` 기준 | 자기 위치에서 계산 |
@@ -261,7 +261,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/my-skill/scripts/x.sh"        # 본문에서는 치�
 
 GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니다.
 
-- `checks` — 검증기 전량 + 검증기 자신의 회귀 테스트 9종. bats 없이 돌아갑니다(검증 스택의 무결성을 서드파티 설치 없이 증명). `generate-index.sh` 실행 후 `git diff --exit-code`로 **인덱스 드리프트도 게이트**합니다
+- `checks` — 검증기 전량 + 검증기 자신의 회귀 테스트 10종. bats 없이 돌아갑니다(검증 스택의 무결성을 서드파티 설치 없이 증명). `generate-index.sh` 실행 후 `git diff --exit-code`로 **인덱스 드리프트도 게이트**합니다
 - `tests` — bats 설치 후 `./tools/run-all-tests.sh`
 
 실행 대상: PR, `main` push, 수동 트리거(`workflow_dispatch`).
@@ -278,14 +278,15 @@ GitHub Actions: `.github/workflows/validate.yml`. 잡 2개가 병렬로 돕니�
 - `check-skill-frontmatter` - 프론트매터 형식 검증
 - `validate-skill` - 스킬 구조 준수 확인
 - `validate-matchers` - 훅 matcher·이벤트 이름 검증
-- `validate-hook-paths` - 프론트매터 훅 경로 검증
+- `validate-hook-paths` - 프론트매터·hooks.json 훅 경로 검증
 - `validate-body-paths` - SKILL.md 본문·딸린 문서의 스크립트 경로 검증
 - `validate-aside-payloads` - 자연어 실행 계층(aside) 페이로드 인라인 검증 — 파일 경로 전달 지시 오류, 기타 경로 경고(`# aside-path-ok` 억제)
 - `validate-mktemp-templates` - mktemp 템플릿 `XXXXXX` 접미사 검증 (macOS BSD 랜덤화 우회 차단)
+- `validate-python-scripts` - 파이썬 진입점 의존성 선언 검증 (python3 셔뱅 + 서드파티 import 반쪽 상태 차단)
 - `validate-marketplace` - marketplace.json ↔ skills/ 정합성 검증
 - `fix-shell-permissions` - scripts/ 셸 스크립트 실행 권한 부여
 
-`tools/test-*.sh`(검증기 회귀 테스트 9종)는 pre-commit에도 `run-all-tests.sh`에도 들어있지 않습니다 — CI의 `checks` 잡이 명시적으로 호출합니다. 검증기를 고쳤으면 로컬에서 직접 돌리세요.
+`tools/test-*.sh`(검증기 회귀 테스트 10종)는 pre-commit에도 `run-all-tests.sh`에도 들어있지 않습니다 — CI의 `checks` 잡이 명시적으로 호출합니다. 검증기를 고쳤으면 로컬에서 직접 돌리세요.
 
 ## 언어 가이드라인
 
