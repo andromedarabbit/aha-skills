@@ -43,6 +43,21 @@ assert_exit_code() {
   fi
 }
 
+assert_not_contains() {
+  local needle="$1"
+  local haystack="$2"
+  local message="$3"
+  # 방향이 반대라 더 위험하다 — grep 조기 종료가 pipefail로 이 `if` 를 거짓으로 만들면
+  # **있으면 안 되는 것이 있는데도 조용히 통과**한다. 순수 bash 매칭으로 그 경로를 없앤다.
+  if [[ "$haystack" == *"$needle"* ]]; then
+    echo "❌ $message"
+    echo "   expected NOT to contain: $needle"
+    echo "   output:"
+    printf '%s\n' "$haystack"
+    exit 1
+  fi
+}
+
 tmp_root="$(mktemp -d)"
 trap 'rm -rf "$tmp_root"' EXIT
 
@@ -621,5 +636,90 @@ run_case absolute_hook_path
 run_case relative_hook_path
 run_case invalid_plugins_root
 run_case invalid_plugin_entry
+
+# ── hooks/hooks.json command 경로 검증 (2.5 섹션) ─────────────────────────
+# 훅 등록의 정규 경로가 hooks.json이므로(UPSTREAM.md #6) 이 경로의 결함도 회귀로 막는다.
+run_hj_case() {
+  local case_name="$1" json_body="$2"
+  local repo="$tmp_root/$case_name"
+  mkdir -p "$repo/skills/cat-a/hooks" "$repo/skills/cat-a/skill-x/scripts"
+  printf '%s\n' "$json_body" > "$repo/skills/cat-a/hooks/hooks.json"
+  printf '#!/bin/bash\ntrue\n' > "$repo/skills/cat-a/skill-x/scripts/real.sh"
+  # 이 검증기는 자기 위치에서 역산한 저장소만 스캔하므로 스크립트를 가짜 저장소로 복사해 실행한다
+  mkdir -p "$repo/tools"
+  cp "$SCRIPT_PATH" "$repo/tools/validate-hook-paths.sh"
+  # 검증기 1구역(SKILL.md 스캔)이 FATAL로 죽지 않도록 최소 SKILL.md를 둔다
+  cat > "$repo/skills/cat-a/skill-x/SKILL.md" <<'SKILL_EOF'
+---
+name: skill-x
+description: test
+version: 1.0.0
+context: fork
+agent: general-purpose
+language: "korean"
+---
+SKILL 본문
+SKILL_EOF
+  set +e
+  LAST_OUT="$(bash "$repo/tools/validate-hook-paths.sh" 2>&1)"
+  LAST_RC=$?
+  set -e
+}
+
+# J1) 유효 hooks.json → 통과 표시 + exit 0
+run_hj_case j-valid '{
+  "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+    { "type": "command", "if": "Bash(gh *)",
+      "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-x/scripts/real.sh\"" }
+  ] } ] }
+}'
+assert_exit_code 0 "$LAST_RC" "유효 hooks.json은 통과해야 함"
+assert_contains "✅ skills/cat-a/hooks/hooks.json (command 1건)" "$LAST_OUT" "유효 hooks.json 표시가 나와야 함"
+assert_not_contains "참조 대상 없음" "$LAST_OUT" "실재하는 대상은 오류로 보면 안 됨"
+echo "✅ case j-valid"
+
+# J2) 옛 규약(.claude/skills) → 오류
+run_hj_case j-old-path '{
+  "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+    { "type": "command",
+      "command": "bash .claude/skills/cat-a/skill-x/scripts/real.sh" }
+  ] } ] }
+}'
+assert_exit_code 1 "$LAST_RC" "옛 규약 경로는 실패해야 함"
+assert_contains "옛 규약(CWD 상대경로)" "$LAST_OUT" "옛 규약을 잡아야 함"
+echo "✅ case j-old-path"
+
+# J3) 치환 불가 변수(${CLAUDE_SKILL_DIR}) → 오류
+run_hj_case j-skill-dir-var '{
+  "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+    { "type": "command",
+      "command": "bash \"${CLAUDE_SKILL_DIR}/scripts/real.sh\"" }
+  ] } ] }
+}'
+assert_exit_code 1 "$LAST_RC" "치환 불가 변수는 실패해야 함"
+assert_contains "치환되지 않는 변수" "$LAST_OUT" "치환 불가 변수를 잡아야 함"
+echo "✅ case j-skill-dir-var"
+
+# J4) 참조 대상 스크립트 없음 → 오류
+run_hj_case j-missing-target '{
+  "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+    { "type": "command",
+      "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-x/scripts/nope.sh\"" }
+  ] } ] }
+}'
+assert_exit_code 1 "$LAST_RC" "참조 대상 없는 경로는 실패해야 함"
+assert_contains "참조 대상 없음: skill-x/scripts/nope.sh" "$LAST_OUT" "없는 대상을 잡아야 함"
+echo "✅ case j-missing-target"
+
+# J5) 참조 스킬 디렉토리 없음 → 오류
+run_hj_case j-missing-skill '{
+  "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+    { "type": "command",
+      "command": "bash \"${CLAUDE_PLUGIN_ROOT}/ghost-skill/scripts/real.sh\"" }
+  ] } ] }
+}'
+assert_exit_code 1 "$LAST_RC" "없는 스킬 디렉토리 참조는 실패해야 함"
+assert_contains "참조 스킬 디렉토리 없음: ghost-skill" "$LAST_OUT" "없는 스킬 디렉토리를 잡아야 함"
+echo "✅ case j-missing-skill"
 
 echo "✅ validate-hook-paths 회귀 테스트 통과"

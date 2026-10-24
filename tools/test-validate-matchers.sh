@@ -159,9 +159,100 @@ echo "✅ case wide-bash"
 #    의도는 "선언했는데 안 잡힌다"이므로 조건을 그쪽으로 좁혔고, 이 케이스가 그 회귀를 막는다.
 run_with_hooks "no-hooks" ''
 assert_exit_code 0 "$LAST_RC" "훅 없는 트리는 통과해야 함"
-assert_contains "훅을 선언한 스킬이 없습니다" "$LAST_OUT" "훅 0건 안내가 나와야 함"
+assert_contains "훅을 선언한 스킬·hooks.json이 없습니다" "$LAST_OUT" "훅 0건 안내가 나와야 함"
 assert_not_contains "❌" "$LAST_OUT" "훅 없는 트리를 실패로 보고하면 안 됨"
 echo "✅ case no-hooks"
+
+# ── hooks/hooks.json 이벤트·matcher 검증 (frontmatter와 같은 버그 클래스) ──
+
+# hooks.json을 가진 단일 카테고리 repo를 만들고 검증기를 실행.
+run_with_hooks_json() {
+  local case_name="$1" json_body="$2"
+  local repo="$tmp_root/$case_name"
+  mkdir -p "$repo/skills/cat/hooks"
+  printf '%s\n' "$json_body" > "$repo/skills/cat/hooks/hooks.json"
+
+  set +e
+  LAST_OUT="$(bash "$SCRIPT_PATH" "$repo" 2>&1)"
+  LAST_RC=$?
+  set -e
+}
+
+# H1) 정상 hooks.json → 통과, matcher 2건 검사
+run_with_hooks_json "hj-valid" '{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [
+        { "type": "command", "if": "Bash(gh *)",
+          "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-x/scripts/a.sh\"" }
+      ]}
+    ],
+    "PostToolUse": [
+      { "matcher": "mcp__example__resource_(create|update)_action", "hooks": [
+        { "type": "command",
+          "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skill-x/scripts/b.sh\"" }
+      ]}
+    ]
+  }
+}'
+assert_exit_code 0 "$LAST_RC" "정상 hooks.json은 통과해야 함"
+assert_contains "오류 0건" "$LAST_OUT" "정상 hooks.json은 오류 0건"
+assert_contains "hooks.json" "$LAST_OUT" "hooks.json이 검사됐음을 표시해야 함"
+echo "✅ case hj-valid"
+
+# H2) 존재하지 않는 이벤트 → 실패
+run_with_hooks_json "hj-bad-event" '{
+  "hooks": {
+    "PostToolWrite": [
+      { "matcher": "Bash", "hooks": [
+        { "type": "command", "command": "true" }
+      ]}
+    ]
+  }
+}'
+assert_exit_code 1 "$LAST_RC" "hooks.json의 PostToolWrite는 실패해야 함"
+assert_contains "존재하지 않는 hook 이벤트 'PostToolWrite'" "$LAST_OUT" "hooks.json 이벤트 검사가 작동해야 함"
+echo "✅ case hj-bad-event"
+
+# H3) 발동 불가 matcher → 실패
+run_with_hooks_json "hj-content-matcher" '{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash.*git.*commit", "hooks": [
+        { "type": "command", "command": "true" }
+      ]}
+    ]
+  }
+}'
+assert_exit_code 1 "$LAST_RC" "hooks.json 내용 matcher는 실패해야 함"
+assert_contains "절대 발동 안 함" "$LAST_OUT" "hooks.json matcher 검사가 작동해야 함"
+echo "✅ case hj-content-matcher"
+
+# H4) JSON 깨짐 → 실패
+run_with_hooks_json "hj-broken-json" '{"hooks": {'
+assert_exit_code 1 "$LAST_RC" "깨진 hooks.json은 실패해야 함"
+assert_contains "JSON 파싱 실패" "$LAST_OUT" "JSON 파싱 실패를 보고해야 함"
+echo "✅ case hj-broken-json"
+
+# H5) hooks 키 누락 → 실패
+run_with_hooks_json "hj-no-hooks-key" '{"not-hooks": {}}'
+assert_exit_code 1 "$LAST_RC" "'hooks' 키 없는 hooks.json은 실패해야 함"
+assert_contains "'hooks' 키가 없거나 객체가 아님" "$LAST_OUT" "hooks 키 검사가 작동해야 함"
+echo "✅ case hj-no-hooks-key"
+
+# H6) hooks.json만 있고 frontmatter 훅이 없는 트리 — 0건 가드가 거짓 안내를 내지 않는다
+run_with_hooks_json "hj-only" '{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [
+        { "type": "command", "command": "true" }
+      ]}
+    ]
+  }
+}'
+assert_exit_code 0 "$LAST_RC" "hooks.json만 있는 트리는 통과해야 함"
+assert_not_contains "훅을 선언한 스킬이 없습니다" "$LAST_OUT" "hooks.json이 있으면 0건 안내를 내지 않아야 함"
+echo "✅ case hj-only"
 
 echo ""
 echo "✅ 모든 테스트 통과"
