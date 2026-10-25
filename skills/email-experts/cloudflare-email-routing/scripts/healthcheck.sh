@@ -103,7 +103,7 @@ if ! command -v cf >/dev/null 2>&1; then
 else
   settings="$(cf email-routing settings get -z "$ZONE" 2>/dev/null || true)"
   enabled="$(jq -r '.enabled // empty' <<<"$settings" 2>/dev/null || true)"
-  rules="$(cf email-routing rules list -z "$ZONE" 2>/dev/null || true)"
+  rules="$(cf email-routing rules list-account -z "$ZONE" 2>/dev/null || true)"
   rule_count="$(jq -r 'if type=="array" then length else empty end' <<<"$rules" 2>/dev/null || true)"
   expected_rules="$(jq -r '.routing.rule_count' "$BASELINE")"
   if [[ -z "$enabled" || -z "$rule_count" ]]; then
