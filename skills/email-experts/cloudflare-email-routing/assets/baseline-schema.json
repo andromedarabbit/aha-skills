@@ -1,0 +1,23 @@
+{
+  "$comment": "기준선(baseline) 파라미터 스키마. 실측값은 이 파일에 넣지 않는다 — 호출자가 도메인별 JSON을 만들어 healthcheck.sh --baseline 으로 넘긴다. 아래 값은 모두 자리표시자(example.com)다.",
+  "zone": "example.com",
+  "captured_at": "YYYY-MM-DD",
+  "dmarc": {
+    "policy": "none | quarantine | reject",
+    "rua_required": true
+  },
+  "spf": "v=spf1 include:_spf.example.net -all",
+  "dkim": {
+    "selector": "selector1"
+  },
+  "mx": [
+    "mx1.example.net",
+    "mx2.example.net"
+  ],
+  "routing": {
+    "enabled": true,
+    "rule_count": 0,
+    "catch_all": "unset | forward | drop"
+  },
+  "notes": "자유 기재 — 실측 근거 링크나 변경 이력"
+}

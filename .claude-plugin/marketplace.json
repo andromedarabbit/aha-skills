@@ -31,6 +31,15 @@
       "skills": [
         "./social-posting"
       ]
+    },
+    {
+      "name": "email-experts",
+      "description": "메일 운영 스킬 — Cloudflare Email Routing + Gmail 조합의 라우팅 검수, SPF·DKIM·DMARC 진단, DMARC 리포트 분석, 월간 헬스체크",
+      "source": "./skills/email-experts",
+      "strict": false,
+      "skills": [
+        "./cloudflare-email-routing"
+      ]
     }
   ]
 }
