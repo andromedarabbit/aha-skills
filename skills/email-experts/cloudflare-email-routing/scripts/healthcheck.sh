@@ -57,6 +57,10 @@ jq -e '.zone and .dmarc.policy and .spf and .dkim.selector and .mx and .routing.
 
 [[ "$(jq -r '.zone' "$BASELINE")" == "$ZONE" ]] || env_fail "baseline.zone 과 --zone 이 다르다"
 
+# DNS 자체가 실패하면(SERVFAIL, REFUSED, 응답 없음) 빈 결과가 "레코드 없음"으로 보고되지 않도록 먼저 막는다
+dns_status="$(dig +time=3 +tries=2 +noall +comments SOA "$ZONE" 2>/dev/null | grep -o 'status: [A-Z]*' | head -1 || true)"
+[[ "$dns_status" == "status: NOERROR" ]] || env_fail "DNS 조회 실패 (${dns_status:-응답 없음}) — 결과를 신뢰할 수 없어 판정하지 않는다"
+
 RESULTS="$(mktemp "${TMPDIR:-/tmp}/ehc.XXXXXX")"
 trap 'rm -f "$RESULTS"' EXIT
 ENV_ERROR=0
@@ -112,6 +116,7 @@ else
   settings="$(cf email-routing settings get -z "$ZONE" 2>/dev/null || true)"
   # false 를 빈 값으로 바꾸는 // empty 를 쓰지 않는다 — 비활성은 fail 이고 조회 실패와 구분돼야 한다
   enabled="$(jq -r 'if has("enabled") then (.enabled | tostring) else empty end' <<<"$settings" 2>/dev/null || true)"
+  # 실제 명령은 rules list-account 다(rules list 는 없다). catch-all 규칙도 배열에 포함된다
   rules="$(cf email-routing rules list-account -z "$ZONE" 2>/dev/null || true)"
   rule_count="$(jq -r 'if type=="array" then length else empty end' <<<"$rules" 2>/dev/null || true)"
   if [[ -z "$enabled" || -z "$rule_count" ]]; then
@@ -152,7 +157,10 @@ else
 fi
 
 if [[ -n "$MD_OUT" ]]; then
-  render_md > "$MD_OUT"
+  if ! render_md > "$MD_OUT"; then
+    echo "환경 오류: --md-out 쓰기 실패 ($MD_OUT)" >&2
+    exit 2
+  fi
 fi
 
 if [[ "$ENV_ERROR" == 1 ]]; then exit 2; fi

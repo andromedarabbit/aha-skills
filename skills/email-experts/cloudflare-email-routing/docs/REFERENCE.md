@@ -25,12 +25,12 @@ cf auth login      # 브라우저 OAuth (대화형 — 사용자가 직접 실�
 cf email-routing settings get -z <zone>      # enabled, status 등
 cf email-routing settings update|apply       # 쓰기 — 게이트 필수
 cf email-routing addresses list -z <zone>    # 목적지 주소
-cf email-routing rules list -z <zone>        # 규칙 목록 (배열)
+cf email-routing rules list-account -z <zone>  # 규칙 목록 (배열, catch-all 규칙 포함). `rules list`는 없는 명령이다
 cf email-routing dns get -z <zone>           # 필요한 MX·TXT 레코드 세트
 cf email-routing enable|disable -z <zone>    # 쓰기 — 승인 필요
 ```
 
-`cf email-routing rules list`가 배열을 준다는 가정은 헬스체크 스크립트 C6에서 `jq`로 검사한다. 배열이 아니면 C6은 "조회 실패(환경 오류)"로 보고한다.
+`cf email-routing rules list-account`가 배열을 준다는 가정은 헬스체크 스크립트 C6에서 `jq`로 검사한다. 실측 응답은 `[{id, matchers, actions, enabled, priority, source}]` 형태이고, catch-all 규칙도 배열 원소 하나로 들어간다. 배열이 아니면 C6은 "조회 실패(환경 오류)"로 보고한다.
 
 ### Email Sending (권한 의존)
 
