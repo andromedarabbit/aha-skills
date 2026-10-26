@@ -116,7 +116,7 @@ DMARC 집계 리포트(RFC 7489 Appendix C)에서 쓰는 필드:
 | R4 ARC | Email Service는 ARC를 지원한다고 공식 문서에 명시 (postmaster 문서) | 확정 |
 | R5 한계 | 규칙 200/도메인, 목적지 200/계정, 인바운드 25 MiB | 확정 |
 | R6 send-as 검증 | GUIDELINES 4절 decision table로 정리. 조건부 정합은 R1 결과에 의존 | 흐름 확정, 활성 여부 미확정 |
-| R7 `_dmarc` 현재값 | 1개 레코드, `p=quarantine`, rua 2개. cf API와 dig 일치 | 확정 (값은 baseline으로만 사용) |
+| R7 `_dmarc` 현재값 | 레코드 개수와 정책을 cf API(FQDN 이름)와 dig로 대조하는 절차를 확인했다. 실측값은 문서에 두지 않고 baseline으로만 보관한다 | 확정 (절차). 값은 문서 밖에 둔다 |
 | R8 email-auth·email-security | `email-auth`는 DMARC 리포트 조회 등, `email-security`는 인바운드 보안 정책 | 판정 완료 (GUIDELINES 8절) |
 | R9 통지 드라이런 | 실행하지 않음 (브리프 지시) | 보류 — 대화형 게이트에서 승인 후 실행 |
 | R10 리포트 Gmail 접근 | 인터랙티브 전용으로 확정. `dmarc_report.py` I/O 계약 확정 | 확정 |

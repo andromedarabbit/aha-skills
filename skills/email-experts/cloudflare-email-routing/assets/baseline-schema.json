@@ -3,8 +3,7 @@
   "zone": "example.com",
   "captured_at": "YYYY-MM-DD",
   "dmarc": {
-    "policy": "none | quarantine | reject",
-    "rua_required": true
+    "policy": "none | quarantine | reject"
   },
   "spf": "v=spf1 include:_spf.example.net -all",
   "dkim": {
@@ -16,8 +15,7 @@
   ],
   "routing": {
     "enabled": true,
-    "rule_count": 0,
-    "catch_all": "unset | forward | drop"
+    "rule_count": 0
   },
   "notes": "자유 기재 — 실측 근거 링크나 변경 이력"
 }

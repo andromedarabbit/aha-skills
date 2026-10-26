@@ -1,5 +1,7 @@
 # 플레이북: 헬스체크 (모드 C)
 
+`$SKILL_DIR`은 이 스킬의 설치 디렉터리(`docs/` 상위)다. 호출 시 `${CLAUDE_SKILL_DIR}`에 해당하는 절대 경로로 바꿔 넣고 실행한다.
+
 무인 실행 계약이다. 프롬프트 첫 줄이 `무인 실행:`으로 시작하면 이 절차만 따른다. 읽기 전용이며 질문하지 않는다.
 
 ## 입력
@@ -36,7 +38,11 @@ exit 0 → 카드 코멘트만: "정상: 7 체크 통과" (통지 없음)
 exit 1 → 카드 코멘트 + notify.sh --subject "[email 점검] 이상 N건" --body-file <md>
          → notify.sh exit 0: 완료 기록
          → notify.sh exit 3: 카드 CRITICAL 마킹 (다음 attended 세션에서 처리)
-exit 2 → 환경 오류 보고 (dig 체크 결과 포함) + notify.sh 동일 절차
+exit 2 → 환경 오류 보고 + notify.sh --subject "[email 점검] 환경 오류" --body-file <md> (동일 절차)
+         healthcheck.sh는 --md-out 에 환경 오류 사유를 남기므로 본문 파일이 항상 존재한다.
+         본문 파일이 없으면 notify.sh 가 exit 2 로 끝나고, 그 사실을 카드에 적는다.
+
+통지 수신처는 `NOTIFY_TO`(운영자 본인 주소)로 고정한다. 무인 실행은 이 한 건의 통지 외에는 메일을 보내지 않는다.
 ```
 
 `notify.sh`에는 `NOTIFY_FROM`, `NOTIFY_TO`, 선택적으로 `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`이 환경에 있어야 한다. 값이 없으면 exit 2로 실패하고 그 사실을 카드에 적는다. 값을 프롬프트나 카드에 쓰지 않는다.
@@ -54,10 +60,24 @@ exit 2 → 환경 오류 보고 (dig 체크 결과 포함) + notify.sh 동일 �
 
 ## 금지
 
-- 쓰기 명령 실행: `cf dns records update|delete`, `cf email-routing enable|disable|settings update`, `cf email-sending send`
+- DNS·라우팅 쓰기 명령 실행: `cf dns records update|delete`, `cf email-routing enable|disable|settings update`
+- `cf email-sending send`를 직접 호출하는 것. 발송은 `notify.sh`를 통해 `NOTIFY_TO`로만 한다
 - baseline 자동 갱신 — 기준은 사람이 바꾼다
 - Gmail 접근
 - 실패 항목을 조용히 무시하는 것 — 모든 실패는 카드에 남는다
+
+## 무인 프롬프트 예시
+
+첫 줄은 반드시 `무인 실행:`이다. baseline은 저장소 밖의 고정 경로(예: 운영자 홈의 설정 디렉터리)에 두고, 자격증명은 환경변수로만 준다. 저장소에 커밋하지 않는다.
+
+```text
+무인 실행: 이 프롬프트는 헬스체크 모드만 수행한다. 질문하지 않는다.
+zone: <도메인>
+baseline: <운영자 설정 디렉터리>/<도메인>.json
+절차: docs/playbook-healthcheck.md 를 따른다. healthcheck.sh 를 정확히 1회 실행하고 EXIT 를 읽는다.
+exit 1 또는 2 이면 notify.sh 로 NOTIFY_TO 에게 1건만 통지한다. DNS·라우팅 쓰기는 하지 않는다.
+결과 카드 코멘트에는 C1~C7 표와 exit 코드를 남긴다.
+```
 
 ## 등록 절차 (사람이 수행)
 
