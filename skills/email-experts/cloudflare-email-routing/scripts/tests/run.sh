@@ -95,6 +95,7 @@ mkdir -p "$STUB"
 cat >"$STUB/dig" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
+  *"+comments"*SOA*) printf ';; ->>HEADER<<- opcode: QUERY, status: %s, id: 1\n' "${STUB_DNS_STATUS:-NOERROR}" ;;
   *"_dmarc."*) printf '%s\n' "${STUB_DMARC-"\"v=DMARC1; p=quarantine; rua=mailto:r@example.com\""}" ;;
   *"_domainkey."*) printf '%s\n' "${STUB_DKIM-"\"v=DKIM1; k=rsa; p=abc\""}" ;;
   *"MX"*) printf '%s\n' "${STUB_MX-$'10 mx1.example.net.\n20 mx2.example.net.'}" ;;
@@ -109,7 +110,7 @@ case "$*" in
   *"settings get"*)
     [[ "${STUB_CF_SETTINGS_EXIT:-0}" == 0 ]] || { echo "401 Unauthorized" >&2; exit 1; }
     printf '{"enabled": %s}\n' "${STUB_CF_ENABLED-true}" ;;
-  *"rules list"*)
+  *"rules list-account"*)
     rules="${STUB_CF_RULES-}"
     [[ -n "$rules" ]] || rules='[{"name": "forward-all"}]'
     printf '%s\n' "$rules" ;;
@@ -193,6 +194,13 @@ expect_contains "헬스체크: dig 체크는 계속 보고" "_dmarc TXT 개수"
 # 인자 값 누락 → 무한 루프 없이 exit 2
 expect_bounded_exit "헬스체크: --zone 값 누락" 2 bash "$HC" --zone
 expect_bounded_exit "헬스체크: --baseline 값 누락" 2 bash "$HC" --zone "$ZONE" --baseline
+
+# DNS 실패(SERVFAIL) → 빈 결과를 실패로 판정하지 않고 exit 2
+expect_exit "헬스체크: DNS SERVFAIL은 환경 오류" 2 env STUB_DNS_STATUS=SERVFAIL bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
+expect_err_contains "헬스체크: DNS 실패 사유 표시" "DNS 조회 실패"
+
+# --md-out 쓰기 실패 → exit 2
+expect_exit "헬스체크: --md-out 쓰기 실패는 exit 2" 2 bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json" --md-out "$TMP/no-such-dir/x.md"
 
 # baseline 불량, zone 불일치 → exit 2
 echo '{"zone": "example.com"}' >"$TMP/bad.json"

@@ -64,7 +64,7 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 
 ## 모드 B — 온보딩·검수
 
-1. **현재 라우팅 상태**: `cf email-routing settings get`, `cf email-routing addresses list`, `cf email-routing rules list`로 활성 여부, 목적지 주소, 규칙을 조회한다. 목록 출력 형식은 `cf schema`로 확인한다.
+1. **현재 라우팅 상태**: `cf email-routing settings get`, `cf email-routing addresses list`, `cf email-routing rules list-account`로 활성 여부, 목적지 주소, 규칙을 조회한다. 목록 출력 형식은 `cf schema`로 확인한다.
 2. **DNS 상태**: `dig`로 MX·SPF·DKIM·DMARC를 확인하고 `cf email-routing dns get`으로 Cloudflare가 요구하는 레코드와 대조한다.
 3. **검수 체크리스트**: `docs/GUIDELINES.md`의 정합 매트릭스와 send-as decision table로 발신 경로를 분류한다.
 4. **보고**: 불일치는 항목별로 현재값·기대값·조치안을 표로 정리한다. 조치는 쓰기 게이트를 거쳐 하나씩 실행한다.
