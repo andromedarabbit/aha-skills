@@ -19,7 +19,7 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 
 ## 무인 실행 규칙
 
-프롬프트 첫 줄에 `무인 실행:`으로 시작하는 선언이 있으면 **헬스체크 모드만** 실행한다. 읽기 전용 점검과 카드 코멘트 게시까지만 하고, 질문하지 않으며, 쓰기 명령(`cf dns records update`·`delete`·`cf email-routing` 변경·`cf email-sending send`)을 실행하지 않는다. 절차는 `${CLAUDE_SKILL_DIR}/docs/playbook-healthcheck.md`를 따른다. 무인 경로는 Gmail에 의존하지 않는다.
+프롬프트 첫 줄에 `무인 실행:`으로 시작하는 선언이 있으면 **헬스체크 모드만** 실행한다. 읽기 전용 점검과 카드 코멘트 게시까지만 하고, 질문하지 않으며, DNS·라우팅 쓰기 명령(`cf dns records update`·`delete`·`cf email-routing` 변경)을 실행하지 않는다. 발송은 `notify.sh`를 통해 수신처가 `NOTIFY_TO`(운영자 본인 주소)인 이상 알림 1건으로만 허용한다. 무인 실행이 장애를 알릴 수 있어야 하므로 이 예외는 의도된 것이다. 임의 수신처로의 `cf email-sending send` 직접 호출은 금지한다. 절차는 `${CLAUDE_SKILL_DIR}/docs/playbook-healthcheck.md`를 따른다. 무인 경로는 Gmail에 의존하지 않는다.
 
 ## 모드 판별
 
@@ -34,7 +34,7 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 
 ## 입력 — baseline 파라미터
 
-도메인별 기준값(DMARC 정책, SPF 값, DKIM 셀렉터, MX 집합, 라우팅 규칙 수, catch-all 상태)은 스킬에 없다. 호출자가 `assets/baseline-schema.json` 형식의 JSON을 파라미터로 넘긴다. baseline이 없으면 모드 C·D는 중단하고 baseline을 요청한다. 모드 A·B는 현재 값을 먼저 조회해 사용자에게 보여주고 기준을 함께 확정한다.
+도메인별 기준값(DMARC 정책, SPF 값, DKIM 셀렉터, MX 집합, 라우팅 규칙 수)은 스킬에 없다. 호출자가 `assets/baseline-schema.json` 형식의 JSON을 파라미터로 넘긴다. baseline이 없으면 모드 C·D는 중단하고 baseline을 요청한다. 모드 A·B는 현재 값을 먼저 조회해 사용자에게 보여주고 기준을 함께 확정한다.
 
 ## 안전 규칙 — 쓰기 게이트
 
@@ -48,7 +48,7 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 
 다음은 금지다.
 
-- 무인 실행에서 쓰기 명령 실행
+- 무인 실행에서 DNS·라우팅 쓰기 명령 실행, 또는 `NOTIFY_TO` 외 수신처로의 발송
 - 승인 없이 `cf dns records delete` 또는 `--force` 사용
 - Email Routing 활성·비활성 토글(`cf email-routing enable|disable`)을 승인 없이 실행
 - 발송 테스트(`cf email-sending send`)를 승인 없이 실행 — 발송은 외부로 나가는 행위다
@@ -79,7 +79,7 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 
 ## 통지
 
-헬스체크 이상 시 `${CLAUDE_SKILL_DIR}/scripts/notify.sh`로 알린다. 우선순위는 CF Email Sending이고, 실패하면 Mailgun API로 폴백한다. 둘 다 실패하면 exit 3이며, 호출자가 카드를 CRITICAL로 표시한다. 필요한 값은 환경변수(`NOTIFY_FROM`, `NOTIFY_TO`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`)로만 받으며 파일에 저장하지 않는다.
+헬스체크 이상 시 `${CLAUDE_SKILL_DIR}/scripts/notify.sh`로 알린다. 우선순위는 CF Email Sending이고, 실패하면 Mailgun API로 폴백한다. 둘 다 실패하면 exit 3이며, 호출자가 카드를 CRITICAL로 표시한다. `--dry-run`으로 실제 발송 없이 명령과 자격증명 상태를 확인할 수 있다. CF Email Sending 활성 여부가 확인되기 전에는 Mailgun 자격증명이 사실상 필요하다. 필요한 값은 환경변수(`NOTIFY_FROM`, `NOTIFY_TO`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`)로만 받으며 파일에 저장하지 않는다.
 
 ## 결과 보고 형식
 
