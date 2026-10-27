@@ -106,6 +106,7 @@ EOF
 # ---- stub: cf (email-routing 조회와 email-sending send만 응답) ----
 cat >"$STUB/cf" <<'EOF'
 #!/usr/bin/env bash
+[[ -n "${STUB_CF_SLEEP:-}" ]] && exec sleep "$STUB_CF_SLEEP"
 case "$*" in
   *"settings get"*)
     [[ "${STUB_CF_SETTINGS_EXIT:-0}" == 0 ]] || { echo "401 Unauthorized" >&2; exit 1; }
@@ -202,6 +203,9 @@ expect_err_contains "헬스체크: DNS 실패 사유 표시" "DNS 조회 실패"
 # --md-out 쓰기 실패 → exit 2
 expect_exit "헬스체크: --md-out 쓰기 실패는 exit 2" 2 bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json" --md-out "$TMP/no-such-dir/x.md"
 
+# cf 응답이 멈추면 시간 상한에서 끊고 조회 실패(exit 2)로 끝난다
+expect_bounded_exit "헬스체크: cf 시간 초과는 환경 오류" 2 env CF_TIMEOUT_SECS=1 STUB_CF_SLEEP=5 bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
+
 # baseline 불량, zone 불일치 → exit 2
 echo '{"zone": "example.com"}' >"$TMP/bad.json"
 expect_exit "헬스체크: baseline 스키마 불일치" 2 bash "$HC" --zone "$ZONE" --baseline "$TMP/bad.json"
@@ -233,6 +237,9 @@ if grep -q "curl called" "$STUB_LOG"; then fail "통지: CF 성공인데 Mailgun
 # CF 실패 + Mailgun 자격증명 없음 → exit 3, 원인이 stderr에 남는다
 expect_exit "통지: 두 경로 모두 실패" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com STUB_CF_SEND_EXIT=1 bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 expect_err_contains "통지: CF 실패 원인이 stderr에 남는다" "CF 실패: error: sending not enabled"
+
+# CF 발송이 멈추면 시간 상한에서 실패로 보고 Mailgun 자격증명이 없으면 exit 3
+expect_bounded_exit "통지: CF 발송 시간 초과" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com CF_TIMEOUT_SECS=1 STUB_CF_SLEEP=5 bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 
 # CF 실패 + Mailgun 성공 → exit 0 (폴백)
 : >"$STUB_LOG"

@@ -108,16 +108,20 @@ expected_mx="$(jq -r '.mx | map(rtrimstr(".")) | sort | join(",")' "$BASELINE")"
 if [[ "$actual_mx" == "$expected_mx" ]]; then c5=ok; else c5=fail; fi
 record C5 "MX 집합" "$c5" "$expected_mx" "$actual_mx"
 
+# cf 호출에 시간 상한을 둔다. 응답이 멈추면 무인 실행이 영원히 기다리므로, 초과는 조회 실패로 처리한다
+# timeout 명령이 없는 macOS에서도 쓰도록 perl alarm 을 쓴다 (CF_TIMEOUT_SECS 로 조정)
+cf_timed() { perl -e 'alarm shift; exec @ARGV' "${CF_TIMEOUT_SECS:-30}" cf "$@"; }
+
 # C6: Email Routing 활성 + 규칙 수 == baseline (cf 의존, 조회 실패는 환경 오류)
 expected_rules="$(jq -r '.routing.rule_count' "$BASELINE")"
 if ! command -v cf >/dev/null 2>&1; then
   record C6 "Email Routing 상태" error "활성 + 규칙 $expected_rules" "cf 없음"
 else
-  settings="$(cf email-routing settings get -z "$ZONE" 2>/dev/null || true)"
+  settings="$(cf_timed email-routing settings get -z "$ZONE" 2>/dev/null || true)"
   # false 를 빈 값으로 바꾸는 // empty 를 쓰지 않는다 — 비활성은 fail 이고 조회 실패와 구분돼야 한다
   enabled="$(jq -r 'if has("enabled") then (.enabled | tostring) else empty end' <<<"$settings" 2>/dev/null || true)"
   # 실제 명령은 rules list-account 다(rules list 는 없다). catch-all 규칙도 배열에 포함된다
-  rules="$(cf email-routing rules list-account -z "$ZONE" 2>/dev/null || true)"
+  rules="$(cf_timed email-routing rules list-account -z "$ZONE" 2>/dev/null || true)"
   rule_count="$(jq -r 'if type=="array" then length else empty end' <<<"$rules" 2>/dev/null || true)"
   if [[ -z "$enabled" || -z "$rule_count" ]]; then
     record C6 "Email Routing 상태" error "활성 + 규칙 $expected_rules" "cf 조회 실패 또는 응답 형식 불일치 (cf auth whoami 로 인증 확인)"
