@@ -44,7 +44,8 @@ BODY="$(cat "$BODY_FILE")"
 send_cf() {
   command -v cf >/dev/null 2>&1 || { echo "CF: cf 명령 없음" >&2; return 1; }
   local err
-  err="$(cf email-sending send \
+  # 발송 호출에도 시간 상한을 둔다 (CF_TIMEOUT_SECS, 기본 60초). 초과는 실패로 보고 Mailgun 폴백으로 넘어간다
+  err="$(perl -e 'alarm shift; exec @ARGV' "${CF_TIMEOUT_SECS:-60}" cf email-sending send \
     --from-address "$NOTIFY_FROM" \
     --to-address "$NOTIFY_TO" \
     --subject "$SUBJECT" \
