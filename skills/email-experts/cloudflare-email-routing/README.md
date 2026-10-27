@@ -16,7 +16,7 @@ DMARC 리포트 분석해줘                → 모드 D (리포트 분석, 리�
 - `cf` CLI (beta) 설치와 `cf auth login` — 쓰기와 라우팅 조회에 필요
 - `dig`, `jq`, `uv`
 - 헬스체크용 baseline JSON — `assets/baseline-schema.json`을 복사해 실측값을 채운다. 저장소에 커밋하지 않는다.
-- 알림을 받으려면 `NOTIFY_FROM`, `NOTIFY_TO` 환경변수. `NOTIFY_TO`는 운영자 본인 주소로 둔다. CF Email Sending 활성이 확인되기 전에는 `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`이 사실상 필요하다. `notify.sh --dry-run`으로 설정을 먼저 확인할 수 있다.
+- 알림을 받으려면 `NOTIFY_FROM`, `NOTIFY_TO` 환경변수. `NOTIFY_TO`는 운영자 본인 주소로 둔다. 기본 발송 경로는 Mailgun이므로 `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`이 필요하다. CF Email Sending은 유료 서비스라 기본으로 꺼져 있으며, `NOTIFY_CF_ENABLED=1`로 켠다. `notify.sh --dry-run`으로 설정을 먼저 확인할 수 있다.
 
 ## 스크립트 직접 실행
 
