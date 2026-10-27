@@ -79,7 +79,7 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 
 ## 통지
 
-헬스체크 이상 시 `${CLAUDE_SKILL_DIR}/scripts/notify.sh`로 알린다. 우선순위는 CF Email Sending이고, 실패하면 Mailgun API로 폴백한다. 둘 다 실패하면 exit 3이며, 호출자가 카드를 CRITICAL로 표시한다. `--dry-run`으로 실제 발송 없이 명령과 자격증명 상태를 확인할 수 있다. CF Email Sending 활성 여부가 확인되기 전에는 Mailgun 자격증명이 사실상 필요하다. 필요한 값은 환경변수(`NOTIFY_FROM`, `NOTIFY_TO`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`)로만 받으며 파일에 저장하지 않는다.
+헬스체크 이상 시 `${CLAUDE_SKILL_DIR}/scripts/notify.sh`로 알린다. 기본 발송 경로는 Mailgun API다. CF Email Sending은 유료 서비스라 기본으로 꺼져 있고, `NOTIFY_CF_ENABLED=1`일 때만 먼저 시도한 뒤 실패하면 Mailgun으로 넘어간다. 둘 다 실패하면 exit 3이며, 호출자가 카드를 CRITICAL로 표시한다. `--dry-run`으로 실제 발송 없이 명령과 자격증명 상태를 확인할 수 있다. CF Email Sending 활성 여부가 확인되기 전에는 Mailgun 자격증명이 사실상 필요하다. 필요한 값은 환경변수(`NOTIFY_FROM`, `NOTIFY_TO`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`)로만 받으며 파일에 저장하지 않는다.
 
 ## 결과 보고 형식
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# notify.sh - 헬스체크 이상 통지. CF Email Sending 우선, 실패 시 Mailgun API 폴백.
+# notify.sh - 헬스체크 이상 통지. 기본은 Mailgun API. CF Email Sending 은 유료라 NOTIFY_CF_ENABLED=1 일 때만 먼저 쓴다.
 #
 # Usage: notify.sh --subject <제목> --body-file <본문 파일> [--dry-run]
 #
@@ -72,11 +72,16 @@ if [[ "$DRY_RUN" == true ]]; then
   exit 0
 fi
 
-if send_cf; then
-  echo "통지 완료: CF Email Sending"
-  exit 0
+# CF Email Sending 은 유료 서비스라 기본으로 끈다. NOTIFY_CF_ENABLED=1 일 때만 먼저 시도한다
+if [[ "${NOTIFY_CF_ENABLED:-0}" == 1 ]]; then
+  if send_cf; then
+    echo "통지 완료: CF Email Sending"
+    exit 0
+  fi
+  echo "CF Email Sending 실패 — Mailgun 폴백 시도" >&2
+else
+  echo "CF Email Sending 비활성 (기본값, 유료. NOTIFY_CF_ENABLED=1 로 켠다) — Mailgun 사용" >&2
 fi
-echo "CF Email Sending 실패 — Mailgun 폴백 시도" >&2
 
 if send_mailgun; then
   echo "통지 완료: Mailgun 폴백"

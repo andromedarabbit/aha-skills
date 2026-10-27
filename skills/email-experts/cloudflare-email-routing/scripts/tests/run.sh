@@ -231,24 +231,32 @@ if [[ -s "$STUB_LOG" ]]; then fail "통지: dry-run이 실제로 발송했다"; 
 
 # CF 성공 → exit 0, Mailgun 호출 없음
 : >"$STUB_LOG"
-expect_exit "통지: CF Email Sending 성공" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+# 기본값은 CF 비활성: CF를 부르지 않고 Mailgun으로 간다 (유료 서비스 미사용)
+: >"$STUB_LOG"
+expect_exit "통지: 기본값은 CF 비활성" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+if grep -q "sent via cf" "$STUB_LOG"; then fail "통지: 기본값인데 CF 발송을 호출했다"; else pass "통지: 기본값에서는 CF 발송을 호출하지 않는다"; fi
+expect_exit "통지: 기본값 + Mailgun 설정이면 Mailgun으로 발송" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+
+# NOTIFY_CF_ENABLED=1 이면 CF를 먼저 쓰고 성공하면 끝난다
+: >"$STUB_LOG"
+expect_exit "통지: CF Email Sending 성공 (opt-in)" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_CF_ENABLED=1 bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 if grep -q "curl called" "$STUB_LOG"; then fail "통지: CF 성공인데 Mailgun을 호출했다"; else pass "통지: CF 성공 시 Mailgun을 쓰지 않는다"; fi
 
 # CF 실패 + Mailgun 자격증명 없음 → exit 3, 원인이 stderr에 남는다
-expect_exit "통지: 두 경로 모두 실패" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com STUB_CF_SEND_EXIT=1 bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+expect_exit "통지: 두 경로 모두 실패" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_CF_ENABLED=1 STUB_CF_SEND_EXIT=1 bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 expect_err_contains "통지: CF 실패 원인이 stderr에 남는다" "CF 실패: error: sending not enabled"
 
 # CF 발송이 멈추면 시간 상한에서 실패로 보고 Mailgun 자격증명이 없으면 exit 3
-expect_bounded_exit "통지: CF 발송 시간 초과" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com CF_TIMEOUT_SECS=1 STUB_CF_SLEEP=5 bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+expect_bounded_exit "통지: CF 발송 시간 초과" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_CF_ENABLED=1 CF_TIMEOUT_SECS=1 STUB_CF_SLEEP=5 bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 
 # CF 실패 + Mailgun 성공 → exit 0 (폴백)
 : >"$STUB_LOG"
-expect_exit "통지: Mailgun 폴백 성공" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com STUB_CF_SEND_EXIT=1 MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+expect_exit "통지: Mailgun 폴백 성공" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_CF_ENABLED=1 STUB_CF_SEND_EXIT=1 MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 expect_contains "통지: 폴백 완료 표시" "Mailgun 폴백"
 if grep -q "curl called" "$STUB_LOG"; then pass "통지: 폴백에서 Mailgun을 호출했다"; else fail "통지: 폴백인데 Mailgun을 호출하지 않았다"; fi
 
 # CF 실패 + Mailgun 실패 → exit 3
-expect_exit "통지: Mailgun도 실패하면 exit 3" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com STUB_CF_SEND_EXIT=1 STUB_CURL_EXIT=22 MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+expect_exit "통지: Mailgun도 실패하면 exit 3" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_CF_ENABLED=1 STUB_CF_SEND_EXIT=1 STUB_CURL_EXIT=22 MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 
 # ================= DMARC 집계 =================
 
