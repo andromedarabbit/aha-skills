@@ -130,7 +130,19 @@ echo "curl called" >>"${STUB_LOG:-/dev/null}"
 exit "${STUB_CURL_EXIT:-0}"
 EOF
 
-chmod +x "$STUB/dig" "$STUB/cf" "$STUB/curl"
+# ---- stub: himalaya (메시지를 stdin으로 받아 STUB_LOG 에 남긴다) ----
+cat >"$STUB/himalaya" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${STUB_HIMALAYA_EXIT:-0}" != 0 ]]; then
+  cat >/dev/null
+  echo "himalaya: account not configured" >&2
+  exit 1
+fi
+cat >>"${STUB_LOG:-/dev/null}"
+echo "himalaya sent" >>"${STUB_LOG:-/dev/null}"
+EOF
+
+chmod +x "$STUB/dig" "$STUB/cf" "$STUB/curl" "$STUB/himalaya"
 export STUB_LOG="$TMP/stub.log"
 : >"$STUB_LOG"
 
@@ -237,6 +249,30 @@ expect_exit "통지: 기본값은 CF 비활성" 3 env NOTIFY_FROM=a@example.com 
 if grep -q "sent via cf" "$STUB_LOG"; then fail "통지: 기본값인데 CF 발송을 호출했다"; else pass "통지: 기본값에서는 CF 발송을 호출하지 않는다"; fi
 expect_exit "통지: 기본값 + Mailgun 설정이면 Mailgun으로 발송" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 
+# himalaya 는 자동 선택되지 않는다: 설치돼 있어도 NOTIFY_SENDER 없이는 Mailgun 을 쓴다
+: >"$STUB_LOG"
+expect_exit "통지: himalaya 설치돼 있어도 기본은 Mailgun" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+if grep -q "himalaya sent" "$STUB_LOG"; then fail "통지: 명시하지 않았는데 himalaya 로 보냈다"; else pass "통지: 명시하지 않으면 himalaya 를 쓰지 않는다"; fi
+
+# NOTIFY_SENDER=himalaya 면 himalaya 로 보내고, 제목은 UTF-8 로 인코딩된다
+: >"$STUB_LOG"
+expect_exit "통지: NOTIFY_SENDER=himalaya 성공" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_SENDER=himalaya bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+expect_contains_log() {
+  if grep -qF -- "$1" "$STUB_LOG"; then pass "$2"; else fail "$2: '$1' 가 로그에 없다"; fi
+}
+expect_contains_log "himalaya sent" "통지: himalaya 가 메시지를 받았다"
+expect_contains_log "Subject: =?UTF-8?B?" "통지: himalaya 메시지의 제목이 UTF-8 로 인코딩됐다"
+
+# himalaya 가 실패하면 Mailgun 으로 넘어간다
+expect_exit "통지: himalaya 실패 시 Mailgun 폴백" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_SENDER=himalaya STUB_HIMALAYA_EXIT=1 MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+
+# 모든 경로가 실패하고 himalaya 가 설치돼 있으면 사용자 확인을 권하는 힌트를 남긴다
+expect_exit "통지: 모두 실패하면 exit 3" 3 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+expect_err_contains "통지: himalaya 설치 시 승인 힌트" "NOTIFY_SENDER=himalaya"
+
+# 알 수 없는 발송 수단은 사용 오류
+expect_exit "통지: 잘못된 NOTIFY_SENDER는 exit 2" 2 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_SENDER=sendgrid bash "$NT" --subject "t" --body-file "$TMP/body.txt"
+
 # NOTIFY_CF_ENABLED=1 이면 CF를 먼저 쓰고 성공하면 끝난다
 : >"$STUB_LOG"
 expect_exit "통지: CF Email Sending 성공 (opt-in)" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_CF_ENABLED=1 bash "$NT" --subject "t" --body-file "$TMP/body.txt"
@@ -252,7 +288,7 @@ expect_bounded_exit "통지: CF 발송 시간 초과" 3 env NOTIFY_FROM=a@exampl
 # CF 실패 + Mailgun 성공 → exit 0 (폴백)
 : >"$STUB_LOG"
 expect_exit "통지: Mailgun 폴백 성공" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_CF_ENABLED=1 STUB_CF_SEND_EXIT=1 MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
-expect_contains "통지: 폴백 완료 표시" "Mailgun 폴백"
+expect_contains "통지: 폴백 완료 표시" "통지 완료: mailgun"
 if grep -q "curl called" "$STUB_LOG"; then pass "통지: 폴백에서 Mailgun을 호출했다"; else fail "통지: 폴백인데 Mailgun을 호출하지 않았다"; fi
 
 # CF 실패 + Mailgun 실패 → exit 3
