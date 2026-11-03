@@ -141,6 +141,7 @@ ok_count="$(awk -F'\t' '$3 == "ok" {n++} END {print n+0}' "$RESULTS")"
 
 render_md() {
   echo "# cloudflare-email-routing 점검 — $ZONE"
+  echo "기준: baseline captured_at=$(jq -r '.captured_at // "unknown"' "$BASELINE" 2>/dev/null)"
   echo
   echo "| 체크 | 항목 | 기대값 | 실제값 | 결과 |"
   echo "|---|---|---|---|---|"

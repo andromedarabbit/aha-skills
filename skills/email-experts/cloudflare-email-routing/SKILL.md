@@ -1,7 +1,7 @@
 ---
 name: cloudflare-email-routing
 description: Cloudflare Email Routing + Gmail 조합의 운영 계층 — 라우팅 설정 검수, 메일 인증(SPF·DKIM·DMARC) 진단, DMARC 집계 리포트 분석, 스푸핑 인시던트 대응, 월간 헬스체크를 다룬다. 트리거 — "DMARC 리포트 분석", "DMARC 리포트 급증", "스푸핑 메일 분석", "_dmarc 중복", "SPF/DKIM 확인", "이메일 라우팅 설정", "catch-all 점검", "도메인 메일 건강검진", "Cloudflare 이메일 라우팅", "send-as 정합". 인자가 없으면 대화 문맥으로 모드(인시던트·온보딩·헬스체크·리포트 분석)를 판별하고, 판별이 안 되면 한 번만 묻는다. 부정 라우팅 — Gmail 메일함 정리·라벨링은 gmail-triage 소관, Cloudflare API 일반 참조는 cloudflare 플러그인 소관이다. 특정 도메인의 현재 값과 기준선은 이 스킬이 알지 못하며 호출자가 baseline JSON 파라미터로 넘긴다.
-version: 0.1.0
+version: 0.3.0
 context: inline
 language: "korean"
 dependencies:

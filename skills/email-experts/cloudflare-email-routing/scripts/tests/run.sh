@@ -227,6 +227,10 @@ expect_exit "헬스체크: baseline.zone 불일치" 2 bash "$HC" --zone "other.e
 expect_exit "헬스체크: 환경 오류 + --md-out" 2 bash "$HC" --zone "$ZONE" --baseline "$TMP/bad.json" --md-out "$TMP/md.txt"
 if grep -qF "환경 오류" "$TMP/md.txt" 2>/dev/null; then pass "헬스체크: 환경 오류 사유가 md 파일에 남는다"; else fail "헬스체크: md 파일에 환경 오류 사유가 없다"; fi
 
+# 리포트에 baseline captured_at 이 자동으로 들어간다 (카드 템플릿의 기준선 표기를 에이전트 기억에 의존하지 않게)
+expect_exit "헬스체크: 정상 경로 --md-out" 0 bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json" --md-out "$TMP/md-ok.txt"
+if grep -qF "captured_at=" "$TMP/md-ok.txt" 2>/dev/null; then pass "헬스체크: 리포트에 captured_at 이 자동 표기된다"; else fail "헬스체크: 리포트에 captured_at 이 없다"; fi
+
 # ================= 통지 =================
 
 printf '본문\n' >"$TMP/body.txt"
