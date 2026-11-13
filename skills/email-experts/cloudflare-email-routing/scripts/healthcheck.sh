@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# healthcheck.sh - 메일 인증·라우팅 헬스체크 C1~C7. 읽기 전용 동사만 쓴다.
+# healthcheck.sh - 메일 인증·라우팅 헬스체크 C1~C8. 읽기 전용 동사만 쓴다.
 #
 # Usage: healthcheck.sh --zone <domain> --baseline <json> [--json] [--md-out <path>]
 #
@@ -135,6 +135,23 @@ fi
 # C7: 드리프트 요약 — C2~C6 중 baseline과 다른 항목 수
 drift="$(awk -F'\t' '$1 ~ /^C[2-6]$/ && $3 != "ok" {n++} END {print n+0}' "$RESULTS")"
 if [[ "$drift" == "0" ]]; then record C7 "baseline 드리프트" ok "0" "0"; else record C7 "baseline 드리프트" fail "0" "$drift"; fi
+
+# C8: 목적지 주소 전원 검증됨 — 검증이 풀린 목적지로 가는 메일은 조용히 버려진다(수신 실패의 결정적 신호).
+# baseline과 무관한 상태 점검이라 C7 드리프트에는 넣지 않는다. 배달 성공 자체는 보지 못한다(playbook 한계 참조)
+if command -v cf >/dev/null 2>&1; then
+  addrs="$(cf_timed email-routing addresses list -z "$ZONE" 2>/dev/null || true)"
+  addr_total="$(jq -r 'if type=="array" then length else empty end' <<<"$addrs" 2>/dev/null || true)"
+  addr_bad="$(jq -r 'if type=="array" then [.[] | select(.status != "verified")] | length else empty end' <<<"$addrs" 2>/dev/null || true)"
+  if [[ -z "$addr_total" ]]; then
+    record C8 "목적지 주소 검증" error "전원 verified" "cf 조회 실패 또는 응답 형식 불일치"
+  elif [[ "$addr_total" == 0 || "$addr_bad" != 0 ]]; then
+    record C8 "목적지 주소 검증" fail "전원 verified" "전체 ${addr_total}개 중 미검증 ${addr_bad}개"
+  else
+    record C8 "목적지 주소 검증" ok "전원 verified" "전체 ${addr_total}개 verified"
+  fi
+else
+  record C8 "목적지 주소 검증" error "전원 verified" "cf 없음"
+fi
 
 fail_count="$(awk -F'\t' '$3 == "fail" {n++} END {print n+0}' "$RESULTS")"
 ok_count="$(awk -F'\t' '$3 == "ok" {n++} END {print n+0}' "$RESULTS")"

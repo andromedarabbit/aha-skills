@@ -115,6 +115,10 @@ case "$*" in
     rules="${STUB_CF_RULES-}"
     [[ -n "$rules" ]] || rules='[{"name": "forward-all"}]'
     printf '%s\n' "$rules" ;;
+  *"addresses list"*)
+    addrs="${STUB_CF_ADDRS-}"
+    [[ -n "$addrs" ]] || addrs='[{"status": "verified"}]'
+    printf '%s\n' "$addrs" ;;
   *"email-sending send"*)
     [[ "${STUB_CF_SEND_EXIT:-0}" == 0 ]] || { echo "error: sending not enabled for this account" >&2; exit 1; }
     echo "sent via cf" >>"${STUB_LOG:-/dev/null}" ;;
@@ -167,7 +171,7 @@ DR="$SCRIPTS/dmarc_report.py"
 
 # 기준 일치 → exit 0
 expect_exit "헬스체크: 기준 일치" 0 bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
-expect_contains "헬스체크: 요약 라인" "정상 7건 / 이상 0건"
+expect_contains "헬스체크: 요약 라인" "정상 8건 / 이상 0건"
 
 # C1: _dmarc 중복 → 실패
 expect_exit "C1: _dmarc 중복이면 실패" 1 env STUB_DMARC=$'"v=DMARC1; p=quarantine; rua=mailto:r@example.com"\n"v=DMARC1; p=none"' bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
@@ -193,6 +197,11 @@ expect_exit "C6: Email Routing 비활성은 실패로 판정" 1 env STUB_CF_ENAB
 expect_contains "C6: 비활성 상태가 표에 보인다" "enabled=false"
 expect_exit "C6: 규칙 수 불일치는 실패" 1 env STUB_CF_RULES='[]' bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
 expect_exit "C6: cf 조회 실패는 환경 오류(exit 2)" 2 env STUB_CF_SETTINGS_EXIT=1 bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
+
+# C8: 미검증 목적지·목적지 0개는 실패(exit 1), 응답 형식 불일치는 환경 오류(exit 2)
+expect_exit "C8: 미검증 목적지는 실패" 1 env STUB_CF_ADDRS='[{"status":"verified"},{"status":"pending"}]' bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
+expect_exit "C8: 목적지 0개는 실패" 1 env STUB_CF_ADDRS='[]' bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
+expect_exit "C8: 응답 형식 불일치는 환경 오류" 2 env STUB_CF_ADDRS='not-json' bash "$HC" --zone "$ZONE" --baseline "$TMP/baseline.json"
 
 # cf 없음 → 환경 오류, dig 결과는 계속 보고
 mkdir -p "$TMP/nocf"
@@ -267,6 +276,15 @@ expect_contains_log() {
 expect_contains_log "himalaya sent" "통지: himalaya 가 메시지를 받았다"
 expect_contains_log "Subject: =?UTF-8?B?" "통지: himalaya 메시지의 제목이 UTF-8 로 인코딩됐다"
 
+# 표가 있는 본문은 text/plain + text/html 멀티파트로 가고, 표는 <table> 이 된다. 본문 속 태그는 이스케이프된다
+printf '# 제목\n\n| 유형 | 건수 |\n|---|---:|\n| a<b> | 3 |\n' >"$TMP/table.md"
+: >"$STUB_LOG"
+expect_exit "통지: 표 본문 himalaya 발송" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_SENDER=himalaya bash "$NT" --subject "t" --body-file "$TMP/table.md"
+expect_contains_log "multipart/alternative" "통지: himalaya 메시지가 멀티파트다"
+expect_contains_log "<table" "통지: 표가 HTML 표로 변환됐다"
+expect_contains_log "a&lt;b&gt;" "통지: 본문 속 태그가 이스케이프됐다"
+expect_contains_log "text-align:right" "통지: 표의 오른쪽 정렬이 반영됐다"
+
 # himalaya 가 실패하면 Mailgun 으로 넘어간다
 expect_exit "통지: himalaya 실패 시 Mailgun 폴백" 0 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com NOTIFY_SENDER=himalaya STUB_HIMALAYA_EXIT=1 MAILGUN_API_KEY=k MAILGUN_DOMAIN=mg.example.com bash "$NT" --subject "t" --body-file "$TMP/body.txt"
 
@@ -319,6 +337,7 @@ cat >"$TMP/good.xml" <<'EOF'
 EOF
 gzip -c "$TMP/good.xml" >"$TMP/rep_ok/google.com!example.com!1767225600!1767311999.xml.gz"
 expect_exit "DMARC: 정상 아카이브" 0 python3 "$DR" "$TMP/rep_ok"
+
 expect_contains "DMARC: 기간이 report_metadata에서 와서 날짜가 맞다" "- 2026-01-01: 3통"
 expect_contains "DMARC: 리포트 1개로 집계" "리포트 1개"
 expect_contains "DMARC: 전부 실패 판별" "사칭 캠페인 후보"
@@ -355,6 +374,71 @@ expect_exit "DMARC: 실패 파일만 있으면 exit 3" 3 python3 "$DR" "$TMP/rep
 
 # 리포트 없음 → exit 1
 expect_exit "DMARC: 리포트 없음" 1 python3 "$DR" "$TMP/empty"
+
+# ---- failure_report.py: 합성 이벤트(example.com)로 분류·집계·exit 코드를 검사한다 ----
+FR="$SCRIPTS/failure_report.py"
+PY="$(command -v python3)"
+GMAIL_SPAM='upstream (gmail-smtp-in.l.google.com.) error: Permanent Unknown error: permanent error (550): 5.7.1 [203.0.113.7      12] Gmail has detected that this message is likely unsolicited mail.'
+write_events() { printf '%s\n' "$1" >"$TMP/events.json"; }
+
+write_events '[{"datetime":"2026-01-01T00:00:00Z","messageId":"<a@x>","from":"A <a@example.com>","status":"delivered","errorDetail":""}]'
+expect_exit "실패 보고: 실패 없음" 0 "$PY" -I "$FR" --zone "$ZONE" --events-file "$TMP/events.json"
+expect_contains "실패 보고: 실패 없음 문구" "실패 이벤트 없음"
+
+write_events "[{\"datetime\":\"2026-01-01T00:00:00Z\",\"messageId\":\"<s@x>\",\"from\":\"S <s@spam.example.com>\",\"status\":\"deliveryFailed\",\"errorDetail\":\"$GMAIL_SPAM\"}]"
+expect_exit "실패 보고: Gmail 스팸 거절은 판정 후보(exit 1)" 1 "$PY" -I "$FR" --zone "$ZONE" --events-file "$TMP/events.json"
+expect_contains "실패 보고: 후보 유형 표시" "| Gmail 스팸 거절 | 1 | 1 | 0 | 1 |"
+expect_contains "실패 보고: 확인 필요 판정" "확인 필요"
+expect_contains "실패 보고: 발신 도메인 표시" "spam.example.com"
+if grep -qF "203.0.113.7" "$TMP/out"; then fail "실패 보고: 사유의 IP가 마스킹되지 않았다"; else pass "실패 보고: 사유의 IP가 마스킹된다"; fi
+
+write_events "[{\"datetime\":\"2026-01-01T00:00:00Z\",\"messageId\":\"<s@x>\",\"from\":\"S <s@example.com>\",\"status\":\"deliveryFailed\",\"errorDetail\":\"$GMAIL_SPAM\"},{\"datetime\":\"2026-01-01T01:00:00Z\",\"messageId\":\"<s@x>\",\"from\":\"S <s@example.com>\",\"status\":\"delivered\",\"errorDetail\":\"\"}]"
+expect_exit "실패 보고: 나중에 전달된 메시지는 후보가 아니다" 0 "$PY" -I "$FR" --zone "$ZONE" --events-file "$TMP/events.json"
+expect_contains "실패 보고: 회복 1, 미배달 0" "| Gmail 스팸 거절 | 1 | 1 | 1 | 0 |"
+
+write_events '[{"datetime":"2026-01-01T00:00:00Z","messageId":"<u@x>","from":"U <u@example.com>","status":"unauthenticatedForward","errorDetail":"Cannot forward emails that are not authenticated."}]'
+expect_exit "실패 보고: 인증 거부는 규칙 분류(exit 0)" 0 "$PY" -I "$FR" --zone "$ZONE" --events-file "$TMP/events.json"
+expect_contains "실패 보고: 인증 거부 유형" "인증 거부(Unauthenticated)"
+
+write_events '[{"datetime":"2026-01-01T00:00:00Z","messageId":"<n@x>","from":"","status":"error","errorDetail":"brand new failure text"}]'
+expect_exit "실패 보고: 미분류는 판정 후보(exit 1)" 1 "$PY" -I "$FR" --zone "$ZONE" --events-file "$TMP/events.json"
+expect_contains "실패 보고: 미분류 유형" "| 미분류 |"
+
+expect_exit "실패 보고: --events-file 없음은 환경 오류" 2 "$PY" -I "$FR" --zone "$ZONE" --events-file "$TMP/no-such.json"
+expect_exit "실패 보고: --days 범위 밖은 환경 오류" 2 "$PY" -I "$FR" --zone "$ZONE" --days 0 --events-file "$TMP/events.json"
+expect_exit "실패 보고: 토큰·cf 없이 조회하면 환경 오류" 2 env -u CLOUDFLARE_API_TOKEN PATH="$TMP/nocf" "$PY" -I "$FR" --zone "$ZONE"
+expect_exit "실패 보고: --md-out 쓰기 실패는 환경 오류" 2 "$PY" -I "$FR" --zone "$ZONE" --events-file "$TMP/events.json" --md-out "$TMP/no-such-dir/x.md"
+
+# ---- weekly-precheck.sh: 모드 스위치와 exit 계약 (0=에이전트 실행, 1=스킵) ----
+WP="$SCRIPTS/weekly-precheck.sh"
+export XDG_CACHE_HOME="$TMP/cache"
+wp() { env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com bash "$WP" --zone "$ZONE" --baseline "$TMP/baseline.json" "$@"; }
+
+write_events '[{"datetime":"2026-01-01T00:00:00Z","messageId":"<a@x>","from":"A <a@example.com>","status":"delivered","errorDetail":""}]'
+cp "$TMP/events.json" "$TMP/ev-clean.json"
+write_events "[{\"datetime\":\"2026-01-01T00:00:00Z\",\"messageId\":\"<s@x>\",\"from\":\"S <s@example.com>\",\"status\":\"deliveryFailed\",\"errorDetail\":\"$GMAIL_SPAM\"}]"
+cp "$TMP/events.json" "$TMP/ev-cand.json"
+
+expect_exit "precheck: --mode 누락은 사용 오류" 2 wp --events-file "$TMP/ev-clean.json"
+expect_exit "precheck: --mode 값 오류" 2 wp --mode both --events-file "$TMP/ev-clean.json"
+expect_exit "precheck: 상대 경로 baseline은 사용 오류" 2 env NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com bash "$WP" --zone "$ZONE" --baseline baseline.json --mode cli --events-file "$TMP/ev-clean.json"
+
+expect_exit "precheck cli: 실패 없음도 발송하고 스킵" 1 wp --mode cli --events-file "$TMP/ev-clean.json" --dry-run
+expect_contains "precheck cli: 발송 경로를 탔다" "dry-run: 발송하지 않는다"
+if grep -qF "## 헬스체크" "$XDG_CACHE_HOME/cloudflare-email-routing/weekly-$ZONE.md" && grep -qF "## 수신 실패" "$XDG_CACHE_HOME/cloudflare-email-routing/weekly-$ZONE.md"; then pass "precheck: 보고서에 두 섹션이 고정 경로로 남는다"; else fail "precheck: 보고서 섹션 누락"; fi
+
+expect_exit "precheck cli: 후보가 있어도 에이전트를 띄우지 않는다" 1 wp --mode cli --events-file "$TMP/ev-cand.json" --dry-run
+expect_exit "precheck agent: 보고할 것 없으면 발송하고 스킵" 1 wp --mode agent --events-file "$TMP/ev-clean.json" --dry-run
+expect_contains "precheck agent: 스킵 경로도 발송했다" "dry-run: 발송하지 않는다"
+
+expect_exit "precheck agent: 판정 후보가 있으면 에이전트 실행" 0 wp --mode agent --events-file "$TMP/ev-cand.json" --dry-run
+expect_contains "precheck agent: 에이전트에 넘기는 사유 표시" "에이전트 판정 필요"
+if grep -qF "dry-run: 발송하지 않는다" "$TMP/out"; then fail "precheck agent: 에이전트를 띄우면서 발송했다"; else pass "precheck agent: 에이전트를 띄울 때는 발송하지 않는다"; fi
+expect_exit "precheck agent: 점검 이상이면 에이전트 실행" 0 env STUB_DMARC='"v=DMARC1; p=none; rua=mailto:r@example.com"' NOTIFY_FROM=a@example.com NOTIFY_TO=b@example.com bash "$WP" --zone "$ZONE" --baseline "$TMP/baseline.json" --mode agent --events-file "$TMP/ev-clean.json" --dry-run
+expect_exit "precheck agent: 조회 오류면 에이전트 실행" 0 wp --mode agent --events-file "$TMP/no-such.json" --dry-run
+if grep -qF "환경 오류" "$XDG_CACHE_HOME/cloudflare-email-routing/weekly-$ZONE.md"; then pass "precheck: 조회 오류가 보고서에 남는다"; else fail "precheck: 조회 오류가 보고서에 없다"; fi
+
+expect_exit "precheck cli: 통지 실패면 에이전트를 띄워 기록하게 한다" 0 env -u NOTIFY_FROM -u NOTIFY_TO bash "$WP" --zone "$ZONE" --baseline "$TMP/baseline.json" --mode cli --events-file "$TMP/ev-clean.json"
 
 echo
 echo "결과: 통과 $PASS / 실패 $FAIL"

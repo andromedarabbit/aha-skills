@@ -49,6 +49,11 @@ esac
 
 BODY="$(cat "$BODY_FILE")"
 
+# 표가 있는 보고서가 원문 마크다운(|---|)으로 보이지 않도록 HTML 본문을 함께 보낸다.
+# 변환이 실패하면 통지를 잃지 않도록 텍스트만 보낸다 (HTML 은 보조 본문이다)
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HTML="$("$HERE/md_to_html.py" "$BODY_FILE" 2>/dev/null)" || HTML=""
+
 # 발송 순서를 공백으로 구분한 문자열로 만든다. 배열은 빈 상태의 확장이 bash 3.2 의 set -u 에 걸리므로 쓰지 않는다
 ORDER=""
 if [[ -n "${NOTIFY_SENDER:-}" ]]; then
@@ -80,9 +85,18 @@ send_himalaya() {
   command -v himalaya >/dev/null 2>&1 || { echo "himalaya: 명령 없음" >&2; return 1; }
   local enc err
   enc="=?UTF-8?B?$(printf '%s' "$SUBJECT" | base64 | tr -d '\n')?="
-  err="$(printf 'From: %s\nTo: %s\nSubject: %s\nMIME-Version: 1.0\nContent-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n%s\n' \
-    "$NOTIFY_FROM" "$NOTIFY_TO" "$enc" "$BODY" \
-    | himalaya message send ${NOTIFY_HIMALAYA_ACCOUNT:+-a "$NOTIFY_HIMALAYA_ACCOUNT"} 2>&1 >/dev/null)" && return 0
+  local boundary="notify-$$-$RANDOM"
+  err="$({
+    printf 'From: %s\nTo: %s\nSubject: %s\nMIME-Version: 1.0\n' "$NOTIFY_FROM" "$NOTIFY_TO" "$enc"
+    if [[ -n "$HTML" ]]; then
+      printf 'Content-Type: multipart/alternative; boundary="%s"\n\n' "$boundary"
+      printf -- '--%s\nContent-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n%s\n' "$boundary" "$BODY"
+      printf -- '--%s\nContent-Type: text/html; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n%s\n' "$boundary" "$HTML"
+      printf -- '--%s--\n' "$boundary"
+    else
+      printf 'Content-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n%s\n' "$BODY"
+    fi
+  } | himalaya message send ${NOTIFY_HIMALAYA_ACCOUNT:+-a "$NOTIFY_HIMALAYA_ACCOUNT"} 2>&1 >/dev/null)" && return 0
   echo "himalaya 실패: $(tail -1 <<<"$err")" >&2
   return 1
 }
@@ -95,7 +109,8 @@ send_mailgun() {
     -F "from=${NOTIFY_FROM}" \
     -F "to=${NOTIFY_TO}" \
     --form-string "subject=${SUBJECT}" \
-    --form-string "text=${BODY}" >/dev/null
+    --form-string "text=${BODY}" \
+    ${HTML:+--form-string "html=${HTML}"} >/dev/null
 }
 
 if [[ "$DRY_RUN" == true ]]; then

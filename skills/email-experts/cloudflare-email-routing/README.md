@@ -9,6 +9,7 @@ Cloudflare Email Routing과 Gmail을 함께 쓰는 도메인의 메일 운영을
 DMARC 리포트 분석해줘                → 모드 D (리포트 분석, 리포트 디렉터리 필요)
 스푸핑 메일 분석해줘                 → 모드 A (인시던트 대응)
 도메인 메일 건강검진 해줘            → 모드 C (헬스체크, baseline JSON 필요)
+주간 메일 수신 실패 표 보여줘        → 모드 E (주간 실패 보고, baseline JSON 필요)
 ```
 
 ## 준비물
@@ -24,6 +25,12 @@ DMARC 리포트 분석해줘                → 모드 D (리포트 분석, 리�
 # 헬스체크 (읽기 전용)
 bash scripts/healthcheck.sh --zone example.com --baseline ~/baselines/example.com.json --md-out /tmp/hc.md
 
+# 주간 실패 보고 (orca precheck 진입점). cli=스크립트가 발송 후 종료, agent=판정이 필요할 때만 에이전트 호출
+bash scripts/weekly-precheck.sh --zone example.com --baseline ~/baselines/example.com.json --mode cli --dry-run
+
+# 실패 표만 보기 (Analytics Read 토큰 또는 cf 로그인 필요)
+./scripts/failure_report.py --zone example.com --days 7
+
 # DMARC 집계
 uv run --script scripts/dmarc_report.py ~/dmarc-reports/
 
@@ -35,7 +42,7 @@ bash scripts/tests/run.sh
 
 - 스킬 파일에 실제 도메인·주소·정책값을 넣지 않는다. 기준값은 항상 파라미터다.
 - 쓰기는 "현재값 → 바꿀 값 → 승인 → 단일 레코드 변경 → 재조회" 순서를 거친다.
-- 무인 실행은 읽기 전용 헬스체크만 한다. Gmail에 의존하지 않는다.
+- 무인 실행은 읽기 전용 헬스체크와 주간 실패 보고만 한다. Gmail에 의존하지 않는다.
 
 ## 관련 스킬
 

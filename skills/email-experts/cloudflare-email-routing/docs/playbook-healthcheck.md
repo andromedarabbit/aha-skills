@@ -31,11 +31,14 @@ echo "EXIT=$?"
 | C5 | MX 집합 == baseline `mx` (정렬 비교) | 불일치면 실패 |
 | C6 | Email Routing 활성 + 규칙 수 == baseline `routing.rule_count` | cf 조회 실패는 환경 오류 |
 | C7 | 드리프트 요약 — C2~C6 중 기준과 다른 항목 수 | 1개 이상이면 실패 |
+| C8 | 목적지 주소 전원 `verified` (`cf email-routing addresses list`) | 미검증·0개면 실패 (검증 풀린 목적지는 메일을 조용히 버린다), 조회 실패는 환경 오류 |
+
+**한계 — 설정 점검이지 배달 확인이 아니다.** C1~C8은 DNS·라우팅 설정과 목적지 검증 상태만 본다. 실제 메일의 도착, 발신 반송, 전달 실패는 보지 못한다. cf CLI에는 Email Routing 배달 로그 조회가 없고, 발신(Gmail send-as·Mailgun) 실패는 DMARC 집계 리포트(모드 D, Gmail 접근 필요)로만 드러나서 무인 경로에 넣지 않았다. 왕복 테스트 메일은 외부 발송이라 무인 계약 밖이다.
 
 ## 종료 코드와 통지
 
 ```text
-exit 0 → 카드 코멘트만: "정상: 7 체크 통과" (통지 없음)
+exit 0 → 카드 코멘트만: "정상: 8 체크 통과" (통지 없음)
 exit 1 → 카드 코멘트 + notify.sh --subject "[email 점검] 이상 N건" --body-file <md>
          → notify.sh exit 0: 완료 기록
          → notify.sh exit 3: 카드 CRITICAL 마킹 (다음 attended 세션에서 처리)
@@ -54,7 +57,7 @@ exit 2 → 환경 오류 보고 + notify.sh --subject "[email 점검] 환경 오
 
 ```text
 [cloudflare-email-routing 월간 점검] YYYY-MM-DD
-- C1~C7: ✅/❌/⚠️ (기준: baseline captured_at=YYYY-MM-DD)
+- C1~C8: ✅/❌/⚠️ (기준: baseline captured_at=YYYY-MM-DD)
 - 요약: 정상 N건 / 이상 M건
 - exit=N
 ```
@@ -79,7 +82,7 @@ zone: <도메인>
 baseline: <운영자 설정 디렉터리>/<도메인>.json
 절차: docs/playbook-healthcheck.md 를 따른다. healthcheck.sh 를 정확히 1회 실행하고 EXIT 를 읽는다.
 exit 1 또는 2 이면 notify.sh 로 NOTIFY_TO 에게 1건만 통지한다. DNS·라우팅 쓰기는 하지 않는다.
-카드: 이 worktree의 orca 코멘트. C1~C7 표와 exit 코드를 남긴다.
+카드: 이 worktree의 orca 코멘트. C1~C8 표와 exit 코드를 남긴다.
 ```
 
 ## 등록 절차 (사람이 수행)

@@ -1,7 +1,7 @@
 ---
 name: cloudflare-email-routing
-description: Cloudflare Email Routing + Gmail 조합의 운영 계층 — 라우팅 설정 검수, 메일 인증(SPF·DKIM·DMARC) 진단, DMARC 집계 리포트 분석, 스푸핑 인시던트 대응, 월간 헬스체크를 다룬다. 트리거 — "DMARC 리포트 분석", "DMARC 리포트 급증", "스푸핑 메일 분석", "_dmarc 중복", "SPF/DKIM 확인", "이메일 라우팅 설정", "catch-all 점검", "도메인 메일 건강검진", "Cloudflare 이메일 라우팅", "send-as 정합". 인자가 없으면 대화 문맥으로 모드(인시던트·온보딩·헬스체크·리포트 분석)를 판별하고, 판별이 안 되면 한 번만 묻는다. 부정 라우팅 — Gmail 메일함 정리·라벨링은 gmail-triage 소관, Cloudflare API 일반 참조는 cloudflare 플러그인 소관이다. 특정 도메인의 현재 값과 기준선은 이 스킬이 알지 못하며 호출자가 baseline JSON 파라미터로 넘긴다.
-version: 0.3.0
+description: Cloudflare Email Routing + Gmail 조합의 운영 계층 — 라우팅 설정 검수, 메일 인증(SPF·DKIM·DMARC) 진단, DMARC 집계 리포트 분석, 스푸핑 인시던트 대응, 월간 헬스체크, 주간 수신 실패 보고를 다룬다. 트리거 — "메일 수신 실패 보고", "주간 이메일 실패 표", "DMARC 리포트 분석", "DMARC 리포트 급증", "스푸핑 메일 분석", "_dmarc 중복", "SPF/DKIM 확인", "이메일 라우팅 설정", "catch-all 점검", "도메인 메일 건강검진", "Cloudflare 이메일 라우팅", "send-as 정합". 인자가 없으면 대화 문맥으로 모드(인시던트·온보딩·헬스체크·리포트 분석·주간 보고)를 판별하고, 판별이 안 되면 한 번만 묻는다. 부정 라우팅 — Gmail 메일함 정리·라벨링은 gmail-triage 소관, Cloudflare API 일반 참조는 cloudflare 플러그인 소관이다. 특정 도메인의 현재 값과 기준선은 이 스킬이 알지 못하며 호출자가 baseline JSON 파라미터로 넘긴다.
+version: 0.5.0
 context: inline
 language: "korean"
 dependencies:
@@ -19,7 +19,7 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 
 ## 무인 실행 규칙
 
-프롬프트 첫 줄에 `무인 실행:`으로 시작하는 선언이 있으면 **헬스체크 모드만** 실행한다. 읽기 전용 점검과 카드 코멘트 게시까지만 하고, 질문하지 않으며, DNS·라우팅 쓰기 명령(`cf dns records update`·`delete`·`cf email-routing` 변경)을 실행하지 않는다. 발송은 `notify.sh`를 통해 수신처가 `NOTIFY_TO`(운영자 본인 주소)인 이상 알림 1건으로만 허용한다. 무인 실행이 장애를 알릴 수 있어야 하므로 이 예외는 의도된 것이다. 임의 수신처로의 `cf email-sending send` 직접 호출은 금지한다. 절차는 `${CLAUDE_SKILL_DIR}/docs/playbook-healthcheck.md`를 따른다. 무인 경로는 Gmail에 의존하지 않는다.
+프롬프트 첫 줄에 `무인 실행:`으로 시작하는 선언이 있으면 **헬스체크 모드(C)와 주간 보고 모드(E)만** 실행한다. 주간 보고는 `weekly-precheck.sh`가 만든 보고서를 같은 규칙(읽기 전용, 질문 없음, `NOTIFY_TO` 1건)으로 다루며 절차는 `${CLAUDE_SKILL_DIR}/docs/playbook-weekly-report.md`를 따른다. 읽기 전용 점검과 카드 코멘트 게시까지만 하고, 질문하지 않으며, DNS·라우팅 쓰기 명령(`cf dns records update`·`delete`·`cf email-routing` 변경)을 실행하지 않는다. 발송은 `notify.sh`를 통해 수신처가 `NOTIFY_TO`(운영자 본인 주소)인 이상 알림 1건으로만 허용한다. 무인 실행이 장애를 알릴 수 있어야 하므로 이 예외는 의도된 것이다. 임의 수신처로의 `cf email-sending send` 직접 호출은 금지한다. 절차는 `${CLAUDE_SKILL_DIR}/docs/playbook-healthcheck.md`를 따른다. 무인 경로는 Gmail에 의존하지 않는다.
 
 ## 모드 판별
 
@@ -29,8 +29,9 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 | B. 온보딩·검수 | 새 도메인 라우팅 설정, 라우팅 규칙 감사, send-as 설정 | 쓰기 포함 (게이트 필수) | 아래 "모드 B" |
 | C. 헬스체크 | 월간 점검, "건강검진", 무인 실행 | 읽기 전용, 질문 없음 | `docs/playbook-healthcheck.md` |
 | D. 리포트 분석 | DMARC 집계 리포트 아카이브 분석 | 읽기 전용, 수집은 인터랙티브 | `docs/playbook-dmarc-analysis.md` |
+| E. 주간 실패 보고 | 주간 수신 실패 표, "메일 수신 실패 확인", 무인 실행의 주간 자동화 | 읽기 전용, 질문 없음 | `docs/playbook-weekly-report.md` |
 
-모드를 판별할 수 없으면 AskUserQuestion으로 한 번만 묻는다. 선택지는 위 네 모드로 제시한다.
+모드를 판별할 수 없으면 AskUserQuestion으로 한 번만 묻는다. 선택지는 위 다섯 모드로 제시한다.
 
 ## 입력 — baseline 파라미터
 
@@ -70,7 +71,9 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 4. **보고**: 불일치는 항목별로 현재값·기대값·조치안을 표로 정리한다. 조치는 쓰기 게이트를 거쳐 하나씩 실행한다.
 5. **발신 하위도메인**: 발신용 하위도메인 온보딩은 `cf-bounce` MX·SPF·DKIM·DMARC 레코드를 추가한다. 기존 `mg.` 같은 발신 하위도메인과 충돌하지 않는지 먼저 확인한다.
 
-## 모드 C·D — 절차 위임
+## 모드 C·D·E — 절차 위임
+
+- 모드 E(주간 실패 보고): `${CLAUDE_SKILL_DIR}/docs/playbook-weekly-report.md`를 읽는다. 보고서는 `${CLAUDE_SKILL_DIR}/scripts/weekly-precheck.sh`(orca precheck)가 고정 경로에 만든다. 에이전트는 판정이 필요한 건에만 덧붙이고 발송한다.
 
 - 모드 C(헬스체크): `${CLAUDE_SKILL_DIR}/docs/playbook-healthcheck.md`를 읽고 `${CLAUDE_SKILL_DIR}/scripts/healthcheck.sh`를 실행한다. 스크립트가 결정론으로 판정하고 에이전트는 I/O만 한다.
 - 모드 D(리포트 분석): `${CLAUDE_SKILL_DIR}/docs/playbook-dmarc-analysis.md`를 읽는다. 리포트 수집(Gmail 접근)은 인터랙티브 전용이고, 집계는 `${CLAUDE_SKILL_DIR}/scripts/dmarc_report.py <아카이브 디렉터리>`가 한다.
@@ -102,7 +105,8 @@ Cloudflare Email Routing으로 받은 메일을 Gmail 등 목적지로 포워딩
 
 - `${CLAUDE_SKILL_DIR}/docs/GUIDELINES.md` — 정합 매트릭스, 정책 강화 사다리, 마법사 중복 함정, send-as decision table, 발신 하위도메인, 한계
 - `${CLAUDE_SKILL_DIR}/docs/REFERENCE.md` — cf 치트시트, dig 원라이너, 리포트 XML 필드, 공식 문서 URL
-- `${CLAUDE_SKILL_DIR}/docs/playbook-healthcheck.md` — 헬스체크 계약(체크 C1~C7, exit code, 통지 트리)
+- `${CLAUDE_SKILL_DIR}/docs/playbook-healthcheck.md` — 헬스체크 계약(체크 C1~C8, exit code, 통지 트리)
 - `${CLAUDE_SKILL_DIR}/docs/playbook-dmarc-analysis.md` — 리포트 수집·파싱·판별 절차
+- `${CLAUDE_SKILL_DIR}/docs/playbook-weekly-report.md` — 주간 실패 보고 계약(모드 스위치, 분류 규칙, 판정, 카드 형식)
 - `${CLAUDE_SKILL_DIR}/assets/baseline-schema.json` — baseline 파라미터 스키마
 - `${CLAUDE_SKILL_DIR}/docs/INDEX.md` — 문서 목록
