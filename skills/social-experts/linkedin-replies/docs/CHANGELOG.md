@@ -1,5 +1,12 @@
 # 변경 이력
 
+## 1.6.0 — 2026-11-13
+
+- 온보딩 setup(`ego-ui/1`)을 활성화한다: 한 번의 승인 절차로 `/in/me`·`/messaging/` 관측에서 계정 slug·내 프로필 ID(`ACoAAA…`)·화면 구조 fingerprint를 확보하고, 재관측 일치 시에만 binding을 저장한다. `/messaging/` 접속의 부수 스레드 개방(읽음 영향 미확정)을 승인 설명에 명시하며 동의 없이는 진행하지 않는다.
+- setup의 관측 실패(ACoAAA 미관측·로그인 화면·fingerprint 불일치 등)는 단계별 `EGO_*` 사유로 구분하고 락을 보존한다.
+- 구형 binding이 저장된 상태에서 구형 경로는 `NEEDS_SETUP`으로 안내한다(transport 검사 순서 정리).
+- `scan`은 여전히 `UI_NOT_ACTIVATED`다. G2 관측(필터 의미론·상세 개방·읽음 영향 측정)이 선행된다.
+
 ## 1.5.0 — 2026-11-13
 
 - UI 실행 계층을 Aside REPL에서 ego-browser 고정 스크립트(`ego-ui/1`)로 전환한다. `inspect`는 스킬 전용 TaskSpace의 관리 Page 발견(`PAGES_OBSERVED`)과 지정 Page의 전체 snapshot(`OBSERVED`)을 지원하고, Aside `inspect`는 동결한다.

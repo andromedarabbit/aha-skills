@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -171,8 +171,8 @@ function binding() {
   const path = join(STATE_DIR, 'binding.json');
   if (!existsSync(path)) throw fail('NEEDS_SETUP');
   const result = readPrivate(path);
-  if (typeof result.profile !== 'string' || typeof result.account?.id !== 'string') throw fail('UNSAFE_STATE');
   if (result.transport !== TRANSPORT) throw fail('NEEDS_SETUP');
+  if (typeof result.profile !== 'string' || typeof result.account?.id !== 'string') throw fail('UNSAFE_STATE');
   return result;
 }
 
@@ -462,6 +462,131 @@ async function inspectEgo(input) {
   }
 }
 
+const SIDE_EFFECT_NOTE = '/messaging/ 접속 시 마지막 활성 스레드가 자동 개방될 수 있으며(2026-11-13 관측) 이 부작용의 읽음 영향은 아직 미확정입니다. 이 설명에 대한 동의 없이는 계정 연결(binding 저장)을 진행하지 않습니다.';
+
+async function setupEgo(input) {
+  let acquired = null;
+  const { acquireEgoIdentity, EGO_STEP_CODES, EGO_FAILURE_REASONS } = await import('./ego-ui.mjs');
+  const firstStep = input.accountId === undefined;
+  const keys = firstStep ? ['transport', 'executable', 'taskSpaceName'] : ['transport', 'executable', 'taskSpaceName', 'accountId', 'profileId'];
+  if (Object.keys(input).some(key => !keys.includes(key)) || firstStep && !['ego-ui/1'].includes(input.transport) ||
+      typeof input.executable !== 'string' || !input.executable.startsWith('/') || input.executable.length > 4096 ||
+      /[\x00-\x1f\x7f]/.test(input.executable) || typeof input.taskSpaceName !== 'string' ||
+      !input.taskSpaceName || input.taskSpaceName.startsWith('-') || input.taskSpaceName.length > 512) throw fail('INVALID_ARGUMENT');
+  ensureState();
+  const path = join(STATE_DIR, 'locks', `ego-profile-${digest([input.executable, input.taskSpaceName])}`);
+  try { mkdirSync(path, { mode: 0o700 }); }
+  catch (error) { if (error.code === 'EEXIST') throw fail('LOCKED'); throw error; }
+  let phase = 'UI_STATE_FAILED';
+  try {
+    durableWrite(join(path, 'operation.json'), { operation: 'setup', attemptId: randomUUID(), startedAt: new Date().toISOString(), ownerPid: process.pid });
+    const fd = openSync(join(STATE_DIR, 'locks'), constants.O_RDONLY);
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    phase = 'UI_OPERATION_FAILED';
+    const identity = await acquireEgoIdentity({ executable: input.executable, taskSpaceName: input.taskSpaceName });
+    rmSync(join(path, 'operation.json'));
+    rmdirSync(path);
+    acquired = identity;
+  } catch (error) {
+    const allowed = [...EGO_STEP_CODES];
+    return {
+      status: allowed.includes(error?.code) ? error.code : 'EGO_OUTCOME_UNKNOWN',
+      reason: EGO_FAILURE_REASONS.includes(error?.reason) ? error.reason : phase,
+      profileLockRetained: true,
+    };
+  }
+  if (firstStep) {
+    return {
+      status: 'CONFIRM_ACCOUNT', transport: 'ego-ui/1', taskSpaceName: input.taskSpaceName,
+      account: { slug: acquired.slug, profileId: acquired.profileId },
+      fingerprint: acquired.fingerprint, sideEffect: SIDE_EFFECT_NOTE,
+    };
+  }
+  if (input.accountId !== acquired.slug || input.profileId !== acquired.profileId) throw fail('ACCOUNT_MISMATCH');
+  let egoVersion = null;
+  try {
+    const probe = spawnSync(input.executable, ['--version'], { env: childEnvironment(), encoding: 'utf8', timeout: 10000 });
+    egoVersion = probe.status === 0 && typeof probe.stdout === 'string' ? probe.stdout.split('\n')[0].trim().slice(0, 64) || null : null;
+  } catch { egoVersion = null; }
+  ensureState();
+  durableWrite(join(STATE_DIR, 'binding.json'), {
+    transport: 'ego-ui/1', executable: input.executable, taskSpaceName: input.taskSpaceName,
+    egoVersion, account: { slug: acquired.slug, profileId: acquired.profileId }, fingerprint: acquired.fingerprint,
+  });
+  return { status: 'OK', transport: 'ego-ui/1', account: { slug: acquired.slug, profileId: acquired.profileId } };
+}
+
+function egoBinding() {
+  if (!existsSync(STATE_DIR)) throw fail('NEEDS_SETUP');
+  privateDirectory(STATE_DIR);
+  const path = join(STATE_DIR, 'binding.json');
+  if (!existsSync(path)) throw fail('NEEDS_SETUP');
+  const result = readPrivate(path);
+  if (result.transport !== 'ego-ui/1') throw fail('NEEDS_SETUP');
+  if (typeof result.executable !== 'string' || !result.executable.startsWith('/') || typeof result.taskSpaceName !== 'string' || !result.taskSpaceName ||
+      typeof result.account?.slug !== 'string' || !result.fingerprint?.labels) throw fail('UNSAFE_STATE');
+  return result;
+}
+
+// G2 통과 뒤 활성 전환 지점: run()의 scan 가드를 두 줄로 교체한다 —
+// `if (command === 'scan' && input.transport === 'ego-ui/1') return scanEgo(input);` +
+// `if (command === 'scan' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');` (aside 차단 유지).
+// 합성 검증은 이 함수를 직접 호출해 수행한다(진입점은 아직 가드로 막혀 있어 테스트만의 유일한 구동 경로).
+export async function scanEgo(input) {
+  const { scanEgoList, EGO_STEP_CODES, EGO_FAILURE_REASONS } = await import('./ego-ui.mjs');
+  if (Object.keys(input).some(key => !['transport', 'executable', 'taskSpaceName'].includes(key)) ||
+      input.transport !== 'ego-ui/1' || typeof input.executable !== 'string' || !input.executable.startsWith('/') ||
+      input.executable.length > 4096 || /[\x00-\x1f\x7f]/.test(input.executable) || typeof input.taskSpaceName !== 'string' ||
+      !input.taskSpaceName || input.taskSpaceName.startsWith('-') || input.taskSpaceName.length > 512) throw fail('INVALID_ARGUMENT');
+  const link = egoBinding();
+  if (link.executable !== input.executable || link.taskSpaceName !== input.taskSpaceName) throw fail('NEEDS_SETUP');
+  ensureState();
+  const path = join(STATE_DIR, 'locks', `ego-profile-${digest([input.executable, input.taskSpaceName])}`);
+  try { mkdirSync(path, { mode: 0o700 }); }
+  catch (error) { if (error.code === 'EEXIST') throw fail('LOCKED'); throw error; }
+  let phase = 'UI_STATE_FAILED';
+  let observed = null;
+  const review = [];
+  let recordWriteFailed = false;
+  try {
+    durableWrite(join(path, 'operation.json'), { operation: 'scan', attemptId: randomUUID(), startedAt: new Date().toISOString(), ownerPid: process.pid });
+    const fd = openSync(join(STATE_DIR, 'locks'), constants.O_RDONLY);
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    phase = 'UI_OPERATION_FAILED';
+    observed = await scanEgoList({ executable: link.executable, taskSpaceName: link.taskSpaceName, fingerprint: link.fingerprint, deadlineMs: 100000 });
+    // 관측 기록은 락 안에서 쓴다(KTD20). 원문 대신 preview·time 해시만 저장해 변경을 감지한다.
+    const slug = link.account?.slug ?? null;
+    for (const item of observed.items) {
+      const previewHash = digest([item.preview, item.time]);
+      const recordPath = join(STATE_DIR, 'conversations', `ego-obs-${digest(['ego-observation', slug, item.name])}.json`);
+      let previous = null;
+      try { previous = readPrivate(recordPath); } catch { previous = null; }
+      const changed = !previous || previous.previewHash !== previewHash;
+      try {
+        durableWrite(recordPath, { name: item.name, previewHash, observedAt: new Date().toISOString(), changed });
+      } catch { recordWriteFailed = true; }
+      review.push({ ...item, status: 'review', reason: 'DETAIL_NOT_PERMITTED', changed });
+    }
+    rmSync(join(path, 'operation.json'));
+    rmdirSync(path);
+    observed.recordWriteFailed = recordWriteFailed;
+  } catch (error) {
+    const allowed = [...EGO_STEP_CODES];
+    return {
+      status: allowed.includes(error?.code) ? error.code : 'EGO_OUTCOME_UNKNOWN',
+      reason: EGO_FAILURE_REASONS.includes(error?.reason) ? error.reason : phase,
+      profileLockRetained: true,
+    };
+  }
+  return {
+    status: 'OK', transport: 'ego-ui/1', candidates: [], review,
+    filters: observed.filters, complete: observed.complete,
+    coverage: { listed: observed.itemCount, detailOpened: 0, completeness: 'partial',
+      recordWriteFailed: observed.recordWriteFailed,
+      reason: 'G2 상세 개방 미허용 — 발신자 확정은 상세 관측(별도 동의) 후에만 가능합니다' },
+  };
+}
+
 async function run(args, input) {
   let parsed;
   try {
@@ -480,7 +605,9 @@ async function run(args, input) {
   }
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('INVALID_ARGUMENT');
   if (command === 'inspect') return input.taskSpaceName !== undefined ? inspectEgo(input) : inspectUi(input);
-  if (['setup', 'scan'].includes(command) && ['aside-ui/1', 'ego-ui/1'].includes(input.transport)) throw fail('UI_NOT_ACTIVATED');
+  if (command === 'setup' && input.transport === 'ego-ui/1') return setupEgo(input);
+  if (command === 'scan' && ['aside-ui/1', 'ego-ui/1'].includes(input.transport)) throw fail('UI_NOT_ACTIVATED');
+  if (command === 'setup' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');
   if (command === 'setup') {
     if (Object.keys(input).some(key => !['profile', 'accountId'].includes(key)) || typeof input.profile !== 'string' || !/^[\p{L}\p{N}_ -]{1,128}$/u.test(input.profile) || input.profile.trim() !== input.profile) throw fail('INVALID_ARGUMENT');
     const account = normalizeAccount(await authenticated({ profile: input.profile, command: input.accountId === undefined ? 'authorize' : 'me' }));

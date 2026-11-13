@@ -11,7 +11,7 @@ const fail = (code, reason) => Object.assign(new Error, { code, reason });
 export const EGO_STEP_CODES = Object.freeze([
   'EGO_SPACE_FAILED', 'EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_TAB_NOT_FOUND',
   'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_ATTACH_FAILED', 'EGO_SNAPSHOT_FAILED',
-  'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED',
+  'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_FINGERPRINT_MISMATCH',
 ]);
 export const EGO_FAILURE_REASONS = Object.freeze([
   'EGO_SPAWN_FAILED', 'EGO_PROCESS_FAILED', 'EGO_STDIN_FAILED', 'EGO_STDOUT_FAILED', 'EGO_STDERR_FAILED',
@@ -239,4 +239,177 @@ async function observePage(pageLabel, spaceName, classify, login, authFormDetect
     const codes = ['EGO_TABS_FAILED', 'EGO_TAB_NOT_FOUND', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_ATTACH_FAILED', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED'];
     console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_SNAPSHOT_FAILED' }));
   }
+}
+
+// setup(온보딩) 고정 작업(KTD21): /in/me → slug·ACoAAA ID, /messaging → 인증·구조.
+// 대화 클릭·입력·전송 없음. /messaging/ 접속의 부수 스레드 개방은 승인 설명 대상(G2).
+async function acquireIdentity(spaceName, meUrl, messagingUrl, classify, login) {
+  let task;
+  try { task = await taskSpace(spaceName); }
+  catch (error) {
+    const nameInUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
+    console.log(JSON.stringify({ status: nameInUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
+    return;
+  }
+  const stop = code => { throw Object.assign(new Error, { code }); };
+  try {
+    const pages = await task.pages();
+    if (!Array.isArray(pages)) stop('EGO_TABS_FAILED');
+    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
+    if (!page) stop('EGO_ATTACH_FAILED');
+    await page.goto(meUrl, { timeout: 45000 });
+    const meUrl2 = await page.url();
+    // 신원 다리의 경계: 정확한 origin만 허용하고, 로그인 화면은 별도 사유로 구분한다(리뷰 #3·6).
+    if (new URL(meUrl2).origin !== 'https://www.linkedin.com') stop('EGO_ORIGIN_MISMATCH');
+    if (login(meUrl2)) stop('EGO_NEEDS_LOGIN');
+    const slug = /^\/in\/([^/]+)/.exec(new URL(meUrl2).pathname)?.[1] ?? null;
+    if (!slug || slug === 'me') stop('EGO_SCHEMA_INVALID');
+    const rawId = await page.evaluate(() => {
+      const el = document.querySelector('[id*="ACoAAA"]');
+      const m = /ACoAAA[A-Za-z0-9]+/.exec(el?.id || '');
+      return m ? m[0] : null;
+    });
+    if (!/^ACoAAA[A-Za-z0-9]{10,}$/.test(String(rawId))) stop('EGO_SCHEMA_INVALID');
+    await page.goto(messagingUrl, { timeout: 45000 });
+    const currentUrl = await page.url();
+    if (!classify(currentUrl)) stop(login(currentUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+    // fingerprint은 scan과 동일한 DOM 질의로 계산한다(측정 기계 통일 — 리뷰 #1).
+    const fingerprint = await page.evaluate(() => {
+      const labels = [...new Set(
+        [...document.querySelectorAll('[role="radiogroup"] button')].map(b => (b.textContent || '').trim()).filter(Boolean)
+      )].sort();
+      return { labels, hasConversationList: [...document.querySelectorAll('ul')].some(u => /conversation/i.test(u.getAttribute('aria-label') || '')) };
+    });
+    if (!fingerprint || !Array.isArray(fingerprint.labels) || !fingerprint.labels.length || typeof fingerprint.hasConversationList !== 'boolean') stop('EGO_SCHEMA_INVALID');
+    console.log(JSON.stringify({
+      status: 'IDENTITY_ACQUIRED', slug, profileId: rawId,
+      messaging: classify(currentUrl), fingerprint,
+    }));
+  } catch (error) {
+    const codes = ['EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED'];
+    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_SNAPSHOT_FAILED' }));
+  }
+}
+
+// setup 첫 단계: 계정·구조 확보(CONFIRM_ACCOUNT 제시용). 상태 저장 없이 관측만 반환한다.
+export async function acquireEgoIdentity(binding) {
+  if (!exactKeys(binding, ['executable', 'taskSpaceName'])) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
+  const script = `await (${acquireIdentity.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/in/me/', 'https://www.linkedin.com/messaging/', ${messageLocation.toString()}, ${loginPath.toString()});`;
+  const output = await execute(binding, script);
+  if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
+  const fp = output?.fingerprint;
+  if (!exactKeys(output, ['status', 'slug', 'profileId', 'messaging', 'fingerprint']) || output.status !== 'IDENTITY_ACQUIRED' ||
+      !validString(output.slug, 128) || !/^ACoAAA[A-Za-z0-9]{10,}$/.test(String(output.profileId)) ||
+      !['list', 'subpath'].includes(output.messaging) ||
+      !fp || !exactKeys(fp, ['labels', 'hasConversationList']) || !Array.isArray(fp.labels) || !fp.labels.length ||
+      fp.labels.some(label => !validString(label, 64)) || typeof fp.hasConversationList !== 'boolean') {
+    throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+  }
+  return output;
+}
+
+// scan 고정 작업(U9·U10): fingerprint 검사 → 필터 발견 → lazy append 목록 순회.
+// 상세 개방·클릭·입력 없이 목록 관측만 한다. deadline 초과 시 부분 관측으로 정상 종료한다.
+async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadlineMs, classify, login) {
+  let task;
+  try { task = await taskSpace(spaceName); }
+  catch (error) {
+    const nameInUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
+    console.log(JSON.stringify({ status: nameInUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
+    return;
+  }
+  const stop = code => { throw Object.assign(new Error, { code }); };
+  try {
+    const pages = await task.pages();
+    if (!Array.isArray(pages)) stop('EGO_TABS_FAILED');
+    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
+    if (!page) stop('EGO_ATTACH_FAILED');
+    await page.goto(messagingUrl, { timeout: 45000 });
+    const currentUrl = await page.url();
+    if (!classify(currentUrl)) stop(login(currentUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+    // 이동 비용을 순회 예산에서 제외해 부모 125초 상한과의 산수 충돌을 피한다(리뷰 #8).
+    const deadline = Date.now() + deadlineMs;
+    const fingerprint = await page.evaluate(expected => {
+      const labels = [...new Set(
+        [...document.querySelectorAll('[role="radiogroup"] button')].map(b => (b.textContent || '').trim()).filter(Boolean)
+      )].sort();
+      return { labels, hasConversationList: [...document.querySelectorAll('ul')].some(u => /conversation/i.test(u.getAttribute('aria-label') || '')) };
+    }, expectedFingerprintJson);
+    if (!fingerprint || fingerprint.labels?.join('|') !== expectedFingerprintJson.labels?.join('|') ||
+        fingerprint.hasConversationList !== expectedFingerprintJson.hasConversationList) stop('EGO_FINGERPRINT_MISMATCH');
+    const filters = await page.evaluate(() => [...document.querySelectorAll('[role="radiogroup"] button')].map(b => ({
+      label: (b.textContent || '').trim(), checked: b.getAttribute('aria-checked'),
+    })));
+    if (!Array.isArray(filters) || !filters.length) stop('EGO_SCHEMA_INVALID');
+    const readItems = () => page.evaluate(() => {
+      const list = [...document.querySelectorAll('ul')].find(u => /conversation/i.test(u.getAttribute('aria-label') || ''));
+      if (!list) return { items: [], total: 0 };
+      const rows = [...list.querySelectorAll(':scope > li')];
+      return {
+        total: rows.length,
+        items: rows.slice(0, 100).map(li => ({
+          name: (li.querySelector('h2,h3,heading,[role="heading"]')?.textContent ?? li.textContent ?? '').trim().slice(0, 120),
+          preview: (li.querySelector('p,[role="paragraph"]')?.textContent ?? '').trim().slice(0, 200),
+          time: (li.querySelector('[class*="time"],time')?.textContent ?? '').trim().slice(0, 40),
+        })),
+      };
+    });
+    const views = [];
+    let totals = [];
+    let stableRounds = 0;
+    let complete = false;
+    while (Date.now() < deadline) {
+      const view = await readItems();
+      // 형식 불명 관측은 실패로 올리지 않고 부분 종료한다(KTD13 — 판정 불명은 partial이 우선).
+      if (!view || !Array.isArray(view.items)) break;
+      const currentUrl2 = await page.url();
+      if (!classify(currentUrl2)) stop(login(currentUrl2) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+      const previous = views[views.length - 1];
+      views.push(view.items);
+      totals.push(view.total);
+      if (previous && view.items.length === previous.length) {
+        stableRounds += 1;
+        if (stableRounds >= 2 && view.total === view.items.length) { complete = true; break; }
+      } else stableRounds = 0;
+      if (Date.now() + 1500 >= deadline) break;
+      await page.mouse.move(200, 300);
+      await page.mouse.wheel(0, 800);
+      // lazy append 렌더 지연 이후에 안정성을 재측정한다(리뷰 #5).
+      await new Promise(resolve => setTimeout(resolve, 400));
+    }
+    const lastItems = views[views.length - 1] ?? [];
+    console.log(JSON.stringify({
+      status: 'SCAN_OBSERVED', filters, items: lastItems,
+      itemCount: lastItems.length, complete,
+      scrollRounds: Math.max(0, views.length - 1),
+    }));
+  } catch (error) {
+    const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_FINGERPRINT_MISMATCH'];
+    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_SNAPSHOT_FAILED' }));
+  }
+}
+
+// scan 목록 관측(부모 검증): fingerprint 일치를 강제하고 항목·필터 형식을 검증한다(U9·U10).
+export async function scanEgoList(binding) {
+  if (!exactKeys(binding, ['executable', 'taskSpaceName', 'fingerprint', 'deadlineMs'])) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
+  const fp = binding.fingerprint;
+  if (!fp || !exactKeys(fp, ['labels', 'hasConversationList']) || !Array.isArray(fp.labels) || !fp.labels.length ||
+      fp.labels.some(label => !validString(label, 64)) || typeof fp.hasConversationList !== 'boolean') throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 115000) throw fail('INVALID_ARGUMENT');
+  const script = `await (${scanList.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(fp)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()});`;
+  const output = await execute(binding, script);
+  if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
+  if (!exactKeys(output, ['status', 'filters', 'items', 'itemCount', 'complete', 'scrollRounds']) || output.status !== 'SCAN_OBSERVED' ||
+      !Array.isArray(output.filters) || output.filters.some(f => !f || typeof f.label !== 'string' || typeof f.checked !== 'string') ||
+      !Array.isArray(output.items) || output.items.length !== output.itemCount ||
+      output.items.some(item => !item || !exactKeys(item, ['name', 'preview', 'time']) ||
+        typeof item.name !== 'string' || typeof item.preview !== 'string' || typeof item.time !== 'string') ||
+      !Number.isSafeInteger(output.itemCount) || typeof output.complete !== 'boolean' || !Number.isSafeInteger(output.scrollRounds)) {
+    throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+  }
+  return output;
 }

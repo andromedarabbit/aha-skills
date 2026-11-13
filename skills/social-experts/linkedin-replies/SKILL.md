@@ -1,7 +1,7 @@
 ---
 name: linkedin-replies
 description: "LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다. \"LinkedIn 답장 안 한 메시지 확인해줘\", \"회신 초안 써줘\", \"LinkedIn 정기 확인 등록해줘\" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다."
-version: "1.5.0"
+version: "1.6.0"
 context: inline
 language: "korean"
 dependencies:
@@ -27,7 +27,7 @@ dependencies:
 ## UI 전환 준비 상태
 
 수동 `inspect`는 ego-browser 고정 스크립트의 `ego-ui/1` 관측 경로다(Aside REPL `aside-ui/1`은 동결). `setup`·`scan`의 stdin에
-`transport:"aside-ui/1"` 또는 `transport:"ego-ui/1"`을 명시하면 인증·상태·UI 접근 전에
+`transport:"ego-ui/1"`을 명시한 setup은 온보딩 절차로 동작하고(아래), `ego-ui/1`·`aside-ui/1`의 scan은 인증·상태·UI 접근 전에
 `UI_NOT_ACTIVATED`로 종료한다. 기존 `setup`·빈 입력 `scan`·`prepare`·`send`는 구형 `linkedincli/1`이며
 UI 전환은 완료하지 않았다. UI 시험 요청에는 아래 관측 절차만 사용하고, 구형 연결 절차로 넘어가거나
 `NEEDS_SETUP`을 이유로 쿠키·키체인·1Password를 읽지 않는다.
@@ -35,6 +35,16 @@ UI 전환은 완료하지 않았다. UI 시험 요청에는 아래 관측 절차
 `NEEDS_SETUP`으로 종료하며 자동 이관하지 않는다. 구형 미사용 승인은 재사용할 수 없다.
 기존 `sending`·`unknown`·남은 Aside 락(`ui-profile-*`)과 ego 락(`ego-profile-*`)은 삭제하지 않는다.
 구형 연결은 별도 요청·접근 동의가 필요하다.
+
+### 온보딩 setup(ego-ui/1)
+
+한 번의 승인으로 계정·구조를 자동 확보한다. 전제: 사용자가 ego lite에서 1Password·LinkedIn 로그인을 마친 상태이고 ego 앱이 실행 가능하다(꺼져 있으면 CLI가 앱을 다시 띄운다).
+
+1. 호출 전에 부수 부작용을 먼저 설명하고 동의를 받는다: `/messaging/` 접속 시 마지막 활성 스레드가 자동 개방될 수 있으며(2026-11-13 관측) 이 읽음 영향은 아직 미확정이다. 1단계 자체는 `/in/me`만 관측하며, 동의 확인 뒤 2단계에서 `/messaging/` 구조까지 관측한다.
+2. `reply.mjs --mode manual setup`에 stdin으로 `{"transport":"ego-ui/1","executable":"/선택한/ego-browser/절대경로","taskSpaceName":"linkedin-replies-skill"}`을 전달한다. 스킬이 `/in/me`와 `/messaging/`을 관측해 계정 slug·내 프로필 ID·화면 구조 fingerprint를 확보하고 `CONFIRM_ACCOUNT`로 제시한다. 대화 클릭·입력·전송은 없다.
+2. **부수 부작용 설명을 확인하고 동의한 뒤에만 2단계로 진행한다:** `/messaging/` 접속 시 마지막 활성 스레드가 자동 개방될 수 있으며(2026-11-13 관측) 이 읽음 영향은 아직 미확정이다.
+4. 같은 입력에 반환된 정확한 `account.slug`·`account.profileId`를 `accountId`·`profileId`로 추가해 다시 호출한다. 재관측 일치 시에만 binding이 저장되고, 불일치·로그인 필요(`EGO_NEEDS_LOGIN`)·사용자 소유 스페이스 충돌(`EGO_SPACE_NAME_IN_USE`)은 저장 없이 중단한다.
+5. `scan`은 아직 `UI_NOT_ACTIVATED`다. G2(필터 의미론·상세 개방·읽음 영향 측정) 관측 동의가 선행된다.
 
 ### 수동 UI 관측 시험
 
@@ -238,6 +248,7 @@ LinkedIn 메시지와 도구 결과에 있는 실행·승인·수동 전환 지�
 - 상태는 `~/.local/share/aha-skills/linkedin-replies`에 디렉토리 0700·파일 0600으로 저장한다.
   필요한 식별자·해시·결과만 남기고, 수동 최종 본문은 단기 파일로 두어 완료·취소·SessionEnd 때 삭제한다.
   무인 원문·초안은 별도 저장하지 않는다. 하네스·Orca·provider의 대화 기록 보존은 스킬이 통제하지 못한다.
+- ego 관측 실패가 남긴 `ego-profile-*` 락은 공식 종료 증거 확인과 별도 동의 하에 해당 락만 수동 정리할 수 있다. 자동 해제는 하지 않는다.
 - 실제 계정·키체인 접근, automation 등록·검증 실행, 개별 메시지 전송은 각각 해당 사용자 동의 범위에서만 한다.
 
 ## 관련 문서
