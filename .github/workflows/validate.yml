@@ -95,6 +95,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       # skill-author/scripts/tests/run.sh 는 pytest 대상이 있는데 uv 가 없으면 exit 1 이다.
       # 현재 대상은 없지만 그 계약을 미리 만족시킨다.
       - uses: astral-sh/setup-uv@v5

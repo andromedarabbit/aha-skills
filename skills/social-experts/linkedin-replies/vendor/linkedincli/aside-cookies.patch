@@ -1,0 +1,34 @@
+diff --git a/src/core/chrome-cookies.ts b/src/core/chrome-cookies.ts
+--- a/src/core/chrome-cookies.ts
++++ b/src/core/chrome-cookies.ts
+@@ -146,0 +147 @@
++  aside?: { home: string; readCookies: () => Promise<Record<string, string>> },
+@@ -147,0 +149,4 @@
++  if (aside) {
++    const cookies = await aside.readCookies();
++    return cookieResult(cookies, join(aside.home, 'Library/Application Support/Aside', profile), profile);
++  }
+@@ -198,0 +204,4 @@
++  return cookieResult(cookies, profilePath, profile);
++}
++
++function cookieResult(cookies: Record<string, string>, profilePath: string, profile: string): ChromeCookieResult {
+diff --git a/src/core/auth.ts b/src/core/auth.ts
+--- a/src/core/auth.ts
++++ b/src/core/auth.ts
+@@ -47 +47 @@
+-  return { liAt, jsessionid };
++  return { liAt, jsessionid, cookieHeader: process.env.LINKEDIN_COOKIE_HEADER };
+diff --git a/src/index.ts b/src/index.ts
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -3,2 +3,2 @@
+-import { fileURLToPath } from 'node:url';
+-import { dirname, join } from 'node:path';
++import { fileURLToPath, pathToFileURL } from 'node:url';
++import { dirname, join, resolve } from 'node:path';
+@@ -27 +27,3 @@
+-program.parse();
++export { loadLinkedInCookiesFromChrome } from './core/chrome-cookies.js';
++
++if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) program.parse();

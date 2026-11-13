@@ -1,0 +1,38 @@
+diff --git a/src/commands/messaging/messaging.ts b/src/commands/messaging/messaging.ts
+index 4831446..a24ba90 100644
+--- a/src/commands/messaging/messaging.ts
++++ b/src/commands/messaging/messaging.ts
+@@ -1,0 +2 @@ import { z } from 'zod';
++import { readFileSync } from 'node:fs';
+@@ -80 +81 @@ export const messagingSendCommand: CommandDefinition = {
+-  examples: ['linkedin messaging send CONVERSATION_URN_ID --text "Hello!"'],
++  examples: ['printf "Hello!" | linkedin messaging send CONVERSATION_URN_ID --text-stdin'],
+@@ -84 +85 @@ export const messagingSendCommand: CommandDefinition = {
+-    text: z.string().describe('Message text'),
++    text: z.preprocess((value) => value === true ? readFileSync(0, 'utf8') : value, z.string()).describe('Message text'),
+@@ -90 +91 @@ export const messagingSendCommand: CommandDefinition = {
+-      { field: 'text', flags: '-t, --text <text>', description: 'Message text' },
++      { field: 'text', flags: '--text-stdin', description: 'Read message text from stdin' },
+diff --git a/src/core/client.ts b/src/core/client.ts
+index 515c42a..dbfabfd 100644
+--- a/src/core/client.ts
++++ b/src/core/client.ts
+@@ -101 +101,2 @@ export function createClient(auth: LinkedInAuth): LinkedInClient {
+-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
++    const maxRetries = options.method === 'GET' ? MAX_RETRIES : 0;
++    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+@@ -170 +171 @@ export function createClient(auth: LinkedInAuth): LinkedInClient {
+-            if (attempt < MAX_RETRIES) {
++            if (attempt < maxRetries) {
+@@ -177 +178 @@ export function createClient(auth: LinkedInAuth): LinkedInClient {
+-            if (response.status >= 500 && attempt < MAX_RETRIES) {
++            if (response.status >= 500 && attempt < maxRetries) {
+@@ -197 +198 @@ export function createClient(auth: LinkedInAuth): LinkedInClient {
+-          if (attempt < MAX_RETRIES) continue;
++          if (attempt < maxRetries) continue;
+@@ -202 +203 @@ export function createClient(auth: LinkedInAuth): LinkedInClient {
+-          if (options.method !== 'GET' || attempt >= MAX_RETRIES) {
++          if (options.method !== 'GET' || attempt >= maxRetries) {
+@@ -209 +210 @@ export function createClient(auth: LinkedInAuth): LinkedInClient {
+-          if (attempt < MAX_RETRIES) continue;
++          if (attempt < maxRetries) continue;

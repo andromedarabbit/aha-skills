@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "개인용 Claude Code Agent Skills 모음 — 메타(스킬 작성) 스킬 제공",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "plugins": [
     {
@@ -25,11 +25,12 @@
     },
     {
       "name": "social-experts",
-      "description": "소셜미디어 포스팅 스킬 — aside 실행 계층으로 X·LinkedIn·Facebook·Bluesky에 본인 목소리로 쓴 문안을 승인 후 게시",
+      "description": "소셜미디어 게시와 LinkedIn 회신 — 승인 후 게시하거나 미응답 대화의 회신 초안을 검토·전송하고 Orca 정기 확인 등록을 지원",
       "source": "./skills/social-experts",
       "strict": false,
       "skills": [
-        "./social-posting"
+        "./social-posting",
+        "./linkedin-replies"
       ]
     },
     {
