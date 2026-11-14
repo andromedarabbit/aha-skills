@@ -11,7 +11,7 @@ const fail = (code, reason) => Object.assign(new Error, { code, reason });
 export const EGO_STEP_CODES = Object.freeze([
   'EGO_SPACE_FAILED', 'EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_TAB_NOT_FOUND',
   'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_ATTACH_FAILED', 'EGO_SNAPSHOT_FAILED',
-  'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_FINGERPRINT_MISMATCH',
+  'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_FINGERPRINT_MISMATCH', 'EGO_THREAD_NOT_OBSERVED',
 ]);
 export const EGO_FAILURE_REASONS = Object.freeze([
   'EGO_SPAWN_FAILED', 'EGO_PROCESS_FAILED', 'EGO_STDIN_FAILED', 'EGO_STDOUT_FAILED', 'EGO_STDERR_FAILED',
@@ -513,9 +513,14 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
     let want = normalize(previewPrefix)
       .replace(/^InMail\s*(?:•\s*)?/i, '')
       .replace(/^[^:]{1,60}:\s*/, '');
+    // scan 고정 상한(토큰 최소화): 후보 이벤트는 행당 본문 300자·최신 12개. read의 입력 상한은 readEgo가 별도로 둔다.
+    const EVENT_TEXT_MAX = 300;
+    const EVENT_MAX = 12;
     let conversationUuid = null;
     let lastSenderIsOther = false;
     let proofMatch = false;
+    let threadSeg = null;
+    let events = [];
     let segSeen = false;
     let prevUuid = null;
     let stableTicks = 0;
@@ -537,24 +542,29 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
           // 실측(2026-11-14, KTD19 반증): data-event-urn의 프로필 세그먼트는 메시지 발신자가 아니라
           // 수신함 소유자(나)다. 메시지 행(.msg-s-event-listitem)의 `--other` 클래스가 실제 발신 신호다 —
           // 상대 메시지에는 붙고 내 메시지에는 없다(그룹 스레드의 타 멤버 메시지에도 붙는다).
-          const thread = await page.evaluate(() => {
-            const events = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
-            const last = events[events.length - 1];
-            const isOther = !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || ''));
-            // 이벤트 컨테이너 textContent는 'View <이름>'s profile … 시각 … 이모지 액션 바'가 앞에 붙는다.
-            // 복제본에서 헤더·액션 마크업을 떼고 버블 본문만 남긴다.
-            let text = '';
-            if (last) {
-              const clone = last.cloneNode(true);
+          const thread = await page.evaluate(eventTextMax => {
+            const extract = row => {
+              const isOther = /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(row.className || ''));
+              // 이벤트 컨테이너 textContent는 'View <이름>'s profile … 시각 … 이모지 액션 바'가 앞에 붙는다.
+              // 복제본에서 헤더·액션 마크업을 떼고 버블 본문만 남긴다.
+              const clone = row.cloneNode(true);
               for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
-              text = (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300);
-            }
-            return { lastSenderIsOther: isOther, text };
-          });
+              return { senderIsOther: isOther, text: (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, eventTextMax) };
+            };
+            const rows = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
+            const all = rows.map(extract);
+            const last = rows[rows.length - 1];
+            const lastIsOther = !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || ''));
+            const lastText = all.length ? all[all.length - 1].text : '';
+            // renderedCount는 관측된 이벤트 총수이자 스텁·테스트 분기 마커다.
+            return { lastSenderIsOther: lastIsOther, text: lastText, renderedCount: all.length, events: all.filter(e => e.text) };
+          }, EVENT_TEXT_MAX);
           if (thread && typeof thread.text === 'string') {
             conversationUuid = uuid;
             lastSenderIsOther = thread.lastSenderIsOther;
             proofMatch = normalize(thread.text).startsWith(want);
+            threadSeg = seg;
+            events = proofMatch && lastSenderIsOther && Array.isArray(thread.events) ? thread.events.slice(-EVENT_MAX) : [];
             if (proofMatch) break;
             // 같은 UUID에서 세 틱 연속 입증 실패면 이미 열린 스레드가 그것이라는 뜻이다 — 대기 없이 UNPROVEN으로 마친다.
             if (uuid === prevUuid) { stableTicks += 1; if (stableTicks >= 3) break; }
@@ -567,7 +577,7 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
     if (!segSeen) stop('EGO_ATTACH_FAILED');
     console.log(JSON.stringify({
       status: 'THREAD_OBSERVED', conversationUuid,
-      lastSenderIsOther, proofMatch,
+      lastSenderIsOther, proofMatch, threadSeg, events,
     }));
   } catch (error) {
     const codes = ['EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_TAB_NOT_FOUND'];
@@ -588,8 +598,12 @@ export async function openEgoThread(binding) {
   const output = await execute(binding, script);
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   const uuidOk = typeof output.conversationUuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(output.conversationUuid);
-  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSenderIsOther', 'proofMatch']) || output.status !== 'THREAD_OBSERVED' ||
-      !uuidOk || typeof output.lastSenderIsOther !== 'boolean' ||
+  const segOk = typeof output.threadSeg === 'string' && /^2-[A-Za-z0-9_-]{2,254}$/.test(output.threadSeg);
+  const eventsOk = Array.isArray(output.events) && output.events.length <= 12 &&
+    output.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
+      typeof e.text === 'string' && e.text.length <= 300);
+  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSenderIsOther', 'proofMatch', 'threadSeg', 'events']) || output.status !== 'THREAD_OBSERVED' ||
+      !uuidOk || !segOk || !eventsOk || typeof output.lastSenderIsOther !== 'boolean' ||
       typeof output.proofMatch !== 'boolean') throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
   return output;
 }
@@ -753,5 +767,84 @@ export async function sendEgoThread(binding) {
   if (exactKeys(output, ['status']) && (EGO_STEP_CODES.includes(output.status) || EGO_SEND_BLOCK_CODES.includes(output.status) || output.status === 'SEND_UNKNOWN')) throw fail(output.status);
   if (!exactKeys(output, ['status', 'messageUrn']) || output.status !== 'SEND_OBSERVED' ||
       (output.messageUrn !== null && !validString(output.messageUrn, 200))) throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+  return output;
+}
+
+// 대화 전체 읽기(KTD25): scan이 관측해 기록한 threadSeg(URL 경로 세그먼트)로 스레드에 직행한다.
+// 목록 클릭 순회가 없어 무관한 스레드를 개방하는 부작용이 없고, URL 합성도 하지 않는다.
+async function readThread(spaceName, threadUrl, maxEventChars, maxEvents, deadlineMs, classify, login) {
+  let task;
+  try { task = await taskSpace(spaceName); }
+  catch (error) {
+    const nameInUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
+    console.log(JSON.stringify({ status: nameInUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
+    return;
+  }
+  const stop = code => { throw Object.assign(new Error, { code }); };
+  try {
+    const pages = await task.pages();
+    if (!Array.isArray(pages)) stop('EGO_TABS_FAILED');
+    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
+    if (!page) stop('EGO_ATTACH_FAILED');
+    await page.goto(threadUrl, { timeout: 45000 });
+    const current = await page.url();
+    if (!classify(current)) stop(login(current) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+    // 렌더 폴링: 최소 1개의 메시지 행이 떠야 한다.
+    let ready = false;
+    const readyDeadline = Date.now() + Math.min(20000, Number(deadlineMs) || 20000);
+    while (Date.now() < readyDeadline) {
+      const probe = await page.evaluate(() => [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')].length);
+      if (probe == null) stop('EGO_EVAL_STOPPED');
+      if (probe >= 1) { ready = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (!ready) stop('EGO_SNAPSHOT_FAILED');
+    const extraction = await page.evaluate(eventTextMax => {
+      const extract = row => {
+        const isOther = /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(row.className || ''));
+        // 이벤트 컨테이너 textContent는 헤더·시각·액션 바가 앞에 붙는다 — 복제본에서 떼고 버블 본문만 남긴다.
+        const clone = row.cloneNode(true);
+        for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
+        return { senderIsOther: isOther, text: (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, eventTextMax) };
+      };
+      const rows = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
+      const renderedCount = rows.length;
+      const events = rows.map(extract).filter(e => e.text);
+      return { renderedCount, events };
+    }, maxEventChars);
+    if (!extraction || !Array.isArray(extraction.events)) stop('EGO_SNAPSHOT_FAILED');
+    const returned = extraction.events.slice(-maxEvents);
+    console.log(JSON.stringify({
+      status: 'THREAD_READ', events: returned,
+      renderedCount: extraction.renderedCount, returnedCount: returned.length,
+      truncatedFromOldest: extraction.renderedCount > returned.length,
+    }));
+  } catch (error) {
+    const codes = ['EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_TAB_NOT_FOUND'];
+    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
+  }
+}
+
+export async function readEgoThread(binding) {
+  if (!exactKeys(binding, ['executable', 'taskSpaceName', 'threadSeg', 'maxEventChars', 'maxEvents', 'deadlineMs'])) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
+  if (typeof binding.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}$/.test(binding.threadSeg)) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.maxEventChars) || binding.maxEventChars < 40 || binding.maxEventChars > 1000) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.maxEvents) || binding.maxEvents < 1 || binding.maxEvents > 50) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 60000) throw fail('INVALID_ARGUMENT');
+  const threadUrl = `https://www.linkedin.com/messaging/thread/${binding.threadSeg}/`;
+  const script = `(${readThread.toString()})(${JSON.stringify(binding.taskSpaceName)}, ${JSON.stringify(threadUrl)}, ${JSON.stringify(binding.maxEventChars)}, ${JSON.stringify(binding.maxEvents)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_ATTACH_FAILED' })); });`;
+  const output = await execute(binding, script);
+  if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
+  const eventsOk = Array.isArray(output.events) && output.events.length <= 50 &&
+    output.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
+      typeof e.text === 'string' && e.text.length >= 1 && e.text.length <= 1000);
+  if (!exactKeys(output, ['status', 'events', 'renderedCount', 'returnedCount', 'truncatedFromOldest']) || output.status !== 'THREAD_READ' ||
+      !Number.isSafeInteger(output.renderedCount) || output.renderedCount < 0 || output.renderedCount > 1999 ||
+      !Number.isSafeInteger(output.returnedCount) || output.returnedCount < 0 || output.returnedCount > 50 ||
+      output.renderedCount < output.returnedCount ||
+      output.truncatedFromOldest !== (output.renderedCount > output.returnedCount)) throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+  if (!eventsOk) throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
   return output;
 }

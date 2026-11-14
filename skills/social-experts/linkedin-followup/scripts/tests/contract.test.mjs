@@ -39,7 +39,7 @@ function run(args) {
   }
 }
 
-for (const command of ['setup', 'prepare', 'send']) {
+for (const command of ['setup', 'prepare', 'send', 'read']) {
   test(`unattended ${command} is denied before side effects`, () => {
     const result = run(['--mode', 'unattended', command]);
     assert.equal(result.status, 'BLOCKED_UNATTENDED');

@@ -91,6 +91,17 @@ const pageStub = (label, baseUrl) => ({
       if (click && click.__setUrl) currentUrl = click.__setUrl;
       return click ? (click.__ret ?? 'CLICKED') : { code: 'NO_LIST' };
     }
+    // 추출 evaluate(openThread·readThread 공용)는 cloneNode·data-event-urn을 모두 포함하므로
+    // 마커(renderedCount)로 먼저 판정해야 한다. 그렇지 않으면 아래 cloneNode 분기(sendThread
+    // 증거 evaluate·구 thread evaluate용)가 잘못 serve한다.
+    if (src.includes('renderedCount')) {
+      if (Array.isArray(state.readEventsQueue) && state.readEventsQueue.length) {
+        const next = state.readEventsQueue.shift();
+        if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, readEventsQueue: state.readEventsQueue }));
+        return next;
+      }
+      return state.readEvents ?? null;
+    }
     if (src.includes('cloneNode')) {
       if (Array.isArray(state.threadQueue) && state.threadQueue.length) {
         const next = state.threadQueue.shift();
@@ -235,7 +246,29 @@ try {
     assert.equal(result.signal, null);
     return { ...result, data: result.stdout ? JSON.parse(result.stdout) : null };
   };
-  return { binding, home, run, runReply, startReply, waitFor, save, records, snapshot: backend.snapshot, runScan };
+  const readWorker = join(dir, 'read-worker.mjs');
+  writeFileSync(readWorker, `
+const nativeTimer = globalThis.setTimeout;
+globalThis.setTimeout = (fn, delay, ...args) => {
+  if (delay === 125000) delay = 2000;
+  return nativeTimer(fn, delay, ...args);
+};
+try {
+  const { readEgo } = await import(${JSON.stringify(join(dir, 'reply.mjs'))});
+  let input = ''; for await (const chunk of process.stdin) input += chunk;
+  console.log(JSON.stringify(await readEgo(JSON.parse(input))));
+} catch (error) { console.log(JSON.stringify({ status: error.code || 'FAILED', err: String(error && error.message || error).slice(0, 200) })); }
+`);
+  const runRead = (input = {}) => {
+    const result = spawnSync(process.execPath, [readWorker], {
+      env: { HOME: home, PATH: '/invalid', NODE_OPTIONS: '--no-warnings', ASIDE_API_TOKEN: 'must-not-inherit', EGO_API_TOKEN: 'must-not-inherit' },
+      input: JSON.stringify({ transport: 'ego-ui/1', executable, taskSpaceName: 'linkedin-replies-skill', conversationUuid: '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c', ...input }), encoding: 'utf8', timeout: 20000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
+    return { ...result, data: result.stdout ? JSON.parse(result.stdout) : null };
+  };
+  return { binding, home, run, runReply, startReply, waitFor, save, records, snapshot: backend.snapshot, runScan, runRead };
 }
 
 const egoLockPath = f => join(f.home, '.local/share/aha-skills/linkedin-replies/locks', `ego-profile-${createHash('sha256').update(JSON.stringify([f.binding.executable, f.binding.taskSpaceName])).digest('hex')}`);
@@ -767,7 +800,7 @@ const detailSetup = (t, extra = {}) => {
     filters: [{ label: 'Focused', checked: 'false' }],
     listProbe: { rows: 2 },
     click: { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
-    thread: { lastSenderIsOther: true, text: 'p1 요청 드립니다' },
+    readEvents: { lastSenderIsOther: true, text: 'p1 요청 드립니다', renderedCount: 1, events: [{ senderIsOther: true, text: 'p1 요청 드립니다' }] },
     evaluateQueue: [
       { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
       { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
@@ -780,10 +813,10 @@ const detailSetup = (t, extra = {}) => {
 
 test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정하고 UUID 키로 승격한다', t => {
   const f = detailSetup(t);
-  // A는 상대(other), B는 own — threadQueue는 개방 순서대로 serve된다.
-  f.save({ threadQueue: [
-    { lastSenderIsOther: true, text: 'p1 요청 드립니다' },
-    { lastSenderIsOther: false, text: 'p2 확인했습니다' },
+  // A는 상대(other), B는 own — readEventsQueue는 개방 순서대로 serve된다.
+  f.save({ readEventsQueue: [
+    { lastSenderIsOther: true, text: 'p1 요청 드립니다', renderedCount: 1, events: [{ senderIsOther: true, text: 'p1 요청 드립니다' }] },
+    { lastSenderIsOther: false, text: 'p2 확인했습니다', renderedCount: 1, events: [{ senderIsOther: false, text: 'p2 확인했습니다' }] },
   ] });
   const result = f.runScan({ detailOpenCap: 2 });
   if (result.data?.coverage?.detailOpened !== 2) console.error('DBGY', JSON.stringify(result.data.review?.map(r => [r.name, r.reason])), JSON.stringify(result.stderr || '').slice(0, 300));
@@ -796,6 +829,7 @@ test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정�
   assert.deepEqual(result.data.candidates[0], {
     name: 'A', conversationUuid: '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c',
     preview: 'p1', time: 'Nov 12',
+    events: [{ senderIsOther: true, text: 'p1 요청 드립니다' }],
   });
   assert.equal(result.data.review.length, 0, 'answered는 review에서 제외된다');
   const obsDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
@@ -818,6 +852,148 @@ test('상세 개방 상한 초과분은 OPEN_CAP_EXCEEDED로 미개방 반환한
   assert.equal(result.data.candidates.length, 1, 'A(sender≠own)는 cap 내 개방돼 후보가 된다');
 });
 
+const promotedRecordPath = f => join(f.home, '.local/share/aha-skills/linkedin-replies/conversations',
+  `ego-obs-${createHash('sha256').update(JSON.stringify(['ego-observation', 'test-slug', 'uuid', '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c'])).digest('hex')}.json`);
+
+test('ego scan 상세 개방은 후보 events와 관측 threadSeg를 기록에 남긴다', t => {
+  const f = detailSetup(t);
+  f.save({ readEvents: { lastSenderIsOther: true, text: 'p1 요청 드립니다', renderedCount: 2, events: [
+    { senderIsOther: true, text: 'p1 요청 드립니다' }, { senderIsOther: false, text: '네 확인했습니다' },
+  ] } });
+  const result = f.runScan({ detailOpenCap: 1 });
+  assert.equal(result.data.status, 'OK');
+  assert.deepEqual(result.data.candidates[0].events, [
+    { senderIsOther: true, text: 'p1 요청 드립니다' }, { senderIsOther: false, text: '네 확인했습니다' },
+  ]);
+  const record = JSON.parse(readFileSync(promotedRecordPath(f), 'utf8'));
+  assert.equal(record.uuid, '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c');
+  assert.equal(record.threadSeg, threadSeg, '관측한 원 seg가 기록된다 — read의 직행 내비게이션 근거');
+  assert.equal('events' in record, false, '레코드에 메시지 본문을 저장하지 않는다');
+});
+
+test('answered·미입증 스레드는 events를 비워 반환하고 기록은 식별자만 남긴다', t => {
+  const f = detailSetup(t);
+  // B(own 발신)는 answered로 판정된다 — events는 후보에만 붙는다.
+  f.save({ readEvents: { lastSenderIsOther: false, text: 'p1 요청 드립니다', renderedCount: 1, events: [{ senderIsOther: false, text: '내가 보낸 답장' }] } });
+  const result = f.runScan({ detailOpenCap: 1 });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.candidates.length, 0);
+  assert.equal(result.data.coverage.answeredCount, 1);
+  const record = JSON.parse(readFileSync(promotedRecordPath(f), 'utf8'));
+  assert.equal(record.threadSeg, threadSeg, 'answered에도 seg는 식별자로 기록된다');
+  assert.equal('events' in record, false);
+  assert.equal(JSON.stringify(record).includes('내가 보낸 답장'), false, '본문은 기록에 남지 않는다');
+});
+
+test('read는 기록된 threadSeg로 스레드 URL에 직행한다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({ readEvents: { renderedCount: 3, events: [
+    { senderIsOther: true, text: '첫 인사' }, { senderIsOther: false, text: '네 확인했습니다' }, { senderIsOther: true, text: 'p1 요청 드립니다' },
+  ] } });
+  const gotosBefore = f.records('operations').filter(op => op.startsWith('goto:')).length;
+  const result = f.runRead();
+  assert.equal(result.status, 0);
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.transport, 'ego-ui/1');
+  assert.equal(result.data.conversationUuid, '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c');
+  assert.equal(result.data.name, 'A');
+  assert.deepEqual(result.data.events, [
+    { senderIsOther: true, text: '첫 인사' }, { senderIsOther: false, text: '네 확인했습니다' }, { senderIsOther: true, text: 'p1 요청 드립니다' },
+  ]);
+  assert.deepEqual(result.data.history, { renderedCount: 3, returnedCount: 3, truncatedFromOldest: false, scope: 'dom-rendered',
+    note: '스크롤 lazy-load분은 미포함 — 렌더된 메시지만 반환합니다' });
+  const readGotos = f.records('operations').filter(op => op.startsWith('goto:')).slice(gotosBefore);
+  assert.deepEqual(readGotos, [`goto:/messaging/thread/${threadSeg}/`],
+    '목록 클릭 순회 없이 기록된 seg로 한 번 직행한다');
+  assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')), [], '성공 시 락을 해제한다');
+});
+
+test('기록 없는 UUID는 EGO_THREAD_NOT_OBSERVED로 자식을 시작하지 않는다', t => {
+  const f = scanSetup(t);
+  const result = f.runRead({ conversationUuid: 'aaaaaab1-4d5e-4f6a-8b7c-9d0e1f2a3b4c' });
+  assert.equal(result.data.status, 'EGO_THREAD_NOT_OBSERVED');
+  assert.match(result.data.message, /scan/);
+  assert.equal(f.records('calls').length, 1, 'setup 1회 외 read용 자식 호출은 없다');
+  assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')), []);
+});
+
+test('구형 기록(threadSeg 없음)도 EGO_THREAD_NOT_OBSERVED로 안전 종료한다', t => {
+  const f = scanSetup(t);
+  mkdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/conversations'), { recursive: true });
+  writeFileSync(promotedRecordPath(f), JSON.stringify({ uuid: '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c', name: 'A', previewHash: 'x', lastSenderKind: 'other' }), { mode: 0o600 });
+  const result = f.runRead();
+  assert.equal(result.data.status, 'EGO_THREAD_NOT_OBSERVED');
+  assert.equal(f.records('calls').length, 1);
+});
+
+test('read는 남은 ego 락에서 LOCKED로 막힌다', t => {
+  const f = scanSetup(t);
+  mkdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/conversations'), { recursive: true });
+  writeFileSync(promotedRecordPath(f), JSON.stringify({ uuid: '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c', threadSeg, name: 'A' }), { mode: 0o600 });
+  mkdirSync(egoLockPath(f), { recursive: true });
+  const result = f.runRead();
+  assert.equal(result.data.status, 'LOCKED');
+  assert.equal(f.records('calls').length, 1);
+});
+
+test('무인 read는 BLOCKED_UNATTENDED로 차단된다', t => {
+  const f = scanSetup(t);
+  const result = f.runReply({}, 'unattended', 'read');
+  assert.equal(result.data.status, 'BLOCKED_UNATTENDED');
+  assert.equal(f.records('calls').length, 1);
+});
+
+for (const patch of [{ extra: 1 }, { conversationUuid: 'short' }, { transport: 'aside-ui/1' }, { maxEventChars: 10 }, { maxEvents: 0 }]) {
+  test(`read의 잘못된 입력은 자식 시작 전에 거부한다: ${Object.keys(patch)[0]}`, t => {
+    const f = scanSetup(t);
+    const result = f.runRead(patch);
+    assert.equal(result.data.status, 'INVALID_ARGUMENT');
+    assert.equal(f.records('calls').length, 1, 'setup 1회 외 거부 경로의 자식 호출은 없다');
+  });
+}
+
+test('read 실패(로그인 화면)는 EGO_NEEDS_LOGIN과 락 유지다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({ urlSequence: ['https://www.linkedin.com/login'] });
+  const result = f.runRead();
+  assert.equal(result.data.status, 'EGO_NEEDS_LOGIN');
+  assert.equal(result.data.profileLockRetained, true);
+  assert.ok(existsSync(egoLockPath(f)), '실패 시 락이 유지된다');
+  const again = f.runRead();
+  assert.equal(again.data.status, 'LOCKED', '남은 락은 재호출도 막는다');
+});
+
+test('read는 렌더 상한을 초과한 이력을 최신 n개로 잘라 보고한다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  // 마지막 이벤트 본문은 목록 미리보기('p1')로 입증돼야 후보 승격·기록이 일어난다.
+  const events = Array.from({ length: 19 }, (_, i) => ({ senderIsOther: i % 2 === 0, text: `메시지 ${i + 1}` }));
+  events.push({ senderIsOther: true, text: 'p1 요청 드립니다' });
+  f.save({ readEvents: { renderedCount: 20, events } });
+  const result = f.runRead();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.events.length, 12, '기본 상한 12개');
+  assert.equal(result.data.events[11].text, 'p1 요청 드립니다', '가장 최신 이벤트가 마지막이다');
+  assert.deepEqual(result.data.history.renderedCount, 20);
+  assert.deepEqual(result.data.history.returnedCount, 12);
+  assert.equal(result.data.history.truncatedFromOldest, true);
+});
+
+test('read는 caps 입력을 받아 이벤트 수·본문 길이를 조정한다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  const events = Array.from({ length: 19 }, (_, i) => ({ senderIsOther: true, text: `긴 본문 메시지 ${i + 1} `.repeat(5) }));
+  events.push({ senderIsOther: true, text: 'p1 요청 드립니다' });
+  f.save({ readEvents: { renderedCount: 20, events } });
+  const result = f.runRead({ maxEvents: 3, maxEventChars: 40 });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.events.length, 3);
+  assert.equal(result.data.history.returnedCount, 3);
+  assert.equal(result.data.history.truncatedFromOldest, true);
+});
+
 test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다', t => {
   const f = detailSetup(t);
   f.save({
@@ -828,10 +1004,10 @@ test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다',
       { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
       { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
     ],
-    threadQueue: [
-      { lastSenderIsOther: true, text: '전혀 다른 본문 내용' },
-      { lastSenderIsOther: true, text: '전혀 다른 본문 안정 틱 판정' },
-      { lastSenderIsOther: true, text: '전혀 다른 본문 세 번째 틱' },
+    readEventsQueue: [
+      { lastSenderIsOther: true, text: '전혀 다른 본문 내용', renderedCount: 1, events: [{ senderIsOther: true, text: '전혀 다른 본문 내용' }] },
+      { lastSenderIsOther: true, text: '전혀 다른 본문 안정 틱 판정', renderedCount: 1, events: [{ senderIsOther: true, text: '전혀 다른 본문 안정 틱 판정' }] },
+      { lastSenderIsOther: true, text: '전혀 다른 본문 세 번째 틱', renderedCount: 1, events: [{ senderIsOther: true, text: '전혀 다른 본문 세 번째 틱' }] },
     ],
   });
   const result = f.runScan({ detailOpenCap: 1 });

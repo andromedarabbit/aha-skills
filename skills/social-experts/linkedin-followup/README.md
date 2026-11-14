@@ -138,6 +138,7 @@ bash "$SKILL_DIR/scripts/tests/run.sh"
 | `scan` | 빈 입력 또는 `{}` | 후보·검토 필요 항목·조회 범위 |
 | `prepare` | `conversationId`, 현재 하네스 `sessionId`, 최종 `text` | 새 job과 정확한 승인 질문 |
 | `send` | `jobId`, 동일한 `sessionId` | 승인·최신성 대조 후 `SENT` 또는 차단·`UNKNOWN` |
+| `read` | `transport`·`executable`·`taskSpaceName`, `conversationUuid` (선택 `maxEventChars` 기본 300·`maxEvents` 기본 12) | 기록된 스레드 seg로 직행해 렌더된 메시지 이력을 반환. 수동 전용 |
 
 본문은 줄바꿈·한글·따옴표·마지막 공백까지 그대로 보존합니다. 본문을 명령 인자로 넘기지 않습니다.
 `prepare.question`을 단독 `AskUserQuestion` 문항으로 그대로 전달해야 합니다.
@@ -164,7 +165,8 @@ bash "$SKILL_DIR/scripts/tests/run.sh"
 | `STALE` | 승인 기준이 바뀌었거나 취소·소비됨. 최신 조회부터 새 검토 |
 | `LOCKED` | 다른 처리 또는 남은 크래시 락. 자동 탈취·재시도 없음 |
 | `UNKNOWN` / 남은 `sending` | 성공·실패를 단정하지 않음. LinkedIn에서 실제 결과를 확인하기 전 해당 대화 전송 차단 |
-| `BLOCKED_UNATTENDED` | 무인 단계에서는 setup·prepare·send 금지 |
+| `BLOCKED_UNATTENDED` | 무인 단계에서는 setup·prepare·send·read 금지 |
+| `EGO_THREAD_NOT_OBSERVED` | scan이 관측한 스레드 seg 기록이 없다. URL 합성 없이 종료 — 먼저 scan |
 | `CLI_UNAVAILABLE` / `CLI_FAILED` / `AUTH_TIMEOUT` / `UNSAFE_STATE` | 실행·인증·무결성·로컬 상태 문제. 중단하고 원인 점검 |
 
 결과 불명은 같은 대화의 새 job으로도 우회할 수 없습니다. 상태 삭제·락 탈취·자동 해제·복구 재전송은 제공하지 않습니다.

@@ -709,11 +709,11 @@ export async function scanEgo(input) {
       } else {
         item.status = 'candidate';
         candidates.push({ name: item.name, conversationUuid: opened.conversationUuid,
-          preview: item.preview, time: item.time });
+          preview: item.preview, time: item.time, events: Array.isArray(opened.events) ? opened.events : [] });
       }
       // UUID 키 승격(KTD23): 이름 키 기록 제거, UUID 키로 기록.
       const uuidPath = join(recordsDir, `ego-obs-${digest(['ego-observation', slug, 'uuid', opened.conversationUuid])}.json`);
-      durableWrite(uuidPath, { uuid: opened.conversationUuid, name: item.name, previewHash: item.previewHash, lastSenderKind: opened.lastSenderIsOther ? 'other' : 'self', status: item.status, observedAt: new Date().toISOString() });
+      durableWrite(uuidPath, { uuid: opened.conversationUuid, name: item.name, previewHash: item.previewHash, lastSenderKind: opened.lastSenderIsOther ? 'other' : 'self', status: item.status, observedAt: new Date().toISOString(), threadSeg: opened.threadSeg });
       rmSync(join(recordsDir, `ego-obs-${digest(['ego-observation', slug, item.name])}.json`), { force: true });
     }
     rmSync(join(path, 'operation.json'));
@@ -744,17 +744,76 @@ export async function scanEgo(input) {
   };
 }
 
+// 대화 전체 읽기(KTD25): scan이 승격한 UUID 키 기록의 관측 threadSeg로 스레드에 직행해 렌더된
+// 이벤트 전체를 반환한다. 수동 전용(무인 게이트가 차단)이며 URL 합성·목록 클릭 순회가 없고,
+// 이벤트 본문은 stdout·세션에만 흐르고 저장하지 않는다.
+export async function readEgo(input) {
+  const { readEgoThread, EGO_STEP_CODES, EGO_FAILURE_REASONS } = await import('./ego-ui.mjs');
+  const keys = ['transport', 'executable', 'taskSpaceName', 'conversationUuid'];
+  if (input.maxEventChars !== undefined) keys.push('maxEventChars');
+  if (input.maxEvents !== undefined) keys.push('maxEvents');
+  if (Object.keys(input).some(key => !keys.includes(key)) ||
+      input.transport !== 'ego-ui/1' || typeof input.executable !== 'string' || !input.executable.startsWith('/') ||
+      input.executable.length > 4096 || /[\x00-\x1f\x7f]/.test(input.executable) || typeof input.taskSpaceName !== 'string' ||
+      !input.taskSpaceName || input.taskSpaceName.startsWith('-') || input.taskSpaceName.length > 512 ||
+      typeof input.conversationUuid !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(input.conversationUuid)) throw fail('INVALID_ARGUMENT');
+  const maxEventChars = input.maxEventChars ?? 300;
+  const maxEvents = input.maxEvents ?? 12;
+  if (!Number.isSafeInteger(maxEventChars) || maxEventChars < 40 || maxEventChars > 1000) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 50) throw fail('INVALID_ARGUMENT');
+  const link = egoBinding();
+  if (link.executable !== input.executable || link.taskSpaceName !== input.taskSpaceName) throw fail('NEEDS_SETUP');
+  ensureState();
+  // 락·자식 시작 전 레코드 조회(fail-fast): seg 기록이 없으면 브라우저를 건드리지 않고 끝낸다.
+  // 구형 기록(threadSeg 없음)도 여기서 같은 코드로 안전 종료한다.
+  const slug = link.account?.slug ?? null;
+  const recordPath = join(STATE_DIR, 'conversations', `ego-obs-${digest(['ego-observation', slug, 'uuid', input.conversationUuid])}.json`);
+  let record;
+  try { record = readPrivate(recordPath); } catch { record = null; }
+  if (!record || typeof record.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}$/.test(record.threadSeg)) {
+    return { status: 'EGO_THREAD_NOT_OBSERVED', conversationUuid: input.conversationUuid,
+      message: '이 대화는 scan이 관측한 스레드 seg 기록이 없습니다. 먼저 --mode manual scan을 실행하세요.' };
+  }
+  const path = join(STATE_DIR, 'locks', `ego-profile-${digest([input.executable, input.taskSpaceName])}`);
+  try { mkdirSync(path, { mode: 0o700 }); }
+  catch (error) { if (error.code === 'EEXIST') throw fail('LOCKED'); throw error; }
+  let phase = 'UI_STATE_FAILED';
+  try {
+    durableWrite(join(path, 'operation.json'), { operation: 'read', attemptId: randomUUID(), startedAt: new Date().toISOString(), ownerPid: process.pid });
+    const fd = openSync(join(STATE_DIR, 'locks'), constants.O_RDONLY);
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    phase = 'UI_OPERATION_FAILED';
+    const result = await readEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
+      threadSeg: record.threadSeg, maxEventChars, maxEvents, deadlineMs: 20000 });
+    rmSync(join(path, 'operation.json'));
+    rmdirSync(path);
+    return { status: 'OK', transport: 'ego-ui/1', conversationUuid: input.conversationUuid,
+      name: typeof record.name === 'string' ? record.name : null,
+      events: result.events,
+      history: { renderedCount: result.renderedCount, returnedCount: result.returnedCount,
+        truncatedFromOldest: result.truncatedFromOldest, scope: 'dom-rendered',
+        note: '스크롤 lazy-load분은 미포함 — 렌더된 메시지만 반환합니다' } };
+  } catch (error) {
+    const allowed = [...EGO_STEP_CODES];
+    return {
+      status: allowed.includes(error?.code) ? error.code : 'EGO_OUTCOME_UNKNOWN',
+      reason: EGO_FAILURE_REASONS.includes(error?.reason) ? error.reason : phase,
+      profileLockRetained: true,
+    };
+  }
+}
+
 async function run(args, input) {
   let parsed;
   try {
     parsed = parseArgs({ args, options: { mode: { type: 'string' } }, allowPositionals: true });
   } catch {
-    return { status: 'INVALID_ARGUMENT', message: 'scan/setup/prepare/send/inspect와 --mode manual|unattended만 지정하세요.' };
+    return { status: 'INVALID_ARGUMENT', message: 'scan/setup/prepare/send/inspect/read와 --mode manual|unattended만 지정하세요.' };
   }
 
   const mode = parsed.values.mode;
   const [command] = parsed.positionals;
-  if (!['manual', 'unattended'].includes(mode) || parsed.positionals.length !== 1 || !['scan', 'setup', 'prepare', 'send', 'inspect'].includes(command)) {
+  if (!['manual', 'unattended'].includes(mode) || parsed.positionals.length !== 1 || !['scan', 'setup', 'prepare', 'send', 'inspect', 'read'].includes(command)) {
     return { status: 'INVALID_ARGUMENT', message: '동작 하나와 --mode manual|unattended를 명시하세요.' };
   }
   if (mode === 'unattended' && command !== 'scan') {
@@ -765,6 +824,9 @@ async function run(args, input) {
   if (command === 'setup' && input.transport === 'ego-ui/1') return setupEgo(input);
   if (command === 'scan' && input.transport === 'ego-ui/1') return scanEgo(input);
   if (command === 'scan' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');
+  // read는 transport 조건 없이 명령만 검사한다 — transport 검증은 readEgo 내부에서 하고,
+  // 여기 조건을 붙이면 알 수 없는 명령이 send로 추락하는 기존 fall-through와 결합해 read가 send로 샌다.
+  if (command === 'read') return readEgo(input);
   // 빈 입력 scan(SKILL.md의 `scan < /dev/null`)은 저장된 ego binding을 그대로 사용한다 — 무인 정기 회차의 정상 입구.
   if (command === 'scan' && !Object.keys(input).length) {
     const bindingPath = join(STATE_DIR, 'binding.json');
@@ -812,7 +874,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     const text = Buffer.concat(chunks).toString('utf8');
     result = await run(process.argv.slice(2), text ? JSON.parse(text) : {});
   } catch (error) {
-    const allowed = ['NEEDS_SETUP', 'INVALID_ARGUMENT', 'UNSAFE_STATE', 'ACCOUNT_MISMATCH', 'UNSUPPORTED_RESPONSE', 'INVALID_PROFILE', 'NEEDS_AUTH', 'CLI_UNAVAILABLE', 'CLI_FAILED', 'AUTH_TIMEOUT', 'STALE', 'UNKNOWN', 'LOCKED', 'APPROVAL_REQUIRED', 'UI_NOT_ACTIVATED'];
+    const allowed = ['NEEDS_SETUP', 'INVALID_ARGUMENT', 'UNSAFE_STATE', 'ACCOUNT_MISMATCH', 'UNSUPPORTED_RESPONSE', 'INVALID_PROFILE', 'NEEDS_AUTH', 'CLI_UNAVAILABLE', 'CLI_FAILED', 'AUTH_TIMEOUT', 'STALE', 'UNKNOWN', 'LOCKED', 'APPROVAL_REQUIRED', 'UI_NOT_ACTIVATED', 'EGO_THREAD_NOT_OBSERVED'];
     result = { status: allowed.includes(error?.code || error?.message) ? error.code || error.message : 'FAILED' };
   } finally { clearTimeout(timer); for (const chunk of chunks) chunk.fill(0); }
   process.stdout.write(`${JSON.stringify(result)}\n`);

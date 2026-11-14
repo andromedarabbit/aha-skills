@@ -1,5 +1,11 @@
 # 변경 이력
 
+## 1.10.0 — 2026-11-15
+
+- **대화 전체 읽기(`read`)를 추가한다.** `--mode manual read`는 scan이 승격한 UUID 키 기록의 관측 `threadSeg`(스레드 URL 경로 세그먼트)로 `/messaging/thread/<seg>/`에 직행해 렌더된 메시지 이벤트 전체를 추출한다. 목록 클릭 순회가 없어 무관한 스레드 개방·읽음 부작용이 없고, URL 합성도 하지 않는다. 입력 `{"transport":"ego-ui/1","executable":"...","taskSpaceName":"...","conversationUuid":"..."}`(선택 `maxEventChars` 기본 300·범위 40–1000, `maxEvents` 기본 12·범위 1–50). 기록에 seg가 없거나 구형 기록이면 `EGO_THREAD_NOT_OBSERVED`로 종료한다 — read는 scan 뒤에 온다. 실패 시 관측 락 유지·성공 시 해제는 scan과 동일하다.
+- scan의 상세 개방이 같은 개방 1회에서 렌더된 이벤트(발신자·버블 본문) 전체를 추출해 **입증된 후보에만** `events`로 덧붙인다(행당 300자·최신 12개 고정 상한 — 토큰 최소화). answered·미입증 스레드는 이벤트 없이 식별자·해시 기록만 유지한다. 개방 횟수·읽음 영향은 변하지 않는다.
+- 이벤트 본문은 stdout·세션에만 흐른다. `conversations/` 기록은 기존 최소 저장 규칙을 유지하며 `threadSeg`는 본문이 아닌 URL 경로 식별자로 추가된다. 이력 범위는 DOM 렌더분이며 스킬은 스크롤하지 않는다 — 완전성은 `renderedCount`·`returnedCount`·`truncatedFromOldest`로 보고할 뿐 전체 이력을 주장하지 않는다.
+
 ## 1.9.0 — 2026-11-14
 
 - **승인된 본문의 ego UI 전송(U5)을 추가한다.** ego 연결의 `prepare`는 브라우저를 건드리지 않고 job·승인 질문을 만든다(입력에 `conversationName` 추가 — 질문과 승인 영수증 결합에 포함). `send`는 대화 락 안에서 ego 스킬 락을 얻고 고정 전송 호출을 한 번 실행한다: 대화 개방(URL 스레드 UUID 일치 검증) → 전송 직전 마지막 이벤트가 상대 발신인지 재검증 → 빈 composer 확인 → 본문 삽입(execCommand insertText) → 공백 정규화 없는 정확한 readback → 전송 버튼 1회 클릭 → 새 자기 발신 이벤트·본문 일치로 증명.
