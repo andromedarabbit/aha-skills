@@ -834,6 +834,14 @@ test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다',
   assert.equal(result.data.review[0].reason, 'LATEST_EVENT_UNPROVEN');
 });
 
+test('빈 입력 scan은 저장된 ego binding으로 무인 정상 입구를 제공한다', t => {
+  // 라우팅 입증이 목적 — stub을 즉시 실패 모드로 두고 ego scan 경로로 들어왔음을 사유로 확인한다.
+  const f = scanSetup(t);
+  f.save({ mode: 'stderr' });
+  const result = f.runReply({}, 'unattended', 'scan');
+  assert.deepEqual(result.data, { status: 'EGO_OUTCOME_UNKNOWN', reason: 'EGO_CONNECT_FAILED', profileLockRetained: true });
+});
+
 test('ego scan은 잘린 목록(total>items)에서 complete를 보고하지 않는다', t => {
   const f = scanSetup(t);
   f.save({ evaluateQueue: [

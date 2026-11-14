@@ -661,6 +661,18 @@ async function run(args, input) {
   if (command === 'setup' && input.transport === 'ego-ui/1') return setupEgo(input);
   if (command === 'scan' && input.transport === 'ego-ui/1') return scanEgo(input);
   if (command === 'scan' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');
+  // 빈 입력 scan(SKILL.md의 `scan < /dev/null`)은 저장된 ego binding을 그대로 사용한다 — 무인 정기 회차의 정상 입구.
+  if (command === 'scan' && !Object.keys(input).length) {
+    const bindingPath = join(STATE_DIR, 'binding.json');
+    if (existsSync(bindingPath)) {
+      const saved = readPrivate(bindingPath);
+      if (saved.transport === 'ego-ui/1') {
+        if (typeof saved.executable !== 'string' || !saved.executable.startsWith('/') ||
+            typeof saved.taskSpaceName !== 'string' || !saved.taskSpaceName) throw fail('UNSAFE_STATE');
+        return scanEgo({ transport: 'ego-ui/1', executable: saved.executable, taskSpaceName: saved.taskSpaceName });
+      }
+    }
+  }
   if (command === 'setup' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');
   if (command === 'setup') {
     if (Object.keys(input).some(key => !['profile', 'accountId'].includes(key)) || typeof input.profile !== 'string' || !/^[\p{L}\p{N}_ -]{1,128}$/u.test(input.profile) || input.profile.trim() !== input.profile) throw fail('INVALID_ARGUMENT');

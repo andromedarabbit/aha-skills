@@ -185,7 +185,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/reply.mjs" --mode manual send
 node "${CLAUDE_SKILL_DIR}/scripts/reply.mjs" --mode unattended scan < /dev/null
 ```
 
-- 초기 연결 없음은 `NEEDS_SETUP`, 키체인 잠금·권한 거절·인증 UI 필요는 `NEEDS_AUTH`로 종료한다.
+- 빈 입력 scan은 저장된 ego binding(transport `ego-ui/1`)을 그대로 사용한다 — ego 연결 후에는 이 명령 하나가 무인 정기 회차의 정상 입구다. 초기 연결 없음은 `NEEDS_SETUP`, 키체인 잠금·권한 거절·인증 UI 필요는 `NEEDS_AUTH`로 종료한다.
 - 성공 자료에 한해 후보·요약·초안을 작성하고 조회 범위·완전성·실패 사유를 함께 남긴다.
 - 자동 재실행·질문·승인 생성·답장·automation 변경·이메일·Slack 알림은 하지 않는다.
 - 이후 같은 세션에서 실제 사용자가 회신을 요청하면 수동 단계로 최신 재조회부터 시작한다.
