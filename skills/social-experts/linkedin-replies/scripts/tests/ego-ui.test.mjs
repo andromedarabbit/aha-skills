@@ -91,7 +91,7 @@ const pageStub = (label, baseUrl) => ({
       if (click && click.__setUrl) currentUrl = click.__setUrl;
       return click ? (click.__ret ?? 'CLICKED') : { code: 'NO_LIST' };
     }
-    if (src.includes('data-event-urn')) {
+    if (src.includes('cloneNode')) {
       if (Array.isArray(state.threadQueue) && state.threadQueue.length) {
         const next = state.threadQueue.shift();
         if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, threadQueue: state.threadQueue }));
@@ -99,6 +99,12 @@ const pageStub = (label, baseUrl) => ({
       }
       return state.thread ?? null;
     }
+    if (src.includes('isOther')) return state.pre ?? { isOther: true };
+    if (src.includes('data-event-urn')) return state.eventCount ?? 2;
+    if (src.includes('execCommand')) return state.fillOk ?? { ok: true };
+    if (src.includes('textbox') && src.includes('found')) return state.composer ?? { found: true, text: '' };
+    if (src.includes('textbox')) return state.readback ?? { text: '' };
+    if (src.includes("code: 'SEND_CLICKED'")) return state.sendClick ?? { code: 'SEND_CLICKED' };
     if (src.includes("li').length")) return state.listProbe ?? { rows: 2 };
     if (src.includes('ACoAAA')) return state.acoid ?? null;
     if (src.includes('hasConversationList')) return state.fingerprint ?? null;
@@ -832,6 +838,121 @@ test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다',
   assert.equal(result.data.candidates.length, 0);
   assert.equal(result.data.review.length, 1);
   assert.equal(result.data.review[0].reason, 'LATEST_EVENT_UNPROVEN');
+});
+
+const BODY = '승인된 본문입니다';
+const CONV_UUID = '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c';
+const sendSetup = (t, extra = {}) => {
+  const f = scanSetup(t);
+  f.save({
+    persistQueue: true,
+    listProbe: { rows: 2 },
+    click: { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
+    eventCount: 2,
+    pre: { isOther: true },
+    composer: { found: true, text: '' },
+    fillOk: { ok: true },
+    readback: { text: BODY },
+    sendClick: { code: 'SEND_CLICKED' },
+    threadQueue: [{ isOther: false, text: BODY }],
+    ...extra,
+  });
+  return f;
+};
+
+const prepareJob = (t, f) => {
+  const prepared = f.runReply({ conversationId: CONV_UUID, sessionId: 'sess-1', text: BODY, conversationName: 'Jingyu Kim' }, 'manual', 'prepare');
+  assert.equal(prepared.data.status, 'OK');
+  assert.ok(prepared.data.question, '승인 질문이 반환된다');
+  return prepared.data;
+};
+
+const approve = (t, f, question, answer = '전송') => {
+  // 실제 훅 진입점(record-approval.mjs)을 fixture HOME으로 실행해 영수증을 남긴다.
+  const payload = {
+    hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', session_id: 'sess-1',
+    tool_input: { questions: [question] },
+    tool_response: { answers: { [question.question]: answer } },
+  };
+  const hook = spawnSync(process.execPath, [new URL('../record-approval.mjs', import.meta.url).pathname], {
+    env: { HOME: f.home, PATH: '/invalid' }, input: JSON.stringify(payload), encoding: 'utf8', timeout: 8000,
+  });
+  assert.equal(hook.error, undefined);
+  assert.equal(hook.status, 0);
+};
+
+test('ego send 승인 경로는 클릭 한 번과 자기 발신 증거로 SENT를 반환한다', async t => {
+  const f = sendSetup(t);
+  const { jobId, question } = prepareJob(t, f);
+  await approve(t, f, question);
+  console.error('LOCKS-BEFORE', JSON.stringify(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks'))));
+  const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  if (result.data.status !== 'SENT') console.error('DBGS', JSON.stringify(result.data), JSON.stringify(f.records('calls').length));
+  assert.equal(result.data.status, 'SENT');
+  assert.equal(result.data.jobId, jobId);
+  const job = JSON.parse(readFileSync(join(f.home, '.local/share/aha-skills/linkedin-replies/jobs', jobId + '.json'), 'utf8'));
+  assert.equal(job.state, 'sent');
+  const ledgerDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
+  const ledgerNames = readdirSync(ledgerDir).filter(name => name.endsWith('.json'));
+  assert.equal(ledgerNames.length, 1, '전송 ledger가 남는다');
+  const ledger = JSON.parse(readFileSync(join(ledgerDir, ledgerNames[0]), 'utf8'));
+  assert.equal(ledger.state, 'sent');
+  // 락은 해제되고 클릭은 정확히 한 번(스텁의 sendClick은 고정 응답) 기록된다
+  assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')).filter(n => n.startsWith('ego-profile-')), []);
+});
+
+test('전송 직전 기준 변화는 BLOCKED로 차단하고 ledger를 제거해 재준비를 허용한다', async t => {
+  const f = sendSetup(t, { pre: { isOther: false } });
+  const { jobId, question } = prepareJob(t, f);
+  await approve(t, f, question);
+  const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  assert.equal(result.data.status, 'BLOCKED');
+  assert.equal(result.data.reason, 'CRITERIA_CHANGED');
+  const job = JSON.parse(readFileSync(join(f.home, '.local/share/aha-skills/linkedin-replies/jobs', jobId + '.json'), 'utf8'));
+  assert.equal(job.state, 'stale');
+  const ledgerDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
+  assert.equal(readdirSync(ledgerDir).filter(name => name.endsWith('.json')).length, 0, 'ledger가 제거된다');
+});
+
+test('composer에 기존 내용이 있으면 READBACK·클릭 없이 차단한다', async t => {
+  const f = sendSetup(t, { composer: { found: true, text: '남의 초안' } });
+  const { jobId, question } = prepareJob(t, f);
+  await approve(t, f, question);
+  const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  assert.equal(result.data.status, 'BLOCKED');
+  assert.equal(result.data.reason, 'COMPOSER_NOT_EMPTY');
+});
+
+test('readback 불일치는 클릭 없이 차단한다', async t => {
+  const f = sendSetup(t, { readback: { text: '다른 본문' } });
+  const { jobId, question } = prepareJob(t, f);
+  await approve(t, f, question);
+  const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  assert.equal(result.data.status, 'BLOCKED');
+  assert.equal(result.data.reason, 'READBACK_MISMATCH');
+});
+
+test('클릭 뒤 증거 부족은 UNKNOWN으로 남기고 ledger를 유지한다', async t => {
+  const f = sendSetup(t, { threadQueue: [{ isOther: false, text: '다른 내용' }, { isOther: false, text: '다른 내용 2' }] });
+  const { jobId, question } = prepareJob(t, f);
+  await approve(t, f, question);
+  const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  assert.equal(result.data.status, 'UNKNOWN');
+  const job = JSON.parse(readFileSync(join(f.home, '.local/share/aha-skills/linkedin-replies/jobs', jobId + '.json'), 'utf8'));
+  assert.equal(job.state, 'unknown');
+  const ledgerDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
+  const ledger = JSON.parse(readFileSync(join(ledgerDir, readdirSync(ledgerDir)[0]), 'utf8'));
+  assert.equal(ledger.state, 'unknown');
+  assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')).filter(n => n.startsWith('ego-profile-')), []);
+});
+
+test('영수증 없는 send는 자식을 시작하지 않고 APPROVAL_REQUIRED로 막는다', t => {
+  const f = sendSetup(t);
+  const { jobId } = prepareJob(t, f);
+  const callsBefore = f.records('calls').length;
+  const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  assert.equal(result.data.status, 'APPROVAL_REQUIRED');
+  assert.equal(f.records('calls').length, callsBefore, '브라우저 자식 0회');
 });
 
 test('빈 입력 scan은 저장된 ego binding으로 무인 정상 입구를 제공한다', t => {

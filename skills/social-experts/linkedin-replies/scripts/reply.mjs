@@ -228,8 +228,8 @@ const conversationKey = job => digest([job.account.id, job.conversationId]);
 const ledgerPath = job => join(STATE_DIR, 'conversations', `${conversationKey(job)}.json`);
 
 function approvalBinding(job) {
-  const { mode, transport, profile, account, conversationId, participants, fingerprint, bodyHash, jobId, sessionId, challenge } = job;
-  return { mode, transport, profile, account, conversationId, participants, fingerprint, bodyHash, jobId, sessionId, challenge };
+  const { mode, transport, profile, account, conversationId, participants, fingerprint, bodyHash, jobId, sessionId, challenge, executable, taskSpaceName, conversationName } = job;
+  return { mode, transport, profile, account, conversationId, participants, fingerprint, bodyHash, jobId, sessionId, challenge, executable, taskSpaceName, conversationName };
 }
 
 function readJob(id) {
@@ -250,7 +250,7 @@ function textFor(job) {
 function approvalQuestion(job, text) {
   return {
     header: CONTRACT.approvalHeader,
-    question: `실행 경로: ${job.transport}\n발신 계정: ${JSON.stringify(job.account)}\n대화 ID: ${job.conversationId}\n참여자: ${JSON.stringify(job.participants)}\n최종 본문 전체:\n${text}\n\njob ID: ${job.jobId}\nsession ID: ${job.sessionId}\nchallenge: ${job.challenge}\n이 본문을 이 대화에 전송할까요?`,
+    question: `실행 경로: ${job.transport}\n발신 계정: ${JSON.stringify(job.account)}\n대화 ID: ${job.conversationId}${job.conversationName ? `\n대화 이름: ${job.conversationName}` : ''}\n참여자: ${JSON.stringify(job.participants)}\n최종 본문 전체:\n${text}\n\njob ID: ${job.jobId}\nsession ID: ${job.sessionId}\nchallenge: ${job.challenge}\n이 본문을 이 대화에 전송할까요?`,
     multiSelect: false,
     options: [{ label: CONTRACT.approvalChoice, description: '표시한 계정·대화·본문으로 한 번 전송합니다.' }, { label: '수정', description: '이 승인을 폐기하고 새 초안을 준비합니다.' }, { label: '취소', description: '답장하지 않고 단기 본문을 삭제합니다.' }],
   };
@@ -295,7 +295,10 @@ async function selectedThread(link, account, conversationId) {
 }
 
 async function prepare(input) {
-  if (Object.keys(input).some(key => !['conversationId', 'sessionId', 'text'].includes(key)) || typeof input.conversationId !== 'string' || !/^[A-Za-z0-9_-]{1,1024}$/.test(input.conversationId) || !session(input.sessionId) || typeof input.text !== 'string' || !input.text.trim() || input.text.includes('\0') || Buffer.byteLength(input.text) > 1024 * 1024) throw fail('INVALID_ARGUMENT');
+  const bindingPath = join(STATE_DIR, 'binding.json');
+  const isEgo = existsSync(bindingPath) && readPrivate(bindingPath).transport === 'ego-ui/1';
+  if (Object.keys(input).some(key => !['conversationId', 'sessionId', 'text', ...(isEgo ? ['conversationName'] : [])].includes(key)) || typeof input.conversationId !== 'string' || !/^[A-Za-z0-9_-]{1,1024}$/.test(input.conversationId) || !session(input.sessionId) || typeof input.text !== 'string' || !input.text.trim() || input.text.includes('\0') || Buffer.byteLength(input.text) > 1024 * 1024) throw fail('INVALID_ARGUMENT');
+  if (isEgo) return prepareEgo(input);
   const link = binding();
   ensureState();
   const identity = { account: link.account, conversationId: input.conversationId };
@@ -310,6 +313,34 @@ async function prepare(input) {
       if (old.account.id === account.id && old.conversationId === input.conversationId && ['pending', 'approved'].includes(old.state)) stale(old);
     }
     const job = { mode: 'manual', transport: link.transport, profile: link.profile, account, conversationId: thread.conversationId, participants: thread.participants, fingerprint: thread.fingerprint, bodyHash: digest(input.text), jobId: randomUUID(), sessionId: input.sessionId, challenge: randomUUID(), state: 'pending' };
+    durableWrite(bodyPath(job.jobId), input.text, false);
+    durableWrite(jobPath(job.jobId), job);
+    return { status: 'OK', jobId: job.jobId, question: approvalQuestion(job, input.text) };
+  });
+}
+
+// ego 준비: 브라우저를 건드리지 않고 job·질문만 만든다. 최신성 재검증은 send의 ego 자식이 한다(KTD6).
+async function prepareEgo(input) {
+  if (Object.keys(input).some(key => !['conversationId', 'sessionId', 'text', 'conversationName'].includes(key)) ||
+      typeof input.conversationId !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(input.conversationId) ||
+      !session(input.sessionId) || typeof input.text !== 'string' || !input.text.trim() ||
+      input.text.includes('\0') || Buffer.byteLength(input.text) > 1024 * 1024 ||
+      (input.conversationName !== undefined && (typeof input.conversationName !== 'string' || !input.conversationName.trim() || input.conversationName.length > 120))) throw fail('INVALID_ARGUMENT');
+  const link = egoBinding();
+  ensureState();
+  const conversationName = typeof input.conversationName === 'string' ? input.conversationName : undefined;
+  const identity = { account: { id: link.account.profileId }, conversationId: input.conversationId };
+  unresolved(identity);
+  return locked(identity, async () => {
+    unresolved(identity);
+    for (const name of readdirSync(join(STATE_DIR, 'jobs')).filter(name => /^[0-9a-f-]{36}\.json$/.test(name))) {
+      const old = readJob(name.slice(0, -5));
+      if (old.account?.id === link.account.profileId && old.conversationId === input.conversationId && ['pending', 'approved'].includes(old.state)) stale(old);
+    }
+    const job = { mode: 'manual', transport: 'ego-ui/1', executable: link.executable, taskSpaceName: link.taskSpaceName,
+      account: { id: link.account.profileId, slug: link.account.slug }, conversationId: input.conversationId,
+      conversationName, participants: [], fingerprint: digest(link.fingerprint), bodyHash: digest(input.text),
+      jobId: randomUUID(), sessionId: input.sessionId, challenge: randomUUID(), state: 'pending' };
     durableWrite(bodyPath(job.jobId), input.text, false);
     durableWrite(jobPath(job.jobId), job);
     return { status: 'OK', jobId: job.jobId, question: approvalQuestion(job, input.text) };
@@ -338,7 +369,7 @@ export async function observeHook(payload) {
   const candidate = readJob(match[1]);
   await locked(candidate, () => {
     const job = readJob(match[1]);
-    if (job.transport !== TRANSPORT || job.sessionId !== payload.session_id || job.state !== 'pending' || job.challenge !== match[3]) return;
+    if (!['linkedincli/1', 'ego-ui/1'].includes(job.transport) || job.sessionId !== payload.session_id || job.state !== 'pending' || job.challenge !== match[3]) return;
     const expected = approvalQuestion(job, textFor(job));
     if (question.question !== expected.question || question.multiSelect !== false || JSON.stringify(question.options) !== JSON.stringify(expected.options)) return;
     const answer = payload.tool_response?.answers?.[question.question];
@@ -370,11 +401,13 @@ async function send(input) {
     if (job.sessionId !== input.sessionId) throw fail('APPROVAL_REQUIRED');
     if (job.state === 'stale' || job.state === 'sent') throw fail('STALE');
     if (['sending', 'unknown'].includes(job.state)) throw fail('UNKNOWN');
-    if (job.transport !== TRANSPORT || job.state !== 'approved' || !existsSync(receiptPath(job.jobId))) throw fail('APPROVAL_REQUIRED');
+    if (job.state !== 'approved' || !existsSync(receiptPath(job.jobId))) throw fail('APPROVAL_REQUIRED');
     const receipt = readPrivate(receiptPath(job.jobId));
     let text;
     try { text = textFor(job); } catch { stale(job); throw fail('STALE'); }
     if (receipt.binding !== digest(approvalBinding(job)) || receipt.questionHash !== digest(approvalQuestion(job, text)) || receipt.sessionId !== job.sessionId || receipt.challenge !== job.challenge) throw fail('APPROVAL_REQUIRED');
+    if (job.transport === 'ego-ui/1') return sendEgo(job, text);
+    if (job.transport !== TRANSPORT) throw fail('APPROVAL_REQUIRED');
     const link = binding();
     if (link.profile !== job.profile || link.account.id !== job.account.id) { stale(job); throw fail('STALE'); }
     try {
@@ -400,6 +433,77 @@ async function send(input) {
     eraseBody(job);
     return { status: job.state === 'sent' ? 'SENT' : 'UNKNOWN', jobId: job.jobId, ...(ledger.eventId ? { eventId: ledger.eventId } : {}) };
   });
+}
+
+// ego 전송(KTD5–KTD7): 영수증 검증은 send() 공통 경로가 마친다. 대화 락 안에서 ego 스킬 락을 얻고
+// 고정 전송 호출을 한 번 실행한다. 클릭 이전 실패는 안전 차단(ledger 제거·job stale), 클릭 뒤 증거 부족과
+// 부모 수준 실패(작업 종료 불명)는 unknown과 락 유지다.
+async function sendEgo(job, text) {
+  const { sendEgoThread, EGO_STEP_CODES } = await import('./ego-ui.mjs');
+  const link = egoBinding();
+  if (link.executable !== job.executable || link.taskSpaceName !== job.taskSpaceName || link.account?.profileId !== job.account.id) { stale(job); throw fail('STALE'); }
+  // send()가 이미 대화 락을 보유한다 — 재획득하지 않는다.
+  const identity = { account: job.account, conversationId: job.conversationId };
+  {
+    unresolved(identity);
+    const ledger = { accountId: job.account.id, conversationId: job.conversationId, jobId: job.jobId, fingerprint: job.fingerprint, state: 'sending' };
+    durableWrite(ledgerPath(identity), ledger);
+    job.state = 'sending';
+    durableWrite(jobPath(job.jobId), job);
+    rmSync(receiptPath(job.jobId), { force: true });
+    const lockPath = join(STATE_DIR, 'locks', `ego-profile-${digest([link.executable, link.taskSpaceName])}`);
+    let lockRetained = false;
+    try { mkdirSync(lockPath, { mode: 0o700 }); }
+    catch {
+      // 락이 남아 있으면 브라우저 작업을 시작하지 않은 것으로 마친다. 재준비가 필요하다.
+      rmSync(ledgerPath(identity), { force: true });
+      stale(job);
+      eraseBody(job);
+      return { status: 'LOCKED', jobId: job.jobId };
+    }
+    let resultStatus = 'blocked';
+    let blockReason = 'EGO_OUTCOME_UNKNOWN';
+    let messageUrn = null;
+    try {
+      durableWrite(join(lockPath, 'operation.json'), { operation: 'send', attemptId: job.jobId, startedAt: new Date().toISOString(), ownerPid: process.pid });
+      const outcome = await sendEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
+        conversationName: job.conversationName, conversationUuid: job.conversationId, expectedBody: text, deadlineMs: 45000 });
+      resultStatus = 'sent';
+      messageUrn = outcome.messageUrn;
+    } catch (error) {
+      const code = error?.code;
+      if (code === 'EGO_OUTCOME_UNKNOWN') {
+        // 부모 수준 실패(timeout·비정상 종료·출력 불명)는 브라우저 작업 종료를 확인할 수 없다 — 락을 유지한다.
+        resultStatus = 'unknown';
+        lockRetained = true;
+      } else if (code === 'SEND_UNKNOWN') {
+        // 클릭은 있었고 증거가 없다 — 결과 불명이지만 자식 정상 종료로 작업 종료는 확인됐다.
+        resultStatus = 'unknown';
+      } else {
+        resultStatus = 'blocked';
+        blockReason = typeof code === 'string' ? code : 'EGO_OUTCOME_UNKNOWN';
+      }
+    } finally {
+      if (!lockRetained) {
+        rmSync(join(lockPath, 'operation.json'), { force: true });
+        rmdirSync(lockPath);
+      }
+    }
+    if (resultStatus === 'blocked') {
+      // 클릭 이전의 안전 차단 — 아무것도 전송되지 않았으므로 ledger를 제거하고 재준비를 허용한다.
+      rmSync(ledgerPath(identity), { force: true });
+      stale(job);
+      eraseBody(job);
+      return { status: 'BLOCKED', reason: blockReason, jobId: job.jobId };
+    }
+    ledger.state = resultStatus;
+    if (messageUrn) ledger.eventId = messageUrn;
+    durableWrite(ledgerPath(identity), ledger);
+    job.state = resultStatus;
+    durableWrite(jobPath(job.jobId), job);
+    eraseBody(job);
+    return { status: resultStatus === 'sent' ? 'SENT' : 'UNKNOWN', jobId: job.jobId, ...(messageUrn ? { eventId: messageUrn } : {}) };
+  }
 }
 
 async function inspectUi(input) {

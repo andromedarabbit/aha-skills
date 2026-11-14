@@ -1,5 +1,12 @@
 # 변경 이력
 
+## 1.9.0 — 2026-11-14
+
+- **승인된 본문의 ego UI 전송(U5)을 추가한다.** ego 연결의 `prepare`는 브라우저를 건드리지 않고 job·승인 질문을 만든다(입력에 `conversationName` 추가 — 질문과 승인 영수증 결합에 포함). `send`는 대화 락 안에서 ego 스킬 락을 얻고 고정 전송 호출을 한 번 실행한다: 대화 개방(URL 스레드 UUID 일치 검증) → 전송 직전 마지막 이벤트가 상대 발신인지 재검증 → 빈 composer 확인 → 본문 삽입(execCommand insertText) → 공백 정규화 없는 정확한 readback → 전송 버튼 1회 클릭 → 새 자기 발신 이벤트·본문 일치로 증명.
+- 결과 사유를 세 갈래로 구분한다: 클릭 이전 실패는 `BLOCKED`(ledger 제거·job stale — 재준비 허용), 클릭 뒤 증거 부족(`SEND_UNKNOWN`)과 부모 수준 작업 종료 불명은 `UNKNOWN`(ledger 유지, 후자는 관측 락 유지).
+- 승인 영수증을 transport·binding(executable·taskSpaceName)·conversationName에 결합하고, 승인 훅이 ego job도 기록하도록 확장한다. legacy 영수증 결합 불변.
+- 실환경 전송은 G3(지정 대화·정확한 본문·입력 부작용 설명·개별 전송 승인) 전에는 실행하지 않는다.
+
 ## 1.8.1 — 2026-11-14
 
 첫 실환경 setup·scan 실측(2026-11-14, ego-browser 0.6.3.14)에서 발견한 결함들을 교정한다.

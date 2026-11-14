@@ -593,3 +593,165 @@ export async function openEgoThread(binding) {
       typeof output.proofMatch !== 'boolean') throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
   return output;
 }
+
+// 승인된 본문의 UI 전송(KTD6): 대화 개방 → 전송 직전 기준 재검증 → 빈 composer 확인 → 본문 삽입·정확한
+// readback → 전송 버튼 1회 클릭 → 새 자기 발신 이벤트 증거. 클릭 이전 단계의 실패는 안전 차단이고,
+// 클릭 뒤 증거 부족은 SEND_UNKNOWN(결과 불명)이다.
+async function sendThread(spaceName, messagingUrl, conversationName, conversationUuid, expectedBody, deadlineMs, classify, login) {
+  let task;
+  try { task = await taskSpace(spaceName); }
+  catch (error) {
+    const nameInUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
+    console.log(JSON.stringify({ status: nameInUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
+    return;
+  }
+  const stop = code => { throw Object.assign(new Error, { code }); };
+  try {
+    const pages = await task.pages();
+    if (!Array.isArray(pages)) stop('EGO_TABS_FAILED');
+    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
+    if (!page) stop('EGO_ATTACH_FAILED');
+    await page.goto(messagingUrl, { timeout: 45000 });
+    const listUrl = await page.url();
+    if (!classify(listUrl)) stop(login(listUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+    let listReady = false;
+    const listDeadline = Date.now() + Math.min(15000, Number(deadlineMs) || 15000);
+    while (Date.now() < listDeadline) {
+      const probe = await page.evaluate(() => {
+        const list = [...document.querySelectorAll('ul')].find(u => /conversation/i.test(u.getAttribute('aria-label') || ''));
+        return list ? { rows: list.querySelectorAll(':scope > li').length } : { rows: 0 };
+      });
+      if (!probe) break;
+      if (probe.rows >= 1) { listReady = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (!listReady) stop('EGO_SNAPSHOT_FAILED');
+    const clickResult = await page.evaluate(({ heading }) => {
+      const list = [...document.querySelectorAll('ul')].find(u => /conversation/i.test(u.getAttribute('aria-label') || ''));
+      if (!list) return { code: 'NO_LIST' };
+      for (const li of list.querySelectorAll(':scope > li')) {
+        const found = (li.querySelector('h2,h3,heading,[role="heading"]')?.textContent ?? '').trim();
+        if (found === heading) {
+          (li.querySelector('[class*="conversation-listitem__link"], a[href], [role="link"]') ?? li).click();
+          return { code: 'CLICKED' };
+        }
+      }
+      return { code: 'NO_MATCH' };
+    }, { heading: conversationName });
+    if (!clickResult || clickResult.code !== 'CLICKED') stop('THREAD_NOT_MATCHED');
+    // URL의 스레드 UUID가 대상과 일치할 때까지 폴링한다(다른 스레드면 대상 불일치).
+    let threadReady = false;
+    const readyDeadline = Date.now() + Math.min(20000, Number(deadlineMs) || 20000);
+    while (Date.now() < readyDeadline) {
+      const u = await page.url();
+      if (!classify(u)) stop(login(u) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+      const seg = /\/messaging\/thread\/([^/]+)/.exec(new URL(u).pathname)?.[1] ?? null;
+      if (seg && seg.startsWith('2-')) {
+        let uuid = null;
+        try {
+          const decoded = Buffer.from(seg.slice(2).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+          const candidate = decoded.split('_')[0];
+          if (/^[0-9a-f-]{16,64}$/i.test(candidate)) uuid = candidate;
+        } catch {}
+        if (uuid) {
+          if (uuid !== conversationUuid) stop('THREAD_NOT_MATCHED');
+          const count = await page.evaluate(() => [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')].length);
+          if (count >= 1) { threadReady = true; break; }
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (!threadReady) stop('EGO_ATTACH_FAILED');
+    // 전송 직전 기준 재검증(KTD6): 마지막 이벤트가 여전히 상대 발신이어야 한다 — 아니면 미응답이 해소된 것이다.
+    const pre = await page.evaluate(() => {
+      const items = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
+      const last = items[items.length - 1];
+      return { isOther: !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || '')) };
+    });
+    if (!pre || pre.isOther !== true) stop('CRITERIA_CHANGED');
+    // 기존 composer 내용이 있으면 덮지 않는다.
+    const composer = await page.evaluate(() => {
+      const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
+      if (!box) return { found: false };
+      return { found: true, text: (box.innerText || '') };
+    });
+    if (!composer || composer.found !== true) stop('EGO_SCHEMA_INVALID');
+    if (String(composer.text ?? '').trim()) stop('COMPOSER_NOT_EMPTY');
+    // 본문 삽입: 에디터 모델에 반영되도록 execCommand insertText를 쓴다.
+    const fill = await page.evaluate(bodyText => {
+      const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
+      if (!box) return { ok: false };
+      box.focus();
+      let ok = false;
+      try { ok = document.execCommand('insertText', false, bodyText); } catch {}
+      return { ok: ok === true };
+    }, expectedBody);
+    if (!fill || fill.ok !== true) stop('EGO_SCHEMA_INVALID');
+    // readback: 공백 정규화 없이 정확히 일치해야 클릭한다.
+    const readback = await page.evaluate(() => {
+      const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
+      return { text: box ? (box.innerText || '') : null };
+    });
+    if (!readback || typeof readback.text !== 'string' || readback.text !== expectedBody) stop('READBACK_MISMATCH');
+    // 전송 버튼 1회 클릭.
+    const clickSend = await page.evaluate(() => {
+      const btn = document.querySelector('[type="submit"], button.msg-composer__send-btn');
+      if (!btn || btn.disabled) return { code: 'NO_BUTTON' };
+      btn.click();
+      return { code: 'SEND_CLICKED' };
+    });
+    if (!clickSend || clickSend.code !== 'SEND_CLICKED') stop('SEND_BUTTON_NOT_FOUND');
+    // 성공 증거 폴링: 마지막 이벤트가 내 발신이고 본문이 일치해야 한다.
+    const evidenceDeadline = Date.now() + Math.min(20000, Number(deadlineMs) || 20000);
+    let nullTicks = 0;
+    while (Date.now() < evidenceDeadline) {
+      const post = await page.evaluate(() => {
+        const items = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
+        const last = items[items.length - 1];
+        const isOther = !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || ''));
+        let text = '';
+        if (last) {
+          const clone = last.cloneNode(true);
+          for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
+          text = (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+        }
+        const urn = last ? String(last.getAttribute('data-event-urn') || '') : '';
+        return { isOther, text, urn };
+      });
+      if (post && post.isOther === false && typeof post.text === 'string' && post.text) {
+        const want = String(expectedBody).replace(/\s+/g, ' ').trim();
+        if (post.text === want) {
+          console.log(JSON.stringify({ status: 'SEND_OBSERVED', messageUrn: post.urn || null }));
+          return;
+        }
+        nullTicks = 0;
+      } else {
+        nullTicks += 1;
+        if (nullTicks >= 2) break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 400));
+    }
+    console.log(JSON.stringify({ status: 'SEND_UNKNOWN' }));
+  } catch (error) {
+    const codes = ['THREAD_NOT_MATCHED', 'CRITERIA_CHANGED', 'COMPOSER_NOT_EMPTY', 'READBACK_MISMATCH', 'SEND_BUTTON_NOT_FOUND', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_TAB_NOT_FOUND', 'EGO_SNAPSHOT_FAILED'];
+    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
+  }
+}
+
+const EGO_SEND_BLOCK_CODES = Object.freeze(['THREAD_NOT_MATCHED', 'CRITERIA_CHANGED', 'COMPOSER_NOT_EMPTY', 'READBACK_MISMATCH', 'SEND_BUTTON_NOT_FOUND']);
+
+export async function sendEgoThread(binding) {
+  if (!exactKeys(binding, ['executable', 'taskSpaceName', 'conversationName', 'conversationUuid', 'expectedBody', 'deadlineMs'])) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.conversationName, 120)) throw fail('INVALID_ARGUMENT');
+  if (typeof binding.conversationUuid !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(binding.conversationUuid)) throw fail('INVALID_ARGUMENT');
+  if (typeof binding.expectedBody !== 'string' || !binding.expectedBody.trim() || binding.expectedBody.includes('\0') || Buffer.byteLength(binding.expectedBody) > 1024 * 1024) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 60000) throw fail('INVALID_ARGUMENT');
+  const script = `(${sendThread.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(binding.conversationName)}, ${JSON.stringify(binding.conversationUuid)}, ${JSON.stringify(binding.expectedBody)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_ATTACH_FAILED' })); });`;
+  const output = await execute(binding, script);
+  if (exactKeys(output, ['status']) && (EGO_STEP_CODES.includes(output.status) || EGO_SEND_BLOCK_CODES.includes(output.status) || output.status === 'SEND_UNKNOWN')) throw fail(output.status);
+  if (!exactKeys(output, ['status', 'messageUrn']) || output.status !== 'SEND_OBSERVED' ||
+      (output.messageUrn !== null && !validString(output.messageUrn, 200))) throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+  return output;
+}

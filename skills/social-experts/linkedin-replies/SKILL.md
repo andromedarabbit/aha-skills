@@ -1,7 +1,7 @@
 ---
 name: linkedin-replies
 description: "LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다. \"LinkedIn 답장 안 한 메시지 확인해줘\", \"회신 초안 써줘\", \"LinkedIn 정기 확인 등록해줘\" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다."
-version: "1.8.1"
+version: "1.9.0"
 context: inline
 language: "korean"
 dependencies:
@@ -161,7 +161,15 @@ node "${CLAUDE_SKILL_DIR}/scripts/reply.mjs" --mode manual scan < /dev/null
 
 ## 전송과 결과
 
-`전송` 선택 뒤 `send`에 `{"jobId":"prepare가 반환한 UUID","sessionId":"동일한 하네스 session ID"}`를
+ego 연결(transport `ego-ui/1`)에서 `prepare`는 브라우저를 건드리지 않고 job·승인 질문만 만든다.
+stdin JSON은 `{"conversationId":"scan 후보의 대화 UUID","sessionId":"하네스 session ID","text":"정확한 최종 본문","conversationName":"후보 표시 이름"}`이다(`conversationName`은 선택).
+준비 뒤 승인 질문·영수증·send 절차는 아래와 같고, 전송 자체는 브라우저 UI에서 이루어진다:
+대화 개방 → URL의 스레드 UUID가 job과 일치하는지 확인 → 마지막 이벤트가 여전히 상대 발신인지 재검증 →
+빈 composer 확인(기존 내용이 있으면 덮지 않음) → 본문 삽입 → 공백 정규화 없이 정확한 readback →
+전송 버튼 1회 클릭 → 새 자기 발신 이벤트와 본문 일치로 성공 증명. 클릭 이전 실패는 `BLOCKED`(재준비 가능),
+클릭 뒤 증거 부족과 작업 종료 불명은 `UNKNOWN`이다. 실환경 전송은 G3의 개별 승인 전에는 실행하지 않는다.
+
+legacy 연결에서 `전송` 선택 뒤 `send`에 `{"jobId":"prepare가 반환한 UUID","sessionId":"동일한 하네스 session ID"}`를
 stdin JSON으로 전달한다. `send`는 대화별 배타락 안에서 계정·참여자·최신 메시지를 재조회한다.
 
 ```bash
