@@ -1,18 +1,19 @@
 ---
 name: social-posting
-description: 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text·스레드 규칙)을 기계 검증한 뒤 승인을 받아 aside 브라우저 실행 계층으로 실제 계정에 게시한다. 스레드(X·Bluesky 답글 체인)도 지원한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 스레드로 변환해줘", "스레드로 뽑아줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 aside로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser 스킬 소관이다.
-version: 0.8.0
+description: 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text·스레드 규칙)을 기계 검증한 뒤 승인을 받아 ego lite(ego-browser 고정 스크립트) 실행 계층으로 실제 계정에 게시한다. 스레드(X·Bluesky 답글 체인)도 지원한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 스레드로 변환해줘", "스레드로 뽑아줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 ego-post 실행 계층으로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser·ego-browser 스킬 소관이다.
+version: 0.9.0
 context: inline
 language: "korean"
 dependencies:
-  - aside>=1.26.717
+  - ego-browser>=0.6.3
+  - node>=24
   - uv>=0.4.0
   - jq>=1.6
 ---
 
-# 소셜미디어 포스팅 (aside 연동)
+# 소셜미디어 포스팅 (ego lite 연동)
 
-X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고, 검증하고, 승인받아 aside 실행 계층으로 게시한다. **게시 API를 직접 호출하지 않는다** — 글쓰기 판단과 게시 전 검증은 이 스킬이, 게시 실행은 aside가 담당한다.
+X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고, 검증하고, 승인받아 ego lite 실행 계층으로 게시한다. **게시 API를 직접 호출하지 않는다** — 글쓰기 판단과 게시 전 검증은 이 스킬이, 게시 실행은 ego-post.mjs(ego-browser 고정 스크립트)가 담당한다.
 
 이 스킬은 `context: inline`이라 주 대화에서 직접 실행된다. "질문"/"확인"/"승인"이라고 적힌 지점에서는 **AskUserQuestion을 호출**해 구조화된 선택 UI로 물어본다. 텍스트로 선택지를 나열하고 사용자 응답을 기다리는 방식은 쓰지 않는다 — 게이트가 대화에 묻혀 놓칠 수 있다. 가까운 확인은 한 AskUserQuestion 호출에 여러 문항으로 묶는다. **각 문항의 선택지는 2~4개** — 1개면 호출 자체가 `Invalid tool parameters`로 거부된다.
 
@@ -24,7 +25,7 @@ X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰
 bash "${CLAUDE_SKILL_DIR}/scripts/preflight.sh"
 ```
 
-출력은 JSON 한 줄이다(항상 exit 0, 실패는 필드에 표시). aside가 없으면 설치 안내를 보여주고 그 자리에서 중단한다.
+출력은 JSON 한 줄이다(항상 exit 0, 실패는 필드에 표시). ego-browser가 없으면 설치 안내를 보여주고 그 자리에서 중단한다.
 
 ## 경로 규칙 (vault 독립)
 
@@ -56,30 +57,28 @@ bash "${CLAUDE_SKILL_DIR}/scripts/preflight.sh"
 
 ### Stage 0 의존성 확인
 
-PreToolUse 훅이 `aside *` Bash 호출 시 자동으로 check-deps.sh를 돌린다. 명시적으로 호출하지 않는다.
+PreToolUse 훅이 `*ego-post.mjs*` Bash 호출 시 자동으로 check-deps.sh를 돌린다. 명시적으로 호출하지 않는다.
 
 ### Stage 1 preflight
 
-위 "시작 동작" 그대로. 결과는 Stage 2의 선택지 재료가 된다. 출력의 `aside.permissions`는 권한 바인딩 상태다 — `bound:false`면 Stage 2에서 일괄 허용 문항이 열린다.
+위 "시작 동작" 그대로. 결과는 Stage 2의 선택지 재료가 된다. 출력의 `ego.binding`은 플랫폼별 신원 바인딩 상태다 — 바인딩 안 된 플랫폼은 Stage 2에서 setup을 돌려 신원을 확정한다. `ego.available`이 false면(ego-browser CLI 부재) 설치 안내 후 중단한다.
 
 ### Stage 2 요구사항 수집·확인 — 입력 게이트
 
 preflight 결과를 바탕으로 **AskUserQuestion 한 번에 묶어** 묻는다:
 
 1. 플랫폼 (multiSelect: X / LinkedIn / Facebook / Bluesky)
-2. 계정 — preflight가 수집한 aside 프로필 식별자(`u0`, `u1` …)만 선택지로 노출. 이메일은 넣지 않는다(aside가 무시한다)
+2. 계정 — ego 바인딩 신원. preflight `ego.binding.identity`에 해당 플랫폼이 있으면 그 값을, 없으면 먼저 setup을 돌려 확정한다:
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/ego-post.mjs" setup --platform <p>
+   ```
+
+   setup은 읽기 전용 프로필 확인이다(입력·게시 없음). 확정된 신원을 계정 문항 선택지로 보여 확인받는다 — ego lite에 로그인된 프로필이 곧 계정이므로 다른 계정을 원하면 사용자가 ego lite에서 프로필을 바꿔야 한다(바뀌면 게시 시 `EGO_ACCOUNT_MISMATCH`로 차단된다)
 3. 소재 유형 (자유 주제 / 기존 문서 재활용 — 문서 후보는 preflight가 제시한 목록에서)
 4. 강조점·원하는 반응 (선택 문항)
 5. 포스트 목적 — 티저형(궁금증 하나로 흥미를 만들고 링크로 보낸다. 원문 링크 홍보의 권장 기본) / 요약형(논지를 요약해 포스트 자체로 전달한다)
 6. Facebook 공개 범위 (facebook 포함 시에만) — 공개 / 친구만 / 기존 설정 유지. 답은 `drafts/facebook.md` frontmatter `visibility`(`public`/`friends`/`keep`)로 기록하고 게시 지시에 반영한다 — 계정 기본값으로 조용히 빠지지 않게 반드시 묻는다
-
-preflight의 `aside.permissions.bound`가 `false`면 위 묶음에 권한 문항을 추가한다 — **게시 권한 일괄 허용(전역 browser 권한 포함)** (허용 / 건너뛰기). "허용"을 고르면 계정 확정 뒤에 부여한다:
-
-```bash
-SOCIAL_PERMISSION_GRANT=1 bash "${CLAUDE_SKILL_DIR}/scripts/aside-permissions.sh" grant --account <id>
-```
-
-부여는 X 도구 3종(`twitter.tweet`/`twitter.reply`/`twitter.deleteTweet`) + 지원 4개 사이트 network url 패턴 + browser-modify **1건(전역)**을 한 번에 추가하고 같은 모양의 ask 규칙을 allow로 대체한다(비교는 exact 매칭 — host가 붙은 사용자 소유 규칙은 건드리지 않는다). `SOCIAL_PERMISSION_GRANT=1`은 이 동의의 운반체로 grant가 없으면 실행을 거부한다 — 게시 중 승인 창이 뜨지 않게 첫 사용 시점에 끝내는 게 목적이다. **aside가 저장 시 browser 규칙의 `host`를 지우므로 browser 권한은 사이트로 좁힐 수 없다** — 부여하면 로그인된 모든 사이트의 브라우저 수정이 승인 없이 열린다는 점을 동의 문항에서 그대로 보여준다(사이트 제한은 network url 축에만 가능). "건너뛰기"해도 진행할 수 있지만, aside 승인 창이 `SOCIAL_ASIDE_TIMEOUT` 창과 충돌해 게시 타임아웃 실패가 될 수 있다. 부여했던 권한 회수는 `bash "${CLAUDE_SKILL_DIR}/scripts/aside-permissions.sh" revoke --account <id>`로 한다(부여한 필수 규칙만 제거, 토큰 불필요).
 
 응답이 확정되면 작업 공간을 만들고 활성화한다:
 

@@ -9,13 +9,13 @@
 | 스크립트 | 호출 | 역할 |
 | --- | --- | --- |
 | `preflight.sh` | `bash $SKILL_DIR/scripts/preflight.sh` | 환경 스냅샷 JSON 1줄 (항상 exit 0) |
-| `aside-permissions.sh` | `bash $SKILL_DIR/scripts/aside-permissions.sh status\|grant\|revoke [--account u0]` | aside 권한 바인딩 — 대조·부여·회수 (status 항상 exit 0, grant/revoke 실패 시 exit 1, grant는 `SOCIAL_PERMISSION_GRANT=1` 필요) |
-| `check-deps.sh` | PreToolUse 훅 (`if: Bash(aside *)`) | aside 존재·계정 상태 확인 (편의 — 강제력 없음) |
+| `ego-post.mjs` | `node $SKILL_DIR/scripts/ego-post.mjs <setup\|bootstrap\|post\|readback>` | ego lite 실행 계층 — 신원 바인딩·부트스트랩·게시·read-back (실패도 JSON 1줄 + exit 1) |
+| `check-deps.sh` | PreToolUse 훅 (`if: Bash(*ego-post.mjs*)`) | ego-browser·node 존재 확인 (편의 — 강제력 없음) |
 | `post-state.sh` | `bash $SKILL_DIR/scripts/post-state.sh <sub>` | 영수증·활성 작업 관리 |
 | `record-approval.sh` | PostToolUse 훅 (matcher: AskUserQuestion) | 승인 digest + 계정 스냅샷 기록 (승인의 유일한 입구) |
 | `check-drafts.py` | `uv run $SKILL_DIR/scripts/check-drafts.py <job-dir>` | 하드 제약 검사 (위반·파싱 불가 exit 1) + 플랫폼 간 문형 중복 경고(`warnings` — 차단 안 함) |
 | `check-drafts.py` (페이로드) | 위 명령에 `--platform <p>` 추가 | 게시 페이로드 JSON: 본문(frontmatter 제거)·절대경로 media·link·format·visibility |
-| `publish.sh` | `bash $SKILL_DIR/scripts/publish.sh --job <dir> --platform <p>` | 게시 단일 진입점 (6중 가드 후 aside exec, URL 감지) |
+| `publish.sh` | `bash $SKILL_DIR/scripts/publish.sh --job <dir> --platform <p>` | 게시 단일 진입점 (6중 가드 후 ego-post 실행, DOM 증거 판정) |
 
 ## post-state.sh 서브커맨드
 
@@ -31,19 +31,14 @@ clear                 영수증 삭제
 
 **approved_\*는 post-state.sh로 기록할 수 없다.** record-approval.sh 훅(PostToolUse, matcher: AskUserQuestion)만 lib/receipt.sh를 직접 호출해 기록한다.
 
-## aside 권한 바인딩 (aside-permissions.sh)
+## ego 바인딩 (ego-post.mjs setup)
 
-aside의 게시 권한은 settings.json 최상위 `permission` 키다(`rules.allow/deny/ask` + `default`). CLI·MCP에 설정 커맨드는 없고 repl의 `aside.settings.get/set`이 유일한 프로그램 경로다 — 이 스크립트가 그 경로를 감싼다.
+ego lite에는 권한 엔진이 없다 — 안전장치는 승인 영수증·digest 가드·ego-post의 신원 대조가 전부다. 계정은 **ego lite에 로그인된 프로필 1개**이고, setup이 플랫폼별 신원을 확정해 바인딩 파일에 기록한다.
 
-- `status`: 활성(또는 `--account`) 계정의 권한을 읽어 필수 규칙과 대조한다. `bound:true` = 필수 규칙이 전부 allow에 있고 같은 모양의 ask/deny가 없다. 항상 exit 0 (soft-fail)
-- `grant`: 없는 필수 규칙을 추가하고 같은 모양(키 정렬 JSON 동일)의 ask/deny를 allow로 대체한 뒤 재조회로 검증한다. 실패 시 exit 1. **`SOCIAL_PERMISSION_GRANT=1` 환경변수가 없으면 거부한다** — Stage 2 '일괄 허용' 동의의 운반체(산문 계약의 코드 강제)
-- `revoke`: 부여했던 필수 규칙(정확히 일치하는 것)만 allow에서 제거하고 재조회로 검증한다. ask/deny·사용자 소유 규칙(host가 붙은 등 정확히 일치하지 않는 것)은 불가침. 권한 축소 방향이라 토큰 불필요
-- **비교는 전부 exact 매칭**이다 — host가 붙은 사용자 규칙은 대체·제거·dedup 대상이 아니며 보존된다(모르는 규칙을 파괴하지 않는다). 부수 효과: 사용자가 남긴 비-정확 겹침 규칙(예: 좁은 network url의 ask)은 게시 중 승인 창을 유발할 수 있다
-- 필수 규칙: X는 `twitter.tweet`/`twitter.reply`/`twitter.deleteTweet` 도구 + 4개 사이트 network url 패턴 + browser-modify **1건(전역)** — aside가 저장 시 browser 규칙의 `host`를 제거하므로(2026-09-01 실측) 사이트 좁히기는 network 축으로만 가능하다 (정의는 스크립트의 `REQUIRED_JSON` — 유일한 지점)
-- repl은 `--account`를 무시하므로 계정 전환은 `aside account use`로 하고 작업 뒤 원복한다 (원복 실패는 결과에 남긴다)
-- Stage 2에서 "일괄 허용"으로만 호출한다 — grant는 사용자 동의 없이 실행하지 않는다
-
-> 규칙 문법(zod 판별 유니언)·스키마 검증·`default: "allow"` 과허용 실태는 2026-09-01 실측이다.
+- 바인딩 파일: `<상태 디렉토리>/social-posting/binding.json` (`$SOCIAL_EGO_STATE_DIR` 오버라이드, 기본 `$HOME/.local/share/aha-skills/social-posting/` — 경로는 런타임에 확정). 내용: `{transport:"ego-post/1", executable, taskSpaceName:"social-posting-skill", egoVersion, identity:{x:<handle>, linkedin:<slug>, …}}`
+- `setup --platform <p> [--force]`: 실행파일 발견(`SOCIAL_EGO_EXECUTABLE` → PATH의 `ego-browser`) 후 읽기 전용 프로필 확인으로 신원을 얻어 기록한다. 이미 바인딩된 플랫폼은 재호출 없이 `cached:true`로 돌려준다(`--force`로 재측정)
+- TaskSpace 이름은 `social-posting-skill` 1개(순차 게시) — 사용자 소유 스페이스 침입·claim·양도 계열 ego API는 고정 스크립트에서 일절 호출하지 않는다(테스트가 정규식으로 강제)
+- ego-post `post`는 게시 전에 **라이브 프로필 신원과 바인딩을 대조**한다 — 불일치면 `EGO_ACCOUNT_MISMATCH`로 게시 전 차단(계정 재타깃 방지의 실행 계층 사본)
 
 ## Ready 판정식
 
@@ -60,7 +55,7 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 5. 승인 시점 계정 스냅샷(`approved_accounts`)과 현재 accounts 일치 — 승인 후 계정 변경 거부
 6. 본문 동결 직후 원본 전체 digest 재검증 — 검사→동결 사이 변경(TOCTOU) 거부
 
-게시 페이로드: 본문만 `mktemp 0400` 동결(EXIT trap으로 항상 정리 — 템플릿의 `XXXXXX`는 반드시 마지막 문자여야 한다, macOS BSD mktemp는 접미사가 붙으면 랜덤화하지 않는다)하고 **프롬프트에 인라인으로 실어 보낸다** — 파일 경로 전달은 aside exec가 무인 read_file 권한 확인에 무한 정지하는 근본 원인이었다(2026-09-01 실측). 동결 경로는 `SOCIAL_POSTING_FROZEN` 환경변수로 하위 프로세스에 전달된다. media/link는 프롬프트 지시(절대경로·alt 포함 — 미디어 첨부가 있으면 로컬 파일 경로 전달이 필요해 같은 권한 게이트에 걸릴 수 있다는 것이 알려진 제약이다). 성공 신호는 aside 출력의 URL(`https?://`) 기계 감지 — URL 없으면 exit 1 "게시 여부 불명". aside exec는 상한 타임아웃(`SOCIAL_ASIDE_TIMEOUT`초, 기본 420 — 실측 39~300초 분산·300초 초과 사망 관측, 병렬 경합 여유)으로 감싸서 무한 정지를 기명 실패로 바꾼다. Facebook 초안의 `visibility`(`public`/`friends`/`keep`)은 게시 지시에 공개 범위 설정으로 반영된다(`keep`이면 지시 없음 — 계정 기본 설정). **스레드(`format: thread`)**는 프롬프트가 세그먼트를 이전 게시물에 대한 **답글로 연결**하도록 지시하고(미디어는 첫 게시물에만), URL 개수 ≥ 세그먼트 수를 요구한다 — 미달이면 exit 1 "부분 게시 가능성". 세그먼트 수는 check-drafts.py의 파싱과 같은 방식(공백 세그먼트 제외)으로 센다.
+게시 페이로드: check-drafts 페이로드 JSON(본문·절대경로 media+alt·link·visibility)에 가드 4의 ego 신원(`identity`)을 실어 ego-post.mjs `post`의 **stdin**으로 전달한다. 본문은 `mktemp 0400` 동결 파일로도 남는다(EXIT trap 정리 — `XXXXXX`는 반드시 마지막 문자, macOS BSD mktemp는 접미사가 붙으면 랜덤화하지 않는다) audit 증거로, 경로는 `SOCIAL_POSTING_FROZEN`으로 하위 프로세스에 전달된다. `SOCIAL_EGO_POST` 환경변수가 있으면 ego-post 대신 그 스크립트를 호출한다(테스트 심 — payload JSON stdin / 결과 JSON stdout / exit 0|1 계약). **성공 신호는 ego-post의 DOM 증거 판정이다**: `POSTED`+`urlRecovered:true` → exit 0·URL 회수 완료, `POSTED`+`urlRecovered:false` → **exit 0 + 경고**(게시는 성립 — 재시도는 중복 게시), `PARTIAL_POSTED` → exit 1(이미 게시된 URL 노출·재시도 금지), `POST_FAILED` → exit 1. ego-post는 자체 상한 타임아웃(세그먼트×60초+120초, 최대 570초)으로 자식을 정리하므로 publish.sh에 감시 루프가 없다 — **호출측(하네스 Bash)은 타임아웃을 늘려야 한다**(single ≈300초, thread ≈600초). Facebook `visibility`(`public`/`friends`/`keep`)은 ego-post가 composer의 공개범위 메뉴로 반영한다(`keep`이면 계정 기본 설정). **스레드(`format: thread`)**는 세그먼트를 이전 게시물에 대한 **답글로 연결**하고(미디어는 첫 게시물에만), 부분 게시는 `PARTIAL_POSTED`로 실패한다. 세그먼트 수는 check-drafts.py 파싱과 같은 방식(공백 세그먼트 제외)으로 센다.
 
 ## 훅 계약 (record-approval.sh)
 
@@ -82,16 +77,16 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 - 스레드 하드 제약: `format: thread`는 세그먼트 2개 이상 + **x·bluesky만 지원**(linkedin·facebook은 거부), X는 게시물 ≤ 25. `format: single`은 세그먼트 정확히 1개. 게시물별 길이·해시태그·alt 검사는 게시물 단위로 각각 적용된다.
 - 미디어·alt: Bluesky는 이미지 alt text 필수(하드). 해시태그: Bluesky 0~1개(하드). 미디어 개수 상한: X 4, Bluesky 4, LinkedIn 9(하드). Facebook은 개수 상한을 두지 않는다(근거 불명확한 규칙을 하드로 만들지 않는다).
 
-## 게시 실행 계약 (aside)
+## 게시 실행 계약 (ego lite)
 
-- 게시: `aside exec --account <id>`에 동결 본문을 프롬프트에 인라인으로 실어 **변경·요약 없이 그대로 게시** 지시(파일 경로 전달 금지 — 무인 read_file 정지 원인). 직접 exec를 호출하지 않고 publish.sh 경유만.
-- 검증(read-back): `aside account use <id>`로 먼저 계정 전환(**repl은 `--account`를 무시한다**), 게시글 URL를 열어 snapshot으로 본문 확인.
-- 계정 식별자는 `aside account list`의 프로필 값(`u0`, `u1`)만 쓴다. 이메일은 무시된다.
+- 게시: publish.sh가 ego-post.mjs `post`에 페이로드 JSON을 stdin으로 전달 — ego-post가 고정 스크립트(ego-browser `nodejs` 서브커맨드, 스크립트 stdin 주입·JSON 1줄 회수·스트림 2MiB 상한)로 composer 입력·미디어 첨부(`setInputFiles`+프리뷰 확인, 게시 클릭 전 fail-closed)·공개범위·게시 버튼 1회 클릭·DOM 증거 폴링·프로필 퍼마링크 회수(최선)를 수행한다. ego-browser CLI를 직접 호출하지 않고 publish.sh(게시)·ego-post.mjs(setup·bootstrap·readback) 경유만.
+- 검증(read-back): `ego-post.mjs readback`에 `{urls:[…], bodies:[…]}` JSON을 stdin으로 전달 — 게시글 URL을 열어 snapshot에서 본문 일치를 기계 판정한다.
+- 계정 신원은 바인딩 파일의 플랫폼별 신원 문자열만 쓴다(이메일 아님). `link` 키가 있으면 ego-post가 첫 세그먼트 끝에 링크를 한 줄 덧붙인다(중복 방지 — 본문에 이미 있으면 `link` 키를 비워둔다).
 
 ## 확인된 제약
 
-- network url 규칙이 browser 액션을 실제로 제한하는지는 미검증이다(aside의 규칙 판정 순서 불명) — network 패턴은 site 범위 제어의 유일한 수단이라는 **가정**으로 문서화돼 있다
-- 브라우저+브라우저 조합(linkedin+facebook) 병렬 게시는 경합으로 느린 플랫폼이 타임아웃 상한에 걸린다(2026-09-01 실측 wall 422초·LinkedIn 420초 초과 사망) — 병렬 이득이 실측된 것은 도구+브라우저 조합(X+Bluesky)뿐
+- 플랫폼 DOM 셀렉터(X·LinkedIn·Facebook·Bluesky composer·퍼마링크)는 첫 실측 전 보수적 추정이다 — 실패는 전부 기명 코드(`EGO_COMPOSER_NOT_FOUND` 등)로만 갈린다. 첫 실환경 실행은 측정으로 취급해 셀렉터를 교정한다
+- 순차 게시는 의도다: ego 경로는 전부 브라우저 UI라 병렬이 경합만 만든다(aside 시절 실측 2026-09-01: 브라우저+브라우저 조합 wall 422초·상한 초과 사망)
 
 - 활성 작업 포인터(`${TMPDIR}/social-posting-current-job`)는 머신 전체 1개다 — 동시에 여러 작업을 활성화하면 승인이 섞인다. 한 번에 한 작업만.
 - 게시는 되돌릴 수 없다. 모든 게시는 publish.sh의 digest·제약·계정 가드 뒤에서만 일어난다.

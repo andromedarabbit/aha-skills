@@ -2,20 +2,18 @@
 # preflight.sh - 스킬 호출 즉시 수집하는 환경 스냅샷. JSON 1줄 출력, 항상 exit 0.
 #
 # 실패는 에러가 아니라 필드로 보고한다(soft-fail) — Stage 2가 이 값을 보고
-# 선택지를 만든다. aside 명령은 인자 없이 빠르게 끝나는 것만 쓴다.
+# 선택지를 만든다. ego-browser 명령은 인자 없이 빠르게 끝나는 것만 쓴다.
 #
 # Usage: bash preflight.sh
 # 출력 예:
-# {"aside":{"available":true,"version":"1.26.810.1915","account_list":["u0 …","u1 …"],
-#           "account_status":"…"},"uv":true,"python3":true,"jq":true,
+# {"ego":{"available":true,"version":"0.6.3.14","executable":"/path/ego-browser",
+#         "binding":{"bound":true,"identity":{"x":"me"}}},
+#  "uv":true,"python3":true,"node":true,"jq":true,
 #  "workspace":{"cwd":"…","social_root":"/…","has_voice_profile":false,
 #               "md_candidates":["a.md","b.md"]}}
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# aside 하위 명령 출력을 안전하게 모은다(부재·실패 → 빈 값)
 capture() {
   local cmd="$1"
   shift
@@ -23,33 +21,32 @@ capture() {
   "$cmd" "$@" 2>/dev/null || true
 }
 
-aside_available=false
-aside_version=""
-account_list_json="[]"
-account_status=""
+ego_available=false
+ego_version=""
+ego_executable=""
 
-if command -v aside >/dev/null 2>&1; then
-  aside_available=true
-  aside_version="$(capture aside --version | head -1)"
-  # account list / status 출력 형식은 aside 버전에 따라 달라질 수 있어 원문 라인을
-  # 그대로 실는다 — 파싱은 에이전트가 Stage 2에서 한다
-  account_list_json="$(capture aside account list | jq -R -s -c 'split("\n") | map(select(length > 0))' 2>/dev/null || printf '[]')"
-  account_status="$(capture aside account status | head -1)"
+if command -v ego-browser >/dev/null 2>&1; then
+  ego_available=true
+  ego_executable="$(command -v ego-browser)"
+  # --version 출력 형태는 ego lite 버전에 따라 달라질 수 있어 첫 줄만 그대로 실는다
+  ego_version="$(capture ego-browser --version | head -1)"
 fi
 
-# aside 권한 바인딩(활성 계정) — 상태 계산은 aside-permissions.sh 에 맡긴다(유일한 구현).
-# 실패는 에러가 아니라 ok:false 필드로 보고한다(soft-fail).
-permissions_json='{"ok":false,"reason":"aside_not_available"}'
-if [[ "$aside_available" == "true" ]]; then
-  permissions_json="$(bash "$SCRIPT_DIR/aside-permissions.sh" status 2>/dev/null \
-    || printf '{"ok":false,"reason":"permission_check_failed"}')"
+# ego 바인딩(신원) — ego-post.mjs setup이 기록한 binding.json을 읽기만 한다.
+# 상태 디렉토리는 ego-post.mjs와 동일 규칙(런타임 확정)으로 잡는다.
+ego_binding_json='{"bound":false,"identity":{}}'
+state_dir="${SOCIAL_EGO_STATE_DIR:-$HOME/.local/share/aha-skills/social-posting}"
+if [[ -f "$state_dir/binding.json" ]]; then
+  ego_binding_json="$(jq -c '{bound:true, identity:(.identity // {})}' "$state_dir/binding.json" 2>/dev/null \
+    || printf '{"bound":false,"identity":{}}')"
 fi
-permissions_json="$(printf '%s' "$permissions_json" | jq -c . 2>/dev/null || printf '{"ok":false,"reason":"permission_check_failed"}')"
 
 uv_ok=false
 command -v uv >/dev/null 2>&1 && uv_ok=true
 python3_ok=false
 command -v python3 >/dev/null 2>&1 && python3_ok=true
+node_ok=false
+command -v node >/dev/null 2>&1 && node_ok=true
 jq_ok=false
 command -v jq >/dev/null 2>&1 && jq_ok=true
 
@@ -79,20 +76,20 @@ if [[ "$jq_ok" == "true" ]]; then
 fi
 
 jq -n \
-  --argjson aside_available "$aside_available" \
-  --arg aside_version "$aside_version" \
-  --argjson account_list "$(printf '%s' "$account_list_json" | jq -c . 2>/dev/null || printf '[]')" \
-  --arg account_status "$account_status" \
-  --argjson permissions "$permissions_json" \
+  --argjson ego_available "$ego_available" \
+  --arg ego_version "$ego_version" \
+  --arg ego_executable "$ego_executable" \
+  --argjson ego_binding "$(printf '%s' "$ego_binding_json" | jq -c . 2>/dev/null || printf '{"bound":false,"identity":{}}')" \
   --argjson uv "$uv_ok" \
   --argjson python3 "$python3_ok" \
+  --argjson node "$node_ok" \
   --argjson jq_ok "$jq_ok" \
   --arg cwd "$cwd" \
   --arg social_root "$social_root" \
   --argjson has_voice_profile "$has_voice_profile" \
   --argjson md_candidates "$(printf '%s' "$md_candidates_json" | jq -c . 2>/dev/null || printf '[]')" \
-  '{aside: {available: $aside_available, version: $aside_version, account_list: $account_list, account_status: $account_status, permissions: $permissions},
-    uv: $uv, python3: $python3, jq: $jq_ok,
+  '{ego: {available: $ego_available, version: $ego_version, executable: $ego_executable, binding: $ego_binding},
+    uv: $uv, python3: $python3, node: $node, jq: $jq_ok,
     workspace: {cwd: $cwd, social_root: $social_root, has_voice_profile: $has_voice_profile, md_candidates: $md_candidates}}'
 
 exit 0

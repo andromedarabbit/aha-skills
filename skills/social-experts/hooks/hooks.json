@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(aside *)",
+            "if": "Bash(*ego-post.mjs*)",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/social-posting/scripts/check-deps.sh\""
           }
         ]

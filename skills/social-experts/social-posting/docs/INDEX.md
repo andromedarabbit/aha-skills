@@ -3,7 +3,7 @@
 | 문서 | 내용 |
 | --- | --- |
 | `GUIDELINES.md` | 설계 원칙, 처리 순서, 플랫폼 규칙 3등급 모델, 검증 계층 |
-| `REFERENCE.md` | 스크립트 인터페이스, 영수증 키, 훅 계약, 문자 수 단위표, aside 실행 계약 |
+| `REFERENCE.md` | 스크립트 인터페이스, 영수증 키, 훅 계약, 문자 수 단위표, ego 실행 계약 |
 | `playbook-x.md` | X 규칙 (가중 길이, 스레드, 훅) |
 | `playbook-linkedin.md` | LinkedIn 규칙 (반응별 구조, above-the-fold) |
 | `playbook-facebook.md` | Facebook 규칙 (짧은/긴 형 구분, 기업 문구 금지) |
