@@ -18,7 +18,7 @@
 //
 // Usage 상세는 docs/REFERENCE.md "ego 실행 계약".
 
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -69,9 +69,9 @@ export function discoverExecutable(env = process.env) {
 }
 
 export function egoVersion(executable) {
-  try {
-    return execFileSync(executable, ['--version'], { encoding: 'utf8', timeout: 15000 }).split('\n')[0].trim().slice(0, 64);
-  } catch { return ''; }
+  // 실측(2026-11-14, 0.6.3.14): --version 출력은 stderr로 재배선된다 — stdout·stderr 통합 캡처.
+  const r = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: 15000 });
+  return `${r.stdout ?? ''}${r.stdout ? '' : (r.stderr ?? '')}`.split('\n')[0].trim().slice(0, 64);
 }
 
 // ── binding (상태 디렉토리는 런타임에 확정 — 스킬은 절대경로를 모른다) ──
@@ -217,16 +217,27 @@ async function childAcquireIdentityX(spaceName) {
     const url = await page.url();
     const u = new URL(url);
     if (u.hostname !== 'x.com' && u.hostname !== 'twitter.com') stop('EGO_ORIGIN_MISMATCH');
+    // 프로필 탭(= 핸들 href)은 로그인 직후 렌더가 늦다 — 폴링으로 기다린다.
+    // 실측(2026-11-14): 폴백 스캔이 사이드바 "홈" 링크(/home)를 프로필로 오탐한 사례가 있어
+    // 예약 경로는 신원에서 제외한다.
+    const RESERVED = new Set(['home', 'explore', 'notifications', 'messages', 'i', 'search', 'settings', 'communities', 'grok', 'lists', 'bookmarks', 'profile', 'compose', 'intent', 'connect', 'hashtag']);
+    let profileHref = null;
+    const hrefDeadline = Date.now() + 10000;
+    while (Date.now() < hrefDeadline && !profileHref) {
+      profileHref = await page.evaluate(() => document.querySelector('a[data-testid="AppTabBar_Profile_Link"]')?.getAttribute('href')
+        || [...document.querySelectorAll('a[data-testid][href^="/"]')].map(a => a.getAttribute('href')).find(h => h) || null);
+      if (profileHref) break;
+      await new Promise(r => setTimeout(r, 600));
+    }
     const probe = await page.evaluate(() => ({
       hasLogin: !!document.querySelector('input[autocomplete="username"], input[name="session[username_or_email]"]'),
       // 실측(2026-11-14): 로그아웃 상태의 x.com/home는 랜딩으로 리다이렉트되고 로그인 폼이
       // 아니라 "Sign in" 링크가 있다 — 링크 기반 탐지까지 병행한다.
       hasSignInLink: [...document.querySelectorAll('a, button')].some(e => /^(sign in|로그인)$/i.test((e.textContent || '').trim())),
-      profileHref: document.querySelector('a[data-testid="AppTabBar_Profile_Link"], a[aria-label][href^="/"][data-testid]')?.getAttribute('href') || null,
     }));
     if (probe?.hasLogin || probe?.hasSignInLink) stop('EGO_NEEDS_LOGIN');
-    const m = probe?.profileHref && /^\/([A-Za-z0-9_]{1,20})$/.exec(probe.profileHref);
-    if (!m) stop('EGO_IDENTITY_NOT_FOUND');
+    const m = profileHref && /^\/([A-Za-z0-9_]{1,20})$/.exec(profileHref);
+    if (!m || RESERVED.has(m[1].toLowerCase())) stop('EGO_IDENTITY_NOT_FOUND');
     console.log(JSON.stringify({ status: 'IDENTITY_ACQUIRED', identity: m[1] }));
   } catch (error) {
     const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_IDENTITY_NOT_FOUND', 'EGO_EVAL_STOPPED'];
@@ -814,7 +825,8 @@ export async function setup(platform, env = process.env, force = false) {
   if (!exactKeys(output, ['status', 'identity']) || output.status !== 'IDENTITY_ACQUIRED' || !validString(output.identity, 256)) {
     throw fail('EGO_SCHEMA_INVALID');
   }
-  const next = binding ?? { transport: TRANSPORT, executable, taskSpaceName: TASK_SPACE_NAME, egoVersion: egoVersion(executable), identity: {} };
+  const next = binding ?? { transport: TRANSPORT, executable, taskSpaceName: TASK_SPACE_NAME, egoVersion: '', identity: {} };
+  if (!next.egoVersion) next.egoVersion = egoVersion(executable);
   next.executable = executable;
   next.identity = { ...next.identity, [platform]: output.identity };
   writeBinding(next, env);
