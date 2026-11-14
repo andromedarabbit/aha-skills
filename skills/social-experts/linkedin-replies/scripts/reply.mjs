@@ -606,7 +606,8 @@ async function run(args, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('INVALID_ARGUMENT');
   if (command === 'inspect') return input.taskSpaceName !== undefined ? inspectEgo(input) : inspectUi(input);
   if (command === 'setup' && input.transport === 'ego-ui/1') return setupEgo(input);
-  if (command === 'scan' && ['aside-ui/1', 'ego-ui/1'].includes(input.transport)) throw fail('UI_NOT_ACTIVATED');
+  if (command === 'scan' && input.transport === 'ego-ui/1') return scanEgo(input);
+  if (command === 'scan' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');
   if (command === 'setup' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');
   if (command === 'setup') {
     if (Object.keys(input).some(key => !['profile', 'accountId'].includes(key)) || typeof input.profile !== 'string' || !/^[\p{L}\p{N}_ -]{1,128}$/u.test(input.profile) || input.profile.trim() !== input.profile) throw fail('INVALID_ARGUMENT');

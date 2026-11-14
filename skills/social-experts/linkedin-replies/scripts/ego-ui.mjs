@@ -329,7 +329,8 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
     await page.goto(messagingUrl, { timeout: 45000 });
     const currentUrl = await page.url();
     if (!classify(currentUrl)) stop(login(currentUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
-    // 이동 비용을 순회 예산에서 제외해 부모 125초 상한과의 산수 충돌을 피한다(리뷰 #8).
+    try { await page.waitForFunction(() => (document.body?.innerText?.length ?? 0) > 200, undefined, { timeout: 20000 }); } catch {}
+    // 이동 비용을 순회 예산에서 제외해 부모 상한과의 산수 충돌을 피한다(리뷰 #8).
     const deadline = Date.now() + deadlineMs;
     const fingerprint = await page.evaluate(expected => {
       const labels = [...new Set(

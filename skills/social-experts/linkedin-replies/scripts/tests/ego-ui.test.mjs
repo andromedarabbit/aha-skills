@@ -78,6 +78,7 @@ const pageStub = (label, baseUrl) => ({
     currentUrl = Array.isArray(state.urlSequence) && state.urlSequence.length ? state.urlSequence.shift() : target;
   },
   waitForLoadState: async () => {},
+  waitForFunction: async () => {},
   evaluate: async () => {
     record('evaluate');
     if (Array.isArray(state.evaluateQueue) && state.evaluateQueue.length) return state.evaluateQueue.shift();
@@ -489,15 +490,15 @@ test('이미 남은 구형 binding·unknown·sending·락은 ego inspect로 변�
   assert.equal(existsSync(join(f.home, 'auth-called')), false);
 });
 
-test('UI scan은 aside·ego 양쪽 transport 모두 미활성이고 aside setup도 차단된다', t => {
+test('aside scan·setup은 미활성이고 ego scan은 활성 경로로 넘어간다', t => {
   const f = fixture(t);
-  for (const transport of ['aside-ui/1', 'ego-ui/1']) {
-    const result = f.runReply({ transport }, 'manual', 'scan');
+  for (const command of ['scan', 'setup']) {
+    const result = f.runReply({ transport: 'aside-ui/1' }, 'manual', command);
     assert.deepEqual(result.data, { status: 'UI_NOT_ACTIVATED' });
     assert.equal(existsSync(join(f.home, '.local')), false);
     assert.equal(existsSync(join(f.home, 'auth-called')), false);
   }
-  assert.deepEqual(f.runReply({ transport: 'aside-ui/1' }, 'manual', 'setup').data, { status: 'UI_NOT_ACTIVATED' });
+  assert.equal(f.runReply({ transport: 'ego-ui/1' }, 'manual', 'scan').data.status, 'INVALID_ARGUMENT');
   assert.deepEqual(f.records('calls'), []);
   assert.equal(f.runReply({ scope: 'Focused', period: 'two-weeks' }, 'manual', 'setup').data.status, 'INVALID_ARGUMENT');
 });
@@ -752,9 +753,10 @@ test('ego binding이 없거나 구형이면 scanEgo는 NEEDS_SETUP으로 종료�
   assert.equal(f.runScan().data.status, 'NEEDS_SETUP');
 });
 
-test('scan 진입점은 여전히 UI_NOT_ACTIVATED이고 scanEgo의 잘못된 입력은 거부된다', t => {
+test('scanEgo의 잘못된 입력·binding 불일치는 거부되고 aside scan은 여전히 차단된다', t => {
   const f = scanSetup(t);
-  assert.deepEqual(f.runReply({ transport: 'ego-ui/1' }, 'manual', 'scan').data, { status: 'UI_NOT_ACTIVATED' });
   assert.equal(f.runScan({ executable: 'relative-path' }).data.status, 'INVALID_ARGUMENT');
   assert.equal(f.runScan({ taskSpaceName: 'different-skill' }).data.status, 'NEEDS_SETUP');
+  assert.deepEqual(f.runReply({ transport: 'aside-ui/1' }, 'manual', 'scan').data, { status: 'UI_NOT_ACTIVATED' });
+  assert.equal(existsSync(join(f.home, 'auth-called')), false);
 });
