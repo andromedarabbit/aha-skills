@@ -414,3 +414,89 @@ export async function scanEgoList(binding) {
   }
   return output;
 }
+
+// 상세 계층 고정 작업(KTD22): 목록 항목 클릭 → 스레드 개방 → 대화 UUID·최근 발신자·입증 추출.
+// 클릭 1회, 개방 실패는 호출 측에서 항목 단위로 처리한다. 읽음 부작용은 상한·자체 기록으로 통제된다.
+async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previewPrefix, deadlineMs, classify, login) {
+  let task;
+  try { task = await taskSpace(spaceName); }
+  catch (error) {
+    const nameInUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
+    console.log(JSON.stringify({ status: nameInUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
+    return;
+  }
+  const stop = code => { throw Object.assign(new Error, { code }); };
+  try {
+    const pages = await task.pages();
+    if (!Array.isArray(pages)) stop('EGO_TABS_FAILED');
+    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
+    if (!page) stop('EGO_ATTACH_FAILED');
+    await page.goto(messagingUrl, { timeout: 45000 });
+    const listUrl = await page.url();
+    if (!classify(listUrl)) stop(login(listUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+    try { await page.waitForFunction(() => (document.body?.innerText?.length ?? 0) > 200, undefined, { timeout: 20000 }); } catch {}
+    // 항목 검증 후 클릭 1회
+    const clickResult = await page.evaluate(({ index, heading }) => {
+      const list = [...document.querySelectorAll('ul')].find(u => /conversation/i.test(u.getAttribute('aria-label') || ''));
+      if (!list) return { code: 'NO_LIST' };
+      const li = list.querySelectorAll(':scope > li')[index];
+      if (!li) return { code: 'NO_LI' };
+      const found = (li.querySelector('h2,h3,heading,[role="heading"]')?.textContent ?? '').trim();
+      if (found !== heading) return { code: 'HEADING_MISMATCH' };
+      li.click();
+      return { code: 'CLICKED' };
+    }, { index: itemIndex, heading: itemHeading });
+    if (!clickResult || clickResult.code !== 'CLICKED') stop('EGO_TAB_NOT_FOUND');
+    // 스레드 렌더 대기
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('[data-event-urn]').length >= 1, undefined, { timeout: 15000 });
+    } catch { stop('EGO_ATTACH_FAILED'); }
+    const threadUrl = await page.url();
+    if (!classify(threadUrl)) stop(login(threadUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+    const seg = /\/messaging\/thread\/([^/]+)/.exec(new URL(threadUrl).pathname)?.[1] ?? null;
+    if (!seg) stop('EGO_ATTACH_FAILED');
+    let conversationUuid = null;
+    try {
+      const decoded = Buffer.from(seg.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+      const uuid = decoded.split('_')[0];
+      if (!/^[0-9a-f-]{16,64}$/i.test(uuid)) stop('EGO_SCHEMA_INVALID');
+      conversationUuid = uuid;
+    } catch { stop('EGO_SCHEMA_INVALID'); }
+    const thread = await page.evaluate(() => {
+      const events = [...document.querySelectorAll('[data-event-urn]')];
+      const last = events[events.length - 1];
+      const sender = last ? (/urn:li:fsd_profile:([^,]+)/.exec(last.getAttribute('data-event-urn') || '') || [])[1] ?? null : null;
+      const text = last ? (last.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 300) : '';
+      return { lastSender: sender, text };
+    });
+    if (!thread || typeof thread.text !== 'string') stop('EGO_SCHEMA_INVALID');
+    const normalize = value => String(value ?? '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+    const proofMatch = !!thread.lastSender && normalize(thread.text).startsWith(normalize(previewPrefix));
+    console.log(JSON.stringify({
+      status: 'THREAD_OBSERVED', conversationUuid,
+      lastSender: thread.lastSender, proofMatch,
+    }));
+  } catch (error) {
+    const codes = ['EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_TAB_NOT_FOUND'];
+    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
+  }
+}
+
+// 상세 계층 부모 검증: openThread 결과의 UUID·발신자·입증 형식을 강제한다(U11).
+export async function openEgoThread(binding) {
+  if (!exactKeys(binding, ['executable', 'taskSpaceName', 'itemIndex', 'itemHeading', 'previewPrefix', 'deadlineMs'])) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.itemIndex) || binding.itemIndex < 0 || binding.itemIndex > 199) throw fail('INVALID_ARGUMENT');
+  if (typeof binding.itemHeading !== 'string' || !binding.itemHeading.length || binding.itemHeading.length > 120) throw fail('INVALID_ARGUMENT');
+  if (typeof binding.previewPrefix !== 'string' || binding.previewPrefix.length > 200) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 60000) throw fail('INVALID_ARGUMENT');
+  const script = `await (${openThread.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(binding.itemIndex)}, ${JSON.stringify(binding.itemHeading)}, ${JSON.stringify(binding.previewPrefix)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()});`;
+  const output = await execute(binding, script);
+  if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
+  const uuidOk = typeof output.conversationUuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(output.conversationUuid);
+  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSender', 'proofMatch']) || output.status !== 'THREAD_OBSERVED' ||
+      !uuidOk || (output.lastSender !== null && !/^ACoAAA[A-Za-z0-9]{10,}$/.test(String(output.lastSender))) ||
+      typeof output.proofMatch !== 'boolean') throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+  return output;
+}

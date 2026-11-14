@@ -534,10 +534,12 @@ function egoBinding() {
 // 합성 검증은 이 함수를 직접 호출해 수행한다(진입점은 아직 가드로 막혀 있어 테스트만의 유일한 구동 경로).
 export async function scanEgo(input) {
   const { scanEgoList, EGO_STEP_CODES, EGO_FAILURE_REASONS } = await import('./ego-ui.mjs');
-  if (Object.keys(input).some(key => !['transport', 'executable', 'taskSpaceName'].includes(key)) ||
+  if (Object.keys(input).some(key => !['transport', 'executable', 'taskSpaceName', 'detailOpenCap'].includes(key)) ||
       input.transport !== 'ego-ui/1' || typeof input.executable !== 'string' || !input.executable.startsWith('/') ||
       input.executable.length > 4096 || /[\x00-\x1f\x7f]/.test(input.executable) || typeof input.taskSpaceName !== 'string' ||
       !input.taskSpaceName || input.taskSpaceName.startsWith('-') || input.taskSpaceName.length > 512) throw fail('INVALID_ARGUMENT');
+  const cap = input.detailOpenCap ?? 10;
+  if (!Number.isSafeInteger(cap) || cap < 0 || cap > 25) throw fail('INVALID_ARGUMENT');
   const link = egoBinding();
   if (link.executable !== input.executable || link.taskSpaceName !== input.taskSpaceName) throw fail('NEEDS_SETUP');
   ensureState();
@@ -548,6 +550,10 @@ export async function scanEgo(input) {
   let observed = null;
   const review = [];
   let recordWriteFailed = false;
+  const candidates = [];
+  const answeredNames = [];
+  let capExceeded = false;
+  let detailOpened = 0;
   try {
     durableWrite(join(path, 'operation.json'), { operation: 'scan', attemptId: randomUUID(), startedAt: new Date().toISOString(), ownerPid: process.pid });
     const fd = openSync(join(STATE_DIR, 'locks'), constants.O_RDONLY);
@@ -565,7 +571,47 @@ export async function scanEgo(input) {
       try {
         durableWrite(recordPath, { name: item.name, previewHash, observedAt: new Date().toISOString(), changed });
       } catch { recordWriteFailed = true; }
-      review.push({ ...item, status: 'review', reason: 'DETAIL_NOT_PERMITTED', changed });
+      review.push({ ...item, previewHash, status: 'review', reason: 'DETAIL_NOT_PERMITTED', changed });
+    }
+    // 상세 계층(KTD22–24): 개방 대상 선정(기록 없음·변경 우선) → cap 내 순차 개방 → 판정·UUID 키 승격.
+    const { openEgoThread } = await import('./ego-ui.mjs');
+    const recordsDir = join(STATE_DIR, 'conversations');
+    const order = review.map((item, index) => ({ item, index }))
+      .sort((a, b) => (b.item.changed === true) - (a.item.changed === true));
+    for (const { item, index } of order) {
+      if (detailOpened >= cap) {
+        capExceeded = true;
+        item.status = 'review';
+        item.reason = 'OPEN_CAP_EXCEEDED';
+        continue;
+      }
+      let opened;
+      try {
+        opened = await openEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
+          itemIndex: index, itemHeading: item.name, previewPrefix: item.preview, deadlineMs: 20000 });
+      } catch (error) {
+        if (['EGO_NEEDS_LOGIN', 'EGO_ORIGIN_MISMATCH', 'EGO_SPACE_NAME_IN_USE'].includes(error?.code)) throw error;
+        item.status = 'review';
+        item.reason = `THREAD_OPEN_FAILED:${error?.code ?? String(error?.message || error).slice(0, 60)}`;
+        continue;
+      }
+      detailOpened += 1;
+      item.conversationUuid = opened.conversationUuid;
+      item.lastSender = opened.lastSender;
+      if (!opened.lastSender) { item.status = 'review'; item.reason = 'SENDER_UNPARSED'; continue; }
+      if (opened.proofMatch !== true) { item.status = 'review'; item.reason = 'LATEST_EVENT_UNPROVEN'; continue; }
+      if (opened.lastSender === link.account.profileId) {
+        item.status = 'answered';
+        answeredNames.push(item.name);
+      } else {
+        item.status = 'candidate';
+        candidates.push({ name: item.name, conversationUuid: opened.conversationUuid,
+          preview: item.preview, time: item.time, lastSender: opened.lastSender });
+      }
+      // UUID 키 승격(KTD23): 이름 키 기록 제거, UUID 키로 기록.
+      const uuidPath = join(recordsDir, `ego-obs-${digest(['ego-observation', slug, 'uuid', opened.conversationUuid])}.json`);
+      durableWrite(uuidPath, { uuid: opened.conversationUuid, name: item.name, previewHash: item.previewHash, lastSender: opened.lastSender, status: item.status, observedAt: new Date().toISOString() });
+      rmSync(join(recordsDir, `ego-obs-${digest(['ego-observation', slug, item.name])}.json`), { force: true });
     }
     rmSync(join(path, 'operation.json'));
     rmdirSync(path);
@@ -578,12 +624,16 @@ export async function scanEgo(input) {
       profileLockRetained: true,
     };
   }
+  const finalReview = review.filter(item => item.status === 'review');
+  const allDetermined = finalReview.every(item => item.status !== 'review');
   return {
-    status: 'OK', transport: 'ego-ui/1', candidates: [], review,
+    status: 'OK', transport: 'ego-ui/1', candidates, review: finalReview,
     filters: observed.filters, complete: observed.complete,
-    coverage: { listed: observed.itemCount, detailOpened: 0, completeness: 'partial',
+    coverage: { listed: observed.itemCount, detailOpened, openCap: cap, capExceeded,
+      answeredCount: answeredNames.length,
       recordWriteFailed: observed.recordWriteFailed,
-      reason: 'G2 상세 개방 미허용 — 발신자 확정은 상세 관측(별도 동의) 후에만 가능합니다' },
+      completeness: observed.complete && !capExceeded && allDetermined && detailOpened > 0 ? 'complete' : 'partial',
+      reason: capExceeded ? '개방 상한 초과분은 미개방 검토 필요입니다' : '상세 개방으로 발신자를 확정했습니다' },
   };
 }
 

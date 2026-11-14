@@ -81,8 +81,16 @@ const pageStub = (label, baseUrl) => ({
   waitForFunction: async () => {},
   evaluate: async () => {
     record('evaluate');
-    if (Array.isArray(state.evaluateQueue) && state.evaluateQueue.length) return state.evaluateQueue.shift();
-    return state.evaluateResult ?? null;
+    let value;
+    if (Array.isArray(state.evaluateQueue) && state.evaluateQueue.length) {
+      value = state.evaluateQueue.shift();
+      if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, evaluateQueue: state.evaluateQueue }));
+    } else value = state.evaluateResult ?? null;
+    if (value && typeof value === 'object' && '__setUrl' in value) {
+      currentUrl = value.__setUrl;
+      return value.__ret ?? 'CLICKED';
+    }
+    return value;
   },
   snapshot: async () => { record('snapshot'); return state.snapshot; },
   mouse: { move: async () => { record('mouse-move'); }, wheel: async () => { record('wheel'); } },
@@ -104,6 +112,7 @@ const task = {
 const context = {
   URL,
   setTimeout,
+  Buffer,
   console: { log: value => process.stdout.write(value + '\\n') },
   taskSpace: async name => {
     record('taskSpace:' + name);
@@ -671,26 +680,98 @@ const scanSetup = (t) => {
   return f;
 };
 
-test('ego scan은 fingerprint 일치·lazy append 순회 후 목록을 검토 필요로 반환한다', t => {
+test('ego scan은 목록 순회 뒤 상세 개방을 시도하고 개방 불가 항목만 개별 실패로 남긴다', t => {
   const f = scanSetup(t);
   const result = f.runScan();
   assert.equal(result.data.status, 'OK');
   assert.equal(result.data.complete, true);
   assert.equal(result.data.coverage.listed, 5);
   assert.equal(result.data.coverage.detailOpened, 0);
-  assert.equal(result.data.coverage.completeness, 'partial');
   assert.equal(result.data.candidates.length, 0);
   assert.equal(result.data.review.length, 5);
   for (const item of result.data.review) {
     assert.equal(item.status, 'review');
-    assert.equal(item.reason, 'DETAIL_NOT_PERMITTED');
-    assert.equal(item.changed, true, '첫 관측은 모두 변경으로 기록된다');
+    assert.match(item.reason, /^THREAD_OPEN_FAILED:/, 'stub 큐 불일치는 항목 단위 개방 실패로 처리된다');
+    assert.equal(item.changed, true);
   }
   assert.equal(f.records('operations').filter(op => op === 'wheel').length, 3);
-  assert.equal(f.records('operations').includes('click'), false);
   const obsDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
   assert.equal(readdirSync(obsDir).filter(name => name.startsWith('ego-obs-')).length, 5);
   assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')), []);
+});
+
+const threadSeg = Buffer.from('6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c_100').toString('base64url');
+const detailSetup = (t, extra = {}) => {
+  const f = scanSetup(t);
+  f.save({
+    persistQueue: true,
+    urlSequence: ['https://www.linkedin.com/messaging/'],
+    evaluateQueue: [
+      { labels: ['Focused', 'Unread'], hasConversationList: true },
+      [{ label: 'Focused', checked: 'false' }],
+      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
+      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
+      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
+      { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
+      { lastSender: 'ACoAAAsender0000000000000000000', text: 'p1 요청 드립니다' },
+      { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
+      { lastSender: 'ACoAAA0123456789abcdefghij', text: 'p2 확인했습니다' },
+    ],
+    ...extra,
+  });
+  return f;
+};
+
+test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정하고 UUID 키로 승격한다', t => {
+  const f = detailSetup(t);
+  const result = f.runScan({ detailOpenCap: 2 });
+  console.log('B3D:', JSON.stringify(result.data));
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.coverage.detailOpened, 2);
+  assert.equal(result.data.coverage.openCap, 2);
+  assert.equal(result.data.coverage.capExceeded, false);
+  assert.equal(result.data.coverage.answeredCount, 1);
+  assert.equal(result.data.candidates.length, 1);
+  assert.deepEqual(result.data.candidates[0], {
+    name: 'A', conversationUuid: '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c',
+    preview: 'p1', time: 'Nov 12', lastSender: 'ACoAAAsender0000000000000000000',
+  });
+  assert.equal(result.data.review.length, 0, 'answered는 review에서 제외된다');
+  const obsDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
+  const files = readdirSync(obsDir).filter(name => name.startsWith('ego-obs-'));
+  // 이름 키(A·B)는 승격 시 제거, UUID 키는 A·B가 같은 스레드로 개방돼 하나로 합쳐진다
+  assert.equal(files.length, 1, '이름 키는 승격 시 제거되고 UUID 키만 남는다');
+  assert.match(files[0], /ego-obs-[0-9a-f]{64}\.json$/);
+  const promoted = JSON.parse(readFileSync(join(obsDir, files[0]), 'utf8'));
+  assert.equal(promoted.uuid, '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c');
+  assert.ok(promoted.lastSender, '기록에 발신자가 있다');
+});
+
+test('상세 개방 상한 초과분은 OPEN_CAP_EXCEEDED로 미개방 반환한다', t => {
+  const f = detailSetup(t);
+  const result = f.runScan({ detailOpenCap: 1 });
+  assert.equal(result.data.coverage.detailOpened, 1);
+  assert.equal(result.data.coverage.capExceeded, true);
+  assert.equal(result.data.review.length, 1);
+  assert.equal(result.data.review[0].reason, 'OPEN_CAP_EXCEEDED');
+  assert.equal(result.data.candidates.length, 1, 'A(sender≠own)는 cap 내 개방돼 후보가 된다');
+});
+
+test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다', t => {
+  const f = detailSetup(t);
+  f.save({ evaluateQueue: [
+    { labels: ['Focused', 'Unread'], hasConversationList: true },
+    [{ label: 'Focused', checked: 'false' }],
+    { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
+    { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
+    { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
+    { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
+    { lastSender: 'ACoAAAsender0000000000000000000', text: '전혀 다른 본문 내용' },
+  ] });
+  const result = f.runScan({ detailOpenCap: 1 });
+  assert.equal(result.data.candidates.length, 0);
+  assert.equal(result.data.review.length, 1);
+  assert.equal(result.data.review[0].reason, 'LATEST_EVENT_UNPROVEN');
 });
 
 test('ego scan은 잘린 목록(total>items)에서 complete를 보고하지 않는다', t => {
