@@ -1,7 +1,7 @@
 ---
 name: linkedin-replies
 description: "LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다. \"LinkedIn 답장 안 한 메시지 확인해줘\", \"회신 초안 써줘\", \"LinkedIn 정기 확인 등록해줘\" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다."
-version: "1.8.0"
+version: "1.8.1"
 context: inline
 language: "korean"
 dependencies:
@@ -44,7 +44,7 @@ UI 전환은 완료하지 않았다. UI 시험 요청에는 아래 관측 절차
 2. `reply.mjs --mode manual setup`에 stdin으로 `{"transport":"ego-ui/1","executable":"/선택한/ego-browser/절대경로","taskSpaceName":"linkedin-replies-skill"}`을 전달한다. 스킬이 `/in/me`와 `/messaging/`을 관측해 계정 slug·내 프로필 ID·화면 구조 fingerprint를 확보하고 `CONFIRM_ACCOUNT`로 제시한다. 대화 클릭·입력·전송은 없다.
 2. **부수 부작용 설명을 확인하고 동의한 뒤에만 2단계로 진행한다:** `/messaging/` 접속 시 마지막 활성 스레드가 자동 개방될 수 있으며(2026-11-13 관측) 이 읽음 영향은 아직 미확정이다.
 4. 같은 입력에 반환된 정확한 `account.slug`·`account.profileId`를 `accountId`·`profileId`로 추가해 다시 호출한다. 재관측 일치 시에만 binding이 저장되고, 불일치·로그인 필요(`EGO_NEEDS_LOGIN`)·사용자 소유 스페이스 충돌(`EGO_SPACE_NAME_IN_USE`)은 저장 없이 중단한다.
-5. `scan`(ego-ui/1)은 저장된 binding으로 조회를 수행한다: 구조 fingerprint 일치 검사, 필터 발견, lazy append 목록 순회(잘린 목록은 미완료 보고) 후, **상세 계층**으로 후보 판정을 완성한다. 상세 계층은 목록 항목을 클릭해 개방하고(입력 `detailOpenCap`, 기본 10·최대 25) 스레드의 `data-event-urn` 발신자 ID를 binding의 profileId와 대조한다 — 일치 → answered 제외, 불일치 → `candidates`, 입증 실패·개방 실패·상한 초과는 `검토 필요`(각각 `LATEST_EVENT_UNPROVEN`·`THREAD_OPEN_FAILED`·`OPEN_CAP_EXCEEDED`). 개방 성공분의 관측 기록은 대화 UUID 키로 승격한다. 개방이 읽음 상태를 바꿀 수 있으므로 호출 전에 예상 개방 수를 사용자에게 설명한다.
+5. `scan`(ego-ui/1)은 저장된 binding으로 조회를 수행한다: 구조 fingerprint 일치 검사, 필터 발견, lazy append 목록 순회(잘린 목록은 미완료 보고) 후, **상세 계층**으로 후보 판정을 완성한다. 상세 계층은 목록 항목을 클릭해 개방하고(입력 `detailOpenCap`, 기본 10·최대 25) 마지막 메시지 행의 `msg-s-event-listitem--other` 클래스로 발신자를 판정한다(2026-11-14 실측: `data-event-urn`의 프로필 세그먼트는 발신자가 아니라 수신함 소유자다) — 클래스 있음(상대 발신) → `candidates`, 없음(내 발신) → answered 제외, 입증 실패·개방 실패·상한 초과는 `검토 필요`(각각 `LATEST_EVENT_UNPROVEN`·`THREAD_OPEN_FAILED`·`OPEN_CAP_EXCEEDED`). 개방 성공분의 관측 기록은 대화 UUID 키로 승격한다. 개방이 읽음 상태를 바꿀 수 있으므로 호출 전에 예상 개방 수를 사용자에게 설명한다.
 
 ### 수동 UI 관측 시험
 

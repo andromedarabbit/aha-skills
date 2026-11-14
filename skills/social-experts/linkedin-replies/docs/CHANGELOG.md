@@ -1,5 +1,15 @@
 # 변경 이력
 
+## 1.8.1 — 2026-11-14
+
+첫 실환경 setup·scan 실측(2026-11-14, ego-browser 0.6.3.14)에서 발견한 결함들을 교정한다.
+
+- **발신자 판정 메커니즘 교체(1.8.0의 data-event-urn 대조 반증)**: 스레드 이벤트의 `data-event-urn` 프로필 세그먼트는 메시지 발신자가 아니라 수신함 소유자(나)였다. 발신자 판정을 마지막 메시지 행의 `msg-s-event-listitem--other` 클래스 유무로 교체한다(상대 발신 → `candidates`, 부재 → answered 제외). 기록은 `lastSenderKind`(other/self)로 남긴다.
+- **ego CLI 스크립트 계약 실측 반영**: 파이프 스크립트는 sloppy CJS eval로 돌아 `await (`로 시작하면 ReferenceError로 자식이 죽는다 — 모든 고정 스크립트를 IIFE + `.catch` 형태로 바꾼다. 스크립트 콘솔 출력은 stderr로 우회된다 — 페이로드 채널을 "stdout 우선, 없으면 stderr 줄 단위(공지 외 정확히 한 줄 JSON)"로 확장한다.
+- **openThread 실측 교정**: `/messaging/` 전환 직후 목록 미렌더(NO_LIST)·자동 개방 스레드의 URL 래스를 폴링으로 처리하고, 스레드 seg의 `2-` 접두사를 벗겨 UUID를 디코딩하며, 목록 행은 li 대신 `conversation-listitem__link` 래퍼를 클릭한다. 이벤트 textContent의 헤더·이모지 액션 바 정크를 떼고 버블 본문만 입증 대조한다. 반응(emoji)이 마지막 이벤트인 스레드는 `LATEST_EVENT_UNPROVEN` 검토 필요로 남는다.
+- **acquireIdentity 실측 교정**: `/in/me`의 id는 `com.linkedin.sdui.profile.card.ref<ACoAAA…><섹션명>` 형태라 탐욕 실행이 섹션 접미사(Topcard 등)를 삼킨다 — 전 실행의 최장 공통 접두사(30–40자)로 참 profileId를 추출하고, 리다이렉트·렌더 대기를 추가한다.
+- 목록 파서가 헤딩 없는 행·"Load more conversations" 버튼 행을 항목으로 세는 결함을 고치고, DOM 행 인덱스를 항목에 보존해 클릭 정렬을 보장한다. 테스트 stub을 큐 기반에서 evaluate 대상별 셀렉터 디스패치로 재설계해 폴링 코드와의 정렬 결함을 제거한다.
+
 ## 1.8.0 — 2026-11-14
 
 - scan의 상세 계층을 구현한다: 목록 항목 클릭 개방(입력 `detailOpenCap`, 기본 10·최대 25) → 스레드 `data-event-urn` 발신자 ID를 binding profileId와 대조 → 일치는 answered 제외, 불일치는 `candidates`. 마지막 이벤트 텍스트와 목록 미리보기의 접두 대조로 최신성을 입증하며 실패는 `LATEST_EVENT_UNPROVEN` 검토 필요로 남긴다.

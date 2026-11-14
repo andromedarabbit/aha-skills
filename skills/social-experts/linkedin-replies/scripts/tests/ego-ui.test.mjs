@@ -54,6 +54,8 @@ if (state.mode === 'hold' || state.mode === 'crash-parent') {
 if (state.mode === 'timeout') { setInterval(() => {}, 1000); await new Promise(() => {}); }
 if (state.mode === 'stderr') { process.stderr.write('private diagnostic'); process.exit(1); }
 if (state.mode === 'noisy-json') { console.log('[ego-browser:notice] update available'); console.log(JSON.stringify(state.response)); process.exit(0); }
+if (state.mode === 'response-stderr') { console.error('[ego-browser:notice] update available'); console.error(JSON.stringify(state.response)); process.exit(0); }
+if (state.mode === 'stderr-junk') { console.error('unrecognized diagnostic line'); console.error(JSON.stringify(state.response)); process.exit(0); }
 if (state.mode === 'stdout-limit' || state.mode === 'stderr-limit') {
   const stream = state.mode === 'stdout-limit' ? process.stdout : process.stderr;
   await new Promise(resolve => stream.write('x'.repeat(2097153), resolve));
@@ -79,8 +81,28 @@ const pageStub = (label, baseUrl) => ({
   },
   waitForLoadState: async () => {},
   waitForFunction: async () => {},
-  evaluate: async () => {
+  evaluate: async fn => {
     record('evaluate');
+    // 폴링 코드와 큐의 정렬을 피한다: evaluate 대상 함수 소스로 종별을 판정해 고정 응답을 serve하고,
+    // readItems(목록 순회 시나리오)만 큐 기반으로 둔다.
+    const src = String(fn);
+    if (src.includes("code: 'CLICKED'")) {
+      const click = state.click ?? null;
+      if (click && click.__setUrl) currentUrl = click.__setUrl;
+      return click ? (click.__ret ?? 'CLICKED') : { code: 'NO_LIST' };
+    }
+    if (src.includes('data-event-urn')) {
+      if (Array.isArray(state.threadQueue) && state.threadQueue.length) {
+        const next = state.threadQueue.shift();
+        if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, threadQueue: state.threadQueue }));
+        return next;
+      }
+      return state.thread ?? null;
+    }
+    if (src.includes("li').length")) return state.listProbe ?? { rows: 2 };
+    if (src.includes('ACoAAA')) return state.acoid ?? null;
+    if (src.includes('hasConversationList')) return state.fingerprint ?? null;
+    if (src.includes('aria-checked')) return state.filters ?? [];
     let value;
     if (Array.isArray(state.evaluateQueue) && state.evaluateQueue.length) {
       value = state.evaluateQueue.shift();
@@ -124,7 +146,8 @@ const context = {
   claimTaskSpace: async id => { record('claim:' + id); return 'claimed'; },
   listTaskSpaces: async () => { record('listTaskSpaces'); return []; },
 };
-await vm.runInNewContext('(async () => {' + script + '})()', context, { timeout: 1000 });
+try { await vm.runInNewContext('(async () => {' + script + '})()', context, { timeout: 1000 }); }
+catch (error) { console.log(JSON.stringify({ status: 'EGO_ATTACH_FAILED', diag: String(error && error.message || error).slice(0, 120) })); }
 `, { mode: 0o700 });
   const binding = { executable, taskSpaceName: 'linkedin-replies-skill', pageLabel: 'p1' };
   let backend = { url: 'https://www.linkedin.com/messaging/', pages: [{ label: 'p1', url: 'https://www.linkedin.com/messaging/' }], snapshot: '대화 목록\n  한글 "문자열"\n' };
@@ -200,7 +223,7 @@ try {
   const runScan = (input = {}) => {
     const result = spawnSync(process.execPath, [scanWorker], {
       env: { HOME: home, PATH: '/invalid', NODE_OPTIONS: '--no-warnings', ASIDE_API_TOKEN: 'must-not-inherit', EGO_API_TOKEN: 'must-not-inherit' },
-      input: JSON.stringify({ transport: 'ego-ui/1', executable, taskSpaceName: 'linkedin-replies-skill', ...input }), encoding: 'utf8', timeout: 8000,
+      input: JSON.stringify({ transport: 'ego-ui/1', executable, taskSpaceName: 'linkedin-replies-skill', ...input }), encoding: 'utf8', timeout: 20000,
     });
     assert.equal(result.error, undefined);
     assert.equal(result.signal, null);
@@ -460,6 +483,32 @@ for (const [patch, reason] of [
   assert.equal(f.records('calls').length, executable ? 0 : 1);
 });
 
+const SNAPSHOT_OK = { status: 'OBSERVED', pageLabel: 'p1', origin: 'https://www.linkedin.com', snapshot: '대화 목록' };
+
+// 2026-11-14 실측(0.6.3.14): 파이프 스크립트의 console.log·process.stdout.write는 stderr로 우회되고 stdout은 비어 있다.
+test('페이로드가 stderr로 우회돼도 notice 외 정확히 한 줄 JSON이면 성공한다', t => {
+  const f = fixture(t); f.save({ mode: 'response-stderr', response: SNAPSHOT_OK });
+  const result = f.runReply();
+  assert.equal(result.data.status, 'OBSERVED');
+  assert.equal(result.data.snapshot, '대화 목록');
+});
+
+test('stderr의 비 JSON·비 notice 줄은 EGO_JSON_INVALID로 안전 실패한다', t => {
+  const f = fixture(t); f.save({ mode: 'stderr-junk', response: SNAPSHOT_OK });
+  assert.deepEqual(f.runReply().data, { status: 'EGO_OUTCOME_UNKNOWN', reason: 'EGO_JSON_INVALID', profileLockRetained: true });
+});
+
+// ego CLI는 파이프 스크립트를 sloppy CJS eval로 돌린다 — `await (`로 시작하는 스크립트는 식별자 호출로
+// 파싱돼 ReferenceError로 자식이 비정상 종료한다(2026-11-14 첫 실측). 모든 고정 스크립트는 IIFE + .catch 형태여야 한다.
+test('생성한 고정 스크립트는 top-level await 없이 IIFE + .catch 형태다', t => {
+  const f = fixture(t);
+  f.runReply();
+  const script = readFileSync(join(f.home, 'script'), 'utf8');
+  assert.equal(script.startsWith('('), true);
+  assert.equal(script.startsWith('await ('), false);
+  assert.match(script, /\.catch\(/);
+});
+
 test('Aside 락이 남아 있어도 ego 락은 독립 네임스페이스로 획득한다', t => {
   const f = fixture(t);
   const locks = join(f.home, '.local/share/aha-skills/linkedin-replies/locks');
@@ -525,7 +574,8 @@ const setupFixture = (t, patch = {}) => {
   const f = fixture(t);
   f.save({
     urlSequence: ['https://www.linkedin.com/in/test-slug/', 'https://www.linkedin.com/messaging/thread/test-thread/'],
-    evaluateQueue: ['ACoAAA0123456789abcdefghij', { labels: ['Focused', 'Unread'], hasConversationList: true }],
+    acoid: 'ACoAAA0123456789abcdefghijklmnopqrst',
+    fingerprint: { labels: ['Focused', 'Unread'], hasConversationList: true },
     snapshot: 'radiogroup\n  text "Focused"\n  text "Unread"\n  unordered_list "Conversation List" [ref=26]\n',
     ...patch,
   });
@@ -539,7 +589,7 @@ test('ego setup 첫 단계는 계정·구조를 확보해 확인만 요청하고
   const result = f.runReply(setupInput(f), 'manual', 'setup');
   assert.equal(result.status, 0);
   assert.equal(result.data.status, 'CONFIRM_ACCOUNT');
-  assert.deepEqual(result.data.account, { slug: 'test-slug', profileId: 'ACoAAA0123456789abcdefghij' });
+  assert.deepEqual(result.data.account, { slug: 'test-slug', profileId: 'ACoAAA0123456789abcdefghijklmnopqrst' });
   assert.deepEqual(result.data.fingerprint, { labels: ['Focused', 'Unread'], hasConversationList: true });
   assert.ok(result.data.sideEffect.includes('자동 개방'), '부수 개방 설명이 승인 응답에 있어야 한다');
   assert.equal(existsSync(join(f.home, '.local/share/aha-skills/linkedin-replies/binding.json')), false);
@@ -550,12 +600,12 @@ test('ego setup 첫 단계는 계정·구조를 확보해 확인만 요청하고
 
 test('ego setup 확인 단계는 재관측 일치 시에만 binding을 저장한다', t => {
   const f = setupFixture(t);
-  const confirm = { ...setupInput(f), accountId: 'test-slug', profileId: 'ACoAAA0123456789abcdefghij' };
+  const confirm = { ...setupInput(f), accountId: 'test-slug', profileId: 'ACoAAA0123456789abcdefghijklmnopqrst' };
   const result = f.runReply(confirm, 'manual', 'setup');
   assert.equal(result.status, 0);
-  assert.deepEqual(result.data, { status: 'OK', transport: 'ego-ui/1', account: { slug: 'test-slug', profileId: 'ACoAAA0123456789abcdefghij' } });
+  assert.deepEqual(result.data, { status: 'OK', transport: 'ego-ui/1', account: { slug: 'test-slug', profileId: 'ACoAAA0123456789abcdefghijklmnopqrst' } });
   const binding = JSON.parse(readFileSync(join(f.home, '.local/share/aha-skills/linkedin-replies/binding.json'), 'utf8'));
-  assert.deepEqual(binding.account, { slug: 'test-slug', profileId: 'ACoAAA0123456789abcdefghij' });
+  assert.deepEqual(binding.account, { slug: 'test-slug', profileId: 'ACoAAA0123456789abcdefghijklmnopqrst' });
   assert.equal(binding.transport, 'ego-ui/1');
   assert.equal(binding.taskSpaceName, 'linkedin-replies-skill');
   assert.equal(binding.egoVersion, 'ego-browser stub 1.0.0');
@@ -566,13 +616,13 @@ test('ego setup 확인 단계는 재관측 일치 시에만 binding을 저장한
 
 test('ego setup 확인 단계의 계정 불일치는 저장 없이 중단한다', t => {
   const f = setupFixture(t);
-  const confirm = { ...setupInput(f), accountId: 'other-slug', profileId: 'ACoAAA0123456789abcdefghij' };
+  const confirm = { ...setupInput(f), accountId: 'other-slug', profileId: 'ACoAAA0123456789abcdefghijklmnopqrst' };
   assert.equal(f.runReply(confirm, 'manual', 'setup').data.status, 'ACCOUNT_MISMATCH');
   assert.equal(existsSync(join(f.home, '.local/share/aha-skills/linkedin-replies/binding.json')), false);
 });
 
 test('ACoAAA 미관측은 EGO_SCHEMA_INVALID로 락을 남기고 재호출을 막는다', t => {
-  const f = setupFixture(t, { evaluateQueue: [null] });
+  const f = setupFixture(t, { acoid: null });
   const result = f.runReply(setupInput(f), 'manual', 'setup');
   assert.deepEqual(result.data, { status: 'EGO_SCHEMA_INVALID', reason: 'UI_OPERATION_FAILED', profileLockRetained: true });
   assert.equal(existsSync(join(f.home, '.local/share/aha-skills/linkedin-replies/binding.json')), false);
@@ -589,7 +639,7 @@ test('/messaging/ 접속이 로그인 화면이면 EGO_NEEDS_LOGIN으로 중단�
 });
 
 test('구조 fingerprint의 라벨이 비면 저장 없이 실패한다', t => {
-  const f = setupFixture(t, { evaluateQueue: ['ACoAAA0123456789abcdefghij', { labels: [], hasConversationList: false }] });
+  const f = setupFixture(t, { fingerprint: { labels: [], hasConversationList: false } });
   const result = f.runReply(setupInput(f), 'manual', 'setup');
   assert.equal(result.data.status, 'EGO_SCHEMA_INVALID');
 });
@@ -664,17 +714,17 @@ test('오류 코드 목록은 계획(KTD15)의 단계·실행 상한 코드를 �
 
 const scanSetup = (t) => {
   const f = setupFixture(t);
-  const confirm = { ...setupInput(f), accountId: 'test-slug', profileId: 'ACoAAA0123456789abcdefghij' };
+  const confirm = { ...setupInput(f), accountId: 'test-slug', profileId: 'ACoAAA0123456789abcdefghijklmnopqrst' };
   assert.equal(f.runReply(confirm, 'manual', 'setup').data.status, 'OK');
   f.save({
     urlSequence: ['https://www.linkedin.com/messaging/'],
+    fingerprint: { labels: ['Focused', 'Unread'], hasConversationList: true },
+    filters: [{ label: 'Focused', checked: 'false' }, { label: 'Unread', checked: 'true' }],
     evaluateQueue: [
-      { labels: ['Focused', 'Unread'], hasConversationList: true },
-      [{ label: 'Focused', checked: 'false' }, { label: 'Unread', checked: 'true' }],
-      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }, { name: 'C', preview: 'p3', time: 'Oct 28' }], total: 3 },
-      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }, { name: 'C', preview: 'p3', time: 'Oct 28' }, { name: 'D', preview: 'p4', time: 'Oct 13' }, { name: 'E', preview: 'p5', time: 'Sep 25' }], total: 5 },
-      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }, { name: 'C', preview: 'p3', time: 'Oct 28' }, { name: 'D', preview: 'p4', time: 'Oct 13' }, { name: 'E', preview: 'p5', time: 'Sep 25' }], total: 5 },
-      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }, { name: 'C', preview: 'p3', time: 'Oct 28' }, { name: 'D', preview: 'p4', time: 'Oct 13' }, { name: 'E', preview: 'p5', time: 'Sep 25' }], total: 5 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }, { index: 2, name: 'C', preview: 'p3', time: 'Oct 28' }], total: 3 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }, { index: 2, name: 'C', preview: 'p3', time: 'Oct 28' }, { index: 3, name: 'D', preview: 'p4', time: 'Oct 13' }, { index: 4, name: 'E', preview: 'p5', time: 'Sep 25' }], total: 5 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }, { index: 2, name: 'C', preview: 'p3', time: 'Oct 28' }, { index: 3, name: 'D', preview: 'p4', time: 'Oct 13' }, { index: 4, name: 'E', preview: 'p5', time: 'Sep 25' }], total: 5 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }, { index: 2, name: 'C', preview: 'p3', time: 'Oct 28' }, { index: 3, name: 'D', preview: 'p4', time: 'Oct 13' }, { index: 4, name: 'E', preview: 'p5', time: 'Sep 25' }], total: 5 },
     ],
   });
   return f;
@@ -700,22 +750,22 @@ test('ego scan은 목록 순회 뒤 상세 개방을 시도하고 개방 불가 
   assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')), []);
 });
 
-const threadSeg = Buffer.from('6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c_100').toString('base64url');
+// 실측 URL 규칙(G1): 스레드 seg는 `2-` + base64url(<대화UUID>_<n>)이다.
+const threadSeg = '2-' + Buffer.from('6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c_100').toString('base64url');
 const detailSetup = (t, extra = {}) => {
   const f = scanSetup(t);
   f.save({
     persistQueue: true,
     urlSequence: ['https://www.linkedin.com/messaging/'],
+    fingerprint: { labels: ['Focused', 'Unread'], hasConversationList: true },
+    filters: [{ label: 'Focused', checked: 'false' }],
+    listProbe: { rows: 2 },
+    click: { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
+    thread: { lastSenderIsOther: true, text: 'p1 요청 드립니다' },
     evaluateQueue: [
-      { labels: ['Focused', 'Unread'], hasConversationList: true },
-      [{ label: 'Focused', checked: 'false' }],
-      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
-      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
-      { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }, { name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
-      { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
-      { lastSender: 'ACoAAAsender0000000000000000000', text: 'p1 요청 드립니다' },
-      { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
-      { lastSender: 'ACoAAA0123456789abcdefghij', text: 'p2 확인했습니다' },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
     ],
     ...extra,
   });
@@ -724,8 +774,13 @@ const detailSetup = (t, extra = {}) => {
 
 test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정하고 UUID 키로 승격한다', t => {
   const f = detailSetup(t);
+  // A는 상대(other), B는 own — threadQueue는 개방 순서대로 serve된다.
+  f.save({ threadQueue: [
+    { lastSenderIsOther: true, text: 'p1 요청 드립니다' },
+    { lastSenderIsOther: false, text: 'p2 확인했습니다' },
+  ] });
   const result = f.runScan({ detailOpenCap: 2 });
-  console.log('B3D:', JSON.stringify(result.data));
+  if (result.data?.coverage?.detailOpened !== 2) console.error('DBGY', JSON.stringify(result.data.review?.map(r => [r.name, r.reason])), JSON.stringify(result.stderr || '').slice(0, 300));
   assert.equal(result.data.status, 'OK');
   assert.equal(result.data.coverage.detailOpened, 2);
   assert.equal(result.data.coverage.openCap, 2);
@@ -734,7 +789,7 @@ test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정�
   assert.equal(result.data.candidates.length, 1);
   assert.deepEqual(result.data.candidates[0], {
     name: 'A', conversationUuid: '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c',
-    preview: 'p1', time: 'Nov 12', lastSender: 'ACoAAAsender0000000000000000000',
+    preview: 'p1', time: 'Nov 12',
   });
   assert.equal(result.data.review.length, 0, 'answered는 review에서 제외된다');
   const obsDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
@@ -744,7 +799,7 @@ test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정�
   assert.match(files[0], /ego-obs-[0-9a-f]{64}\.json$/);
   const promoted = JSON.parse(readFileSync(join(obsDir, files[0]), 'utf8'));
   assert.equal(promoted.uuid, '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c');
-  assert.ok(promoted.lastSender, '기록에 발신자가 있다');
+  assert.ok(promoted.lastSenderKind, '기록에 발신자 종별이 있다');
 });
 
 test('상세 개방 상한 초과분은 OPEN_CAP_EXCEEDED로 미개방 반환한다', t => {
@@ -759,15 +814,20 @@ test('상세 개방 상한 초과분은 OPEN_CAP_EXCEEDED로 미개방 반환한
 
 test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다', t => {
   const f = detailSetup(t);
-  f.save({ evaluateQueue: [
-    { labels: ['Focused', 'Unread'], hasConversationList: true },
-    [{ label: 'Focused', checked: 'false' }],
-    { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
-    { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
-    { items: [{ name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
-    { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
-    { lastSender: 'ACoAAAsender0000000000000000000', text: '전혀 다른 본문 내용' },
-  ] });
+  f.save({
+    fingerprint: { labels: ['Focused', 'Unread'], hasConversationList: true },
+    filters: [{ label: 'Focused', checked: 'false' }],
+    evaluateQueue: [
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
+    ],
+    threadQueue: [
+      { lastSenderIsOther: true, text: '전혀 다른 본문 내용' },
+      { lastSenderIsOther: true, text: '전혀 다른 본문 안정 틱 판정' },
+      { lastSenderIsOther: true, text: '전혀 다른 본문 세 번째 틱' },
+    ],
+  });
   const result = f.runScan({ detailOpenCap: 1 });
   assert.equal(result.data.candidates.length, 0);
   assert.equal(result.data.review.length, 1);
@@ -777,14 +837,13 @@ test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다',
 test('ego scan은 잘린 목록(total>items)에서 complete를 보고하지 않는다', t => {
   const f = scanSetup(t);
   f.save({ evaluateQueue: [
-    { labels: ['Focused', 'Unread'], hasConversationList: true },
-    [{ label: 'Focused', checked: 'false' }],
-    { items: [{ name: 'A', preview: 'p', time: 't' }], total: 3 },
-    { items: [{ name: 'A', preview: 'p', time: 't' }], total: 3 },
-    { items: [{ name: 'A', preview: 'p', time: 't' }], total: 3 },
-    { items: [{ name: 'A', preview: 'p', time: 't' }], total: 3 },
+    { items: [{ index: 0, name: 'A', preview: 'p', time: 't' }], total: 3 },
+    { items: [{ index: 0, name: 'A', preview: 'p', time: 't' }], total: 3 },
+    { items: [{ index: 0, name: 'A', preview: 'p', time: 't' }], total: 3 },
+    { items: [{ index: 0, name: 'A', preview: 'p', time: 't' }], total: 3 },
   ] });
   const result = f.runScan();
+  if (result.data.status !== 'OK') console.error('DBGT', JSON.stringify(result.data));
   assert.equal(result.data.status, 'OK');
   assert.equal(result.data.complete, false, '잘린 목록은 완료로 보고하지 않는다');
 });
@@ -792,14 +851,13 @@ test('ego scan은 잘린 목록(total>items)에서 complete를 보고하지 않�
 test('ego scan은 빈 편지함 안정 상태에서 complete로 정상 종료한다', t => {
   const f = scanSetup(t);
   f.save({ evaluateQueue: [
-    { labels: ['Focused', 'Unread'], hasConversationList: true },
-    [{ label: 'Focused', checked: 'false' }],
     { items: [], total: 0 },
     { items: [], total: 0 },
     { items: [], total: 0 },
     { items: [], total: 0 },
   ] });
   const result = f.runScan();
+
   assert.equal(result.data.status, 'OK');
   assert.equal(result.data.complete, true);
   assert.equal(result.data.coverage.listed, 0);
@@ -815,7 +873,7 @@ test('ego scan 재실행은 미변경 항목의 재개방 대상 표시를 chang
 
 test('ego scan은 fingerprint 불일치를 명시 실패로 반환하고 락을 남긴다', t => {
   const f = scanSetup(t);
-  f.save({ evaluateQueue: [{ labels: ['Focused'], hasConversationList: true }] });
+  f.save({ fingerprint: { labels: ['Focused'], hasConversationList: true } });
   const result = f.runScan();
   assert.deepEqual(result.data, { status: 'EGO_FINGERPRINT_MISMATCH', reason: 'UI_OPERATION_FAILED', profileLockRetained: true });
   const locks = readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')).filter(n => n.startsWith('ego-profile-'));

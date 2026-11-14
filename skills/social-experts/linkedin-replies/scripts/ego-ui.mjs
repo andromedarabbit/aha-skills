@@ -42,8 +42,11 @@ export function validateEgoInput(binding) {
   return hasPage ? 'snapshot' : 'pages';
 }
 
-// ego 스크립트는 마지막에 정확히 한 번 JSON을 출력한다. 그 외 stdout 출력은
-// EGO_JSON_INVALID로 안전 실패한다(KTD2). ego 앱·서비스 도달 실패로 추정되는
+// ego 스크립트는 마지막에 정확히 한 번 JSON을 출력한다. 2026-11-14 실측(0.6.3.14): 파이프 스크립트의
+// console.log·process.stdout.write는 모두 stderr로 우회되고 stdout은 비어 있다. 따라서 stdout에 내용이
+// 있으면 그것만 엄격히 검증하고(미래 계약 변경 대비), 비어 있으면 stderr에서 줄 단위로 페이로드를 찾는다 —
+// 정확히 한 줄만 JSON이어야 하고 그 외 비어 있지 않은 줄은 [ego-browser:notice] 공지뿐이어야 한다(가이드
+// §327 전제). 그 외 출력은 EGO_JSON_INVALID로 안전 실패한다(KTD2). ego 앱·서비스 도달 실패로 추정되는
 // 자식 실패는 EGO_CONNECT_FAILED로 보고하되 앱 미실행으로 단정하지 않는다(KTD18).
 function execute(binding, script) {
   const env = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', CI: '1', NO_COLOR: '1' };
@@ -58,6 +61,7 @@ function execute(binding, script) {
     let settled = false;
     let spawned = false;
     let output = [];
+    let stderrOutput = [];
     let stdoutSize = 0;
     let stderrSize = 0;
     const finish = (reason, value) => {
@@ -89,19 +93,38 @@ function execute(binding, script) {
     child.stderr.on('data', chunk => {
       if (settled) return;
       stderrSize += chunk.length;
-      if (stderrSize > MAX_OUTPUT) abort('EGO_STDERR_LIMIT');
+      if (stderrSize > MAX_OUTPUT) { abort('EGO_STDERR_LIMIT'); return; }
+      stderrOutput.push(chunk);
     });
     child.on('close', (code, signal) => {
       if (settled) return;
       if (signal) { finish('EGO_EXIT_FAILED'); return; }
       if (code !== 0) { finish('EGO_CONNECT_FAILED'); return; }
-      let text;
-      try { text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(output)); }
+      let stdoutText;
+      try { stdoutText = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(output)); }
       catch { finish('EGO_UTF8_INVALID'); return; }
-      let value;
-      try { value = JSON.parse(text); }
-      catch { finish('EGO_JSON_INVALID'); return; }
-      finish(null, value);
+      if (stdoutText.trim()) {
+        let value;
+        try { value = JSON.parse(stdoutText); }
+        catch { finish('EGO_JSON_INVALID'); return; }
+        finish(null, value);
+        return;
+      }
+      let stderrText;
+      try { stderrText = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(stderrOutput)); }
+      catch { finish('EGO_UTF8_INVALID'); return; }
+      const jsonLines = [];
+      for (const raw of stderrText.split('\n')) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (line.includes('[ego-browser:notice]')) continue;
+        let value;
+        try { value = JSON.parse(line); }
+        catch { finish('EGO_JSON_INVALID'); return; }
+        jsonLines.push(value);
+      }
+      if (jsonLines.length !== 1) { finish('EGO_JSON_INVALID'); return; }
+      finish(null, jsonLines[0]);
     });
     child.stdin.end(script, 'utf8');
   });
@@ -110,7 +133,9 @@ function execute(binding, script) {
 // 스페이스 확보는 LinkedIn 계정 확인을 대신하지 않는다.
 export async function observeEgoPages(binding) {
   if (validateEgoInput(binding) !== 'pages') throw fail('INVALID_ARGUMENT');
-  const script = `await (${observePages.toString()})(${JSON.stringify(binding.taskSpaceName)}, ${messageLocation.toString()});`;
+  // ego CLI는 파이프 스크립트를 sloppy CJS eval로 돌린다 — `await (`로 시작하면 식별자 호출로 파싱돼
+  // ReferenceError로 죽는다(2026-11-14 첫 실측). async IIFE + .catch로 감싸 어떤 모드에서도 안전하게 만든다.
+  const script = `(${observePages.toString()})(${JSON.stringify(binding.taskSpaceName)}, ${messageLocation.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_SNAPSHOT_FAILED' })); });`;
   const output = await execute(binding, script);
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   if (!exactKeys(output, ['status', 'pages']) || output.status !== 'PAGES_OBSERVED' || !Array.isArray(output.pages)) throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
@@ -126,7 +151,7 @@ export async function observeEgoPages(binding) {
 // 지정 Page의 전체 snapshot만 읽는다. 이동·입력·클릭·API 호출은 없다.
 export async function readEgoPageSnapshot(binding) {
   if (validateEgoInput(binding) !== 'snapshot') throw fail('INVALID_ARGUMENT');
-  const script = `await (${observePage.toString()})(${JSON.stringify(binding.pageLabel)}, ${JSON.stringify(binding.taskSpaceName)}, ${messageLocation.toString()}, ${loginPath.toString()}, ${authForm.toString()});`;
+  const script = `(${observePage.toString()})(${JSON.stringify(binding.pageLabel)}, ${JSON.stringify(binding.taskSpaceName)}, ${messageLocation.toString()}, ${loginPath.toString()}, ${authForm.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_SNAPSHOT_FAILED' })); });`;
   const output = await execute(binding, script);
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   if (!exactKeys(output, ['status', 'pageLabel', 'origin', 'snapshot']) || output.status !== 'OBSERVED' ||
@@ -258,6 +283,8 @@ async function acquireIdentity(spaceName, meUrl, messagingUrl, classify, login) 
     const page = pages.length ? task.page(pages[0].label) : await task.newPage();
     if (!page) stop('EGO_ATTACH_FAILED');
     await page.goto(meUrl, { timeout: 45000 });
+    // /in/me는 SPA 리다이렉트로 slug 확정이 늦는다(G2 실측) — 리다이렉트 완료를 기다리고 게이트는 유지한다.
+    try { await page.waitForFunction(() => /^\/in\/(?!me\/?$)[^/]+/.test(location.pathname), undefined, { timeout: 20000 }); } catch {}
     const meUrl2 = await page.url();
     // 신원 다리의 경계: 정확한 origin만 허용하고, 로그인 화면은 별도 사유로 구분한다(리뷰 #3·6).
     if (new URL(meUrl2).origin !== 'https://www.linkedin.com') stop('EGO_ORIGIN_MISMATCH');
@@ -265,14 +292,26 @@ async function acquireIdentity(spaceName, meUrl, messagingUrl, classify, login) 
     const slug = /^\/in\/([^/]+)/.exec(new URL(meUrl2).pathname)?.[1] ?? null;
     if (!slug || slug === 'me') stop('EGO_SCHEMA_INVALID');
     const rawId = await page.evaluate(() => {
-      const el = document.querySelector('[id*="ACoAAA"]');
-      const m = /ACoAAA[A-Za-z0-9]+/.exec(el?.id || '');
-      return m ? m[0] : null;
+      const runs = [...document.querySelectorAll('[id*="ACoAAA"]')]
+        .map(el => /ACoAAA[A-Za-z0-9]+/.exec(el?.id || '')?.[0])
+        .filter(Boolean);
+      if (!runs.length) return null;
+      // 실측(2026-11-14): /in/me의 id는 `com.linkedin.sdui.profile.card.ref<ACoAAA…><섹션명>` 형태라
+      // 탐욕 실행이 섹션 접미사(Topcard 등)까지 삼킨다. 전 실행의 최장 공통 접두사가 참 ID다.
+      let prefix = runs[0];
+      for (const run of runs) {
+        let i = 0;
+        while (i < prefix.length && i < run.length && prefix[i] === run[i]) i += 1;
+        prefix = prefix.slice(0, i);
+      }
+      return prefix;
     });
-    if (!/^ACoAAA[A-Za-z0-9]{10,}$/.test(String(rawId))) stop('EGO_SCHEMA_INVALID');
+    if (!/^ACoAAA[A-Za-z0-9]{24,34}$/.test(String(rawId))) stop('EGO_SCHEMA_INVALID');
     await page.goto(messagingUrl, { timeout: 45000 });
     const currentUrl = await page.url();
     if (!classify(currentUrl)) stop(login(currentUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+    // fingerprint 질의 전 렌더 대기 — scanList와 같은 패턴(측정 기계 통일 — 리뷰 #1).
+    try { await page.waitForFunction(() => (document.body?.innerText?.length ?? 0) > 200, undefined, { timeout: 20000 }); } catch {}
     // fingerprint은 scan과 동일한 DOM 질의로 계산한다(측정 기계 통일 — 리뷰 #1).
     const fingerprint = await page.evaluate(() => {
       const labels = [...new Set(
@@ -296,12 +335,12 @@ export async function acquireEgoIdentity(binding) {
   if (!exactKeys(binding, ['executable', 'taskSpaceName'])) throw fail('INVALID_ARGUMENT');
   if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
   if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
-  const script = `await (${acquireIdentity.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/in/me/', 'https://www.linkedin.com/messaging/', ${messageLocation.toString()}, ${loginPath.toString()});`;
+  const script = `(${acquireIdentity.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/in/me/', 'https://www.linkedin.com/messaging/', ${messageLocation.toString()}, ${loginPath.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_SNAPSHOT_FAILED' })); });`;
   const output = await execute(binding, script);
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   const fp = output?.fingerprint;
   if (!exactKeys(output, ['status', 'slug', 'profileId', 'messaging', 'fingerprint']) || output.status !== 'IDENTITY_ACQUIRED' ||
-      !validString(output.slug, 128) || !/^ACoAAA[A-Za-z0-9]{10,}$/.test(String(output.profileId)) ||
+      !validString(output.slug, 128) || !/^ACoAAA[A-Za-z0-9]{24,34}$/.test(String(output.profileId)) ||
       !['list', 'subpath'].includes(output.messaging) ||
       !fp || !exactKeys(fp, ['labels', 'hasConversationList']) || !Array.isArray(fp.labels) || !fp.labels.length ||
       fp.labels.some(label => !validString(label, 64)) || typeof fp.hasConversationList !== 'boolean') {
@@ -348,13 +387,16 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
       const list = [...document.querySelectorAll('ul')].find(u => /conversation/i.test(u.getAttribute('aria-label') || ''));
       if (!list) return { items: [], total: 0 };
       const rows = [...list.querySelectorAll(':scope > li')];
+      // 실측(2026-11-14): 목록 ul에는 헤딩 없는 행(스페이서)과 "Load more conversations" 버튼 행도 li로 있다.
+      // 헤딩이 있고 preview·time 중 하나라도 비어 있지 않은 행만 대화 항목으로 삼고, DOM 행 인덱스를 보존한다.
       return {
         total: rows.length,
-        items: rows.slice(0, 100).map(li => ({
-          name: (li.querySelector('h2,h3,heading,[role="heading"]')?.textContent ?? li.textContent ?? '').trim().slice(0, 120),
+        items: rows.slice(0, 100).map((li, index) => ({
+          index,
+          name: (li.querySelector('h2,h3,heading,[role="heading"]')?.textContent ?? '').trim().slice(0, 120),
           preview: (li.querySelector('p,[role="paragraph"]')?.textContent ?? '').trim().slice(0, 200),
           time: (li.querySelector('[class*="time"],time')?.textContent ?? '').trim().slice(0, 40),
-        })),
+        })).filter(item => item.name && (item.preview.length || item.time.length)),
       };
     });
     const views = [];
@@ -401,13 +443,14 @@ export async function scanEgoList(binding) {
   if (!fp || !exactKeys(fp, ['labels', 'hasConversationList']) || !Array.isArray(fp.labels) || !fp.labels.length ||
       fp.labels.some(label => !validString(label, 64)) || typeof fp.hasConversationList !== 'boolean') throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 115000) throw fail('INVALID_ARGUMENT');
-  const script = `await (${scanList.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(fp)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()});`;
+  const script = `(${scanList.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(fp)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_SNAPSHOT_FAILED' })); });`;
   const output = await execute(binding, script);
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   if (!exactKeys(output, ['status', 'filters', 'items', 'itemCount', 'complete', 'scrollRounds']) || output.status !== 'SCAN_OBSERVED' ||
       !Array.isArray(output.filters) || output.filters.some(f => !f || typeof f.label !== 'string' || typeof f.checked !== 'string') ||
       !Array.isArray(output.items) || output.items.length !== output.itemCount ||
-      output.items.some(item => !item || !exactKeys(item, ['name', 'preview', 'time']) ||
+      output.items.some(item => !item || !exactKeys(item, ['index', 'name', 'preview', 'time']) ||
+        !Number.isSafeInteger(item.index) || item.index < 0 || item.index > 199 ||
         typeof item.name !== 'string' || typeof item.preview !== 'string' || typeof item.time !== 'string') ||
       !Number.isSafeInteger(output.itemCount) || typeof output.complete !== 'boolean' || !Number.isSafeInteger(output.scrollRounds)) {
     throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
@@ -443,38 +486,88 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
       if (!li) return { code: 'NO_LI' };
       const found = (li.querySelector('h2,h3,heading,[role="heading"]')?.textContent ?? '').trim();
       if (found !== heading) return { code: 'HEADING_MISMATCH' };
-      li.click();
+      // 실측(2026-11-14): li 자체 클릭은 내비게이션을 일으키지 않는다 — 행의 링크 래퍼를 클릭한다.
+      const target = li.querySelector('[class*="conversation-listitem__link"], a[href], [role="link"]') ?? li;
+      target.click();
       return { code: 'CLICKED' };
     }, { index: itemIndex, heading: itemHeading });
-    if (!clickResult || clickResult.code !== 'CLICKED') stop('EGO_TAB_NOT_FOUND');
-    // 스레드 렌더 대기
-    try {
-      await page.waitForFunction(() => document.querySelectorAll('[data-event-urn]').length >= 1, undefined, { timeout: 15000 });
-    } catch { stop('EGO_ATTACH_FAILED'); }
-    const threadUrl = await page.url();
-    if (!classify(threadUrl)) stop(login(threadUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
-    const seg = /\/messaging\/thread\/([^/]+)/.exec(new URL(threadUrl).pathname)?.[1] ?? null;
-    if (!seg) stop('EGO_ATTACH_FAILED');
+    // 목록 렌더 폴링: /messaging/ 전환 직후엔 대화 목록 ul이 아직 없다(2026-11-14 실측 NO_LIST).
+    // 자동 개방이 목록을 가려도 가장 이른 렌더 창을 잡아 클릭한다. 데이터 부재(evaluate null)는 즉시 실패로 마친다.
+    let listReady = false;
+    const listDeadline = Date.now() + Math.min(15000, Number(deadlineMs) || 15000);
+    while (Date.now() < listDeadline) {
+      const probe = await page.evaluate(() => {
+        const list = [...document.querySelectorAll('ul')].find(u => /conversation/i.test(u.getAttribute('aria-label') || ''));
+        return list ? { rows: list.querySelectorAll(':scope > li').length } : { rows: 0 };
+      });
+      if (!probe) break;
+      if (probe.rows >= 1) { listReady = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (!listReady) stop('EGO_SNAPSHOT_FAILED');
+
+    // 실측(2026-11-14 첫 scan): /messaging/ 접속 시 직전 활성 스레드가 자동 개방돼 있어 렌더 대기만으로는
+    // 직전 스레드의 이벤트·URL을 읽는 래스가 생긴다. 클릭 뒤 폴링으로 대기한다: URL이 스레드 경로이고
+    // 마지막 이벤트 텍스트가 목록 미리보기 본문과 접두 일치해야(입증) 성공이며, 이미 열린 스레드는 즉시 통과한다.
+    const normalize = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+    let want = normalize(previewPrefix)
+      .replace(/^InMail\s*(?:•\s*)?/i, '')
+      .replace(/^[^:]{1,60}:\s*/, '');
     let conversationUuid = null;
-    try {
-      const decoded = Buffer.from(seg.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-      const uuid = decoded.split('_')[0];
-      if (!/^[0-9a-f-]{16,64}$/i.test(uuid)) stop('EGO_SCHEMA_INVALID');
-      conversationUuid = uuid;
-    } catch { stop('EGO_SCHEMA_INVALID'); }
-    const thread = await page.evaluate(() => {
-      const events = [...document.querySelectorAll('[data-event-urn]')];
-      const last = events[events.length - 1];
-      const sender = last ? (/urn:li:fsd_profile:([^,]+)/.exec(last.getAttribute('data-event-urn') || '') || [])[1] ?? null : null;
-      const text = last ? (last.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 300) : '';
-      return { lastSender: sender, text };
-    });
-    if (!thread || typeof thread.text !== 'string') stop('EGO_SCHEMA_INVALID');
-    const normalize = value => String(value ?? '').replace(/\\s+/g, ' ').trim().slice(0, 60);
-    const proofMatch = !!thread.lastSender && normalize(thread.text).startsWith(normalize(previewPrefix));
+    let lastSenderIsOther = false;
+    let proofMatch = false;
+    let segSeen = false;
+    let prevUuid = null;
+    let stableTicks = 0;
+    const openDeadline = Date.now() + Math.min(20000, Number(deadlineMs) || 20000);
+    while (Date.now() < openDeadline) {
+      const threadUrl = await page.url();
+      if (!classify(threadUrl)) stop(login(threadUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+      const seg = /\/messaging\/thread\/([^/]+)/.exec(new URL(threadUrl).pathname)?.[1] ?? null;
+      // 스레드 seg는 `2-` + base64url(<대화UUID>_<n>)이다(G1 실측). `2-`를 벗기고 디코딩해야 UUID가 나온다.
+      if (seg && seg.startsWith('2-')) {
+        segSeen = true;
+        let uuid = null;
+        try {
+          const decoded = Buffer.from(seg.slice(2).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+          const candidate = decoded.split('_')[0];
+          if (/^[0-9a-f-]{16,64}$/i.test(candidate)) uuid = candidate;
+        } catch {}
+        if (uuid) {
+          // 실측(2026-11-14, KTD19 반증): data-event-urn의 프로필 세그먼트는 메시지 발신자가 아니라
+          // 수신함 소유자(나)다. 메시지 행(.msg-s-event-listitem)의 `--other` 클래스가 실제 발신 신호다 —
+          // 상대 메시지에는 붙고 내 메시지에는 없다(그룹 스레드의 타 멤버 메시지에도 붙는다).
+          const thread = await page.evaluate(() => {
+            const events = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
+            const last = events[events.length - 1];
+            const isOther = !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || ''));
+            // 이벤트 컨테이너 textContent는 'View <이름>'s profile … 시각 … 이모지 액션 바'가 앞에 붙는다.
+            // 복제본에서 헤더·액션 마크업을 떼고 버블 본문만 남긴다.
+            let text = '';
+            if (last) {
+              const clone = last.cloneNode(true);
+              for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
+              text = (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+            }
+            return { lastSenderIsOther: isOther, text };
+          });
+          if (thread && typeof thread.text === 'string') {
+            conversationUuid = uuid;
+            lastSenderIsOther = thread.lastSenderIsOther;
+            proofMatch = normalize(thread.text).startsWith(want);
+            if (proofMatch) break;
+            // 같은 UUID에서 세 틱 연속 입증 실패면 이미 열린 스레드가 그것이라는 뜻이다 — 대기 없이 UNPROVEN으로 마친다.
+            if (uuid === prevUuid) { stableTicks += 1; if (stableTicks >= 3) break; }
+            else { prevUuid = uuid; stableTicks = 1; }
+          }
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (!segSeen) stop('EGO_ATTACH_FAILED');
     console.log(JSON.stringify({
       status: 'THREAD_OBSERVED', conversationUuid,
-      lastSender: thread.lastSender, proofMatch,
+      lastSenderIsOther, proofMatch,
     }));
   } catch (error) {
     const codes = ['EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_TAB_NOT_FOUND'];
@@ -491,12 +584,12 @@ export async function openEgoThread(binding) {
   if (typeof binding.itemHeading !== 'string' || !binding.itemHeading.length || binding.itemHeading.length > 120) throw fail('INVALID_ARGUMENT');
   if (typeof binding.previewPrefix !== 'string' || binding.previewPrefix.length > 200) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 60000) throw fail('INVALID_ARGUMENT');
-  const script = `await (${openThread.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(binding.itemIndex)}, ${JSON.stringify(binding.itemHeading)}, ${JSON.stringify(binding.previewPrefix)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()});`;
+  const script = `(${openThread.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(binding.itemIndex)}, ${JSON.stringify(binding.itemHeading)}, ${JSON.stringify(binding.previewPrefix)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_SNAPSHOT_FAILED' })); });`;
   const output = await execute(binding, script);
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   const uuidOk = typeof output.conversationUuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(output.conversationUuid);
-  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSender', 'proofMatch']) || output.status !== 'THREAD_OBSERVED' ||
-      !uuidOk || (output.lastSender !== null && !/^ACoAAA[A-Za-z0-9]{10,}$/.test(String(output.lastSender))) ||
+  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSenderIsOther', 'proofMatch']) || output.status !== 'THREAD_OBSERVED' ||
+      !uuidOk || typeof output.lastSenderIsOther !== 'boolean' ||
       typeof output.proofMatch !== 'boolean') throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
   return output;
 }

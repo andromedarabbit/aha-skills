@@ -588,7 +588,7 @@ export async function scanEgo(input) {
       let opened;
       try {
         opened = await openEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
-          itemIndex: index, itemHeading: item.name, previewPrefix: item.preview, deadlineMs: 20000 });
+          itemIndex: item.index, itemHeading: item.name, previewPrefix: item.preview, deadlineMs: 20000 });
       } catch (error) {
         if (['EGO_NEEDS_LOGIN', 'EGO_ORIGIN_MISMATCH', 'EGO_SPACE_NAME_IN_USE'].includes(error?.code)) throw error;
         item.status = 'review';
@@ -597,20 +597,19 @@ export async function scanEgo(input) {
       }
       detailOpened += 1;
       item.conversationUuid = opened.conversationUuid;
-      item.lastSender = opened.lastSender;
-      if (!opened.lastSender) { item.status = 'review'; item.reason = 'SENDER_UNPARSED'; continue; }
+      item.lastSenderIsOther = opened.lastSenderIsOther;
       if (opened.proofMatch !== true) { item.status = 'review'; item.reason = 'LATEST_EVENT_UNPROVEN'; continue; }
-      if (opened.lastSender === link.account.profileId) {
+      if (opened.lastSenderIsOther !== true) {
         item.status = 'answered';
         answeredNames.push(item.name);
       } else {
         item.status = 'candidate';
         candidates.push({ name: item.name, conversationUuid: opened.conversationUuid,
-          preview: item.preview, time: item.time, lastSender: opened.lastSender });
+          preview: item.preview, time: item.time });
       }
       // UUID 키 승격(KTD23): 이름 키 기록 제거, UUID 키로 기록.
       const uuidPath = join(recordsDir, `ego-obs-${digest(['ego-observation', slug, 'uuid', opened.conversationUuid])}.json`);
-      durableWrite(uuidPath, { uuid: opened.conversationUuid, name: item.name, previewHash: item.previewHash, lastSender: opened.lastSender, status: item.status, observedAt: new Date().toISOString() });
+      durableWrite(uuidPath, { uuid: opened.conversationUuid, name: item.name, previewHash: item.previewHash, lastSenderKind: opened.lastSenderIsOther ? 'other' : 'self', status: item.status, observedAt: new Date().toISOString() });
       rmSync(join(recordsDir, `ego-obs-${digest(['ego-observation', slug, item.name])}.json`), { force: true });
     }
     rmSync(join(path, 'operation.json'));
@@ -625,15 +624,19 @@ export async function scanEgo(input) {
     };
   }
   const finalReview = review.filter(item => item.status === 'review');
-  const allDetermined = finalReview.every(item => item.status !== 'review');
+  const openFailedCount = finalReview.filter(item => String(item.reason ?? '').startsWith('THREAD_OPEN_FAILED')).length;
+  const reason = capExceeded ? '개방 상한 초과분은 미개방 검토 필요입니다'
+    : openFailedCount > 0 && detailOpened === 0 ? '상세 개방이 실패해 발신자 판정을 확정하지 못했습니다'
+    : openFailedCount > 0 ? '일부 항목의 상세 개방이 실패했습니다'
+    : '상세 개방으로 발신자를 확정했습니다';
   return {
     status: 'OK', transport: 'ego-ui/1', candidates, review: finalReview,
     filters: observed.filters, complete: observed.complete,
     coverage: { listed: observed.itemCount, detailOpened, openCap: cap, capExceeded,
       answeredCount: answeredNames.length,
       recordWriteFailed: observed.recordWriteFailed,
-      completeness: observed.complete && !capExceeded && allDetermined && detailOpened > 0 ? 'complete' : 'partial',
-      reason: capExceeded ? '개방 상한 초과분은 미개방 검토 필요입니다' : '상세 개방으로 발신자를 확정했습니다' },
+      completeness: observed.complete && !capExceeded && finalReview.length === 0 && detailOpened > 0 ? 'complete' : 'partial',
+      reason },
   };
 }
 
