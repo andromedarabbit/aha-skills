@@ -28,8 +28,9 @@ ego_executable=""
 if command -v ego-browser >/dev/null 2>&1; then
   ego_available=true
   ego_executable="$(command -v ego-browser)"
-  # --version 출력 형태는 ego lite 버전에 따라 달라질 수 있어 첫 줄만 그대로 실는다
-  ego_version="$(capture ego-browser --version | head -1)"
+  # 실측(2026-11-14, 0.6.3.14): --version 출력도 stderr로 재배선된다 — 통합 캡처로 첫 줄을 얻는다.
+  # 출력 형태는 버전에 따라 달라질 수 있어 파싱 없이 첫 줄만 그대로 실는다.
+  ego_version="$( { ego-browser --version 2>&1 || true; } | head -1)"
 fi
 
 # ego 바인딩(신원) — ego-post.mjs setup이 기록한 binding.json을 읽기만 한다.
