@@ -16,7 +16,7 @@
 version: 1
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-source_accounts: {x: u0, linkedin: u0}   # 부트스트랩이 읽어온 계정 (aside 프로필 식별자)
+source_accounts: {x: <ego 신원>, linkedin: <ego 신원>}  # 부트스트랩이 읽어온 계정 (ego 바인딩 신원)
 bootstrap_samples: [bootstrap-cache/x.md] # 샘플의 원본 캐시 출처
 ---
 
@@ -69,4 +69,4 @@ bootstrap_samples: [bootstrap-cache/x.md] # 샘플의 원본 캐시 출처
 
 ## 부트스트랩 캐시
 
-`social/bootstrap-cache/<platform>.md`에 aside가 수집한 원본 게시물 전문을 남긴다. 재검수·재추출 없이 프로필을 다시 만들 수 있는 원본이다. 캐시가 있으면 aside 재호출 없이 Stage 4 검수 게이트를 다시 열 수 있다.
+`social/bootstrap-cache/<platform>.md`에 ego-post bootstrap이 수집한 원본 게시물 전문을 남긴다. 재검수·재추출 없이 프로필을 다시 만들 수 있는 원본이다. 캐시가 있으면 ego 재호출 없이 Stage 4 검수 게이트를 다시 열 수 있다.

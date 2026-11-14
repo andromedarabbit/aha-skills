@@ -96,11 +96,11 @@ bash "${CLAUDE_SKILL_DIR}/scripts/post-state.sh" activate <job-dir>
 
 `<작업 루트>/social/voice-profile.md`가 이미 있으면 재사용한다(갱신 여부만 확인). 없으면 부트스트랩을 돌린다:
 
-1. 플랫폼별로 게시물을 수집한다:
+1. 플랫폼별로 게시물을 수집한다(바인딩된 ego 신원의 프로필에서 고정 스크립트가 원문을 모은다):
    ```bash
-   aside exec --account <id> "내 최근 게시물 15~20개 전문을 그대로 반환해줘. 요약·변역·가공 금지"
+   node "${CLAUDE_SKILL_DIR}/scripts/ego-post.mjs" bootstrap --platform <p> --count 20
    ```
-2. 원본은 `social/bootstrap-cache/`에 보존한다(재추출 없이 재검수 가능하게)
+2. 원본(게시물 text·url·time)은 `social/bootstrap-cache/`에 보존한다(재추출 없이 재검수 가능하게)
 3. 말투·안티패턴·실제 샘플 3~5개를 추출해 `voice-profile.md` 초안을 만든다. **샘플은 verbatim만 채택**한다 — 요약본을 샘플로 넣지 않는다
 4. **검수 게이트**: 프로필 초안(샘플 원문 포함)을 보여주고 이대로 저장 / 샘플 교체 / 항목 수정 중 확인받는다
 
