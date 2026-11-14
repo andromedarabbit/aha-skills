@@ -219,9 +219,12 @@ async function childAcquireIdentityX(spaceName) {
     if (u.hostname !== 'x.com' && u.hostname !== 'twitter.com') stop('EGO_ORIGIN_MISMATCH');
     const probe = await page.evaluate(() => ({
       hasLogin: !!document.querySelector('input[autocomplete="username"], input[name="session[username_or_email]"]'),
+      // 실측(2026-11-14): 로그아웃 상태의 x.com/home는 랜딩으로 리다이렉트되고 로그인 폼이
+      // 아니라 "Sign in" 링크가 있다 — 링크 기반 탐지까지 병행한다.
+      hasSignInLink: [...document.querySelectorAll('a, button')].some(e => /^(sign in|로그인)$/i.test((e.textContent || '').trim())),
       profileHref: document.querySelector('a[data-testid="AppTabBar_Profile_Link"], a[aria-label][href^="/"][data-testid]')?.getAttribute('href') || null,
     }));
-    if (probe?.hasLogin) stop('EGO_NEEDS_LOGIN');
+    if (probe?.hasLogin || probe?.hasSignInLink) stop('EGO_NEEDS_LOGIN');
     const m = probe?.profileHref && /^\/([A-Za-z0-9_]{1,20})$/.exec(probe.profileHref);
     if (!m) stop('EGO_IDENTITY_NOT_FOUND');
     console.log(JSON.stringify({ status: 'IDENTITY_ACQUIRED', identity: m[1] }));
