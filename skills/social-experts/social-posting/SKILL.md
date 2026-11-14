@@ -144,22 +144,33 @@ Ready 판정식(기계 판정, publish.sh가 강제한다): **`approved_digests`
 
 ### Stage 9 게시
 
-**직접 `aside exec`를 호출하지 않는다.** 반드시 publish.sh를 경유한다:
+**직접 ego-browser CLI를 호출하지 않는다.** 반드시 publish.sh를 경유한다:
 
 ```bash
 bash "${CLAUDE_SKILL_DIR}/scripts/publish.sh" --job <job-dir> --platform x
 ```
 
-publish.sh가 게시 직전에 6중 가드를 검사한다 — 승인 플랫폼 여부 · digest 일치 · 하드 제약 재실행 · 계정 매핑 · **승인 시점 계정 스냅샷 일치** · **본문 동결 직후 원본 digest 재검증**. 하나라도 어긋나면 거부한다(실패-닫힘 가드 — 승인 후 초안이나 계정이 바뀌었으면 재승인 필요). 통과하면 **본문만**(frontmatter 제거, media/link는 절대경로·alt 지시로 전달) 동결 파일(0400)에 담아 `aside exec --account <id>`에 **변경·요약 없이 그대로 게시**를 지시하고, 출력에서 게시 URL(`https?://`)을 기계 감지한다 — URL이 없으면 "게시 여부 불명"으로 실패 종료된다. **스레드(`format: thread`)는 세그먼트를 이전 게시물에 대한 답글으로 연결해 하나의 스레드로 게시하도록 지시**하고, 게시 URL이 세그먼트 수만큼 감지되지 않으면 "부분 게시 가능성"으로 실패 종료한다. 대상 플랫폼마다 한 번씩 호출하되, 플랫폼이 여럿이면 **백그라운드 잡으로 동시에 병렬 실행**한다 — 각 호출은 가드·동결 파일(mktemp)을 독립적으로 거치고 receipt는 읽기만 하므로 병렬이 안전하다(실측 2026-09-01: X+Bluesky 동시 wall-clock 192.7초, 순차 합산 대비 절반 이하. 단 브라우저+브라우저 조합(linkedin+facebook)은 경합으로 느린 플랫폼이 상한에 걸려 이득이 없었다 — wall 422초·LinkedIn 420초 초과). 실행 형태: 각 호출을 `> <job>/publish-<platform>.log 2>&1 &`로 띄우고 개별 `wait $pid; rc=$?`로 회수한다 — **무인자 `wait`는 항상 0을 돌려주어 실패를 삼키므로 금지**다. 한 플랫폼의 실패는 나머지를 중단하지 않고(bulkhead) 전 플랫폼의 종료 코드·로그를 보고한 뒤 Stage 10으로 간다. **하네스 Bash 도구의 기본 타임아웃(120초)이 `SOCIAL_ASIDE_TIMEOUT`(기본 420초)보다 짧다 — 하나의 전경 Bash 호출에 묶어 wait하면 게시 도중 프로세스가 강제 종료된다.** `posted_*` 기록(`post-state.sh set`)은 각 호출 완료 후 **순차로** 한다 — receipt.json 동시 쓰기를 만들지 않는다.
+publish.sh가 게시 직전에 6중 가드를 검사한다 — 승인 플랫폼 여부 · digest 일치 · 하드 제약 재실행 · 계정(ego 신원) 매핑 · **승인 시점 계정 스냅샷 일치** · **본문 동결 직후 원본 digest 재검증**. 하나라도 어긋나면 거부한다(실패-닫힘 가드 — 승인 후 초안이나 계정이 바뀌었으면 재승인 필요). 통과하면 check-drafts 페이로드 JSON(본문·media 절대경로+alt·link·visibility)에 가드 4의 ego 신원을 실어 **ego-post.mjs(ego 고정 스크립트 실행 계층)**에 넘긴다 — ego-post가 라이브 프로필 신원을 binding과 대조해 계정 재타깃을 한 번 더 차단하고, composer 입력·정확한 readback·미디어 첨부(프리뷰 확인 후, 게시 클릭 전 fail-closed)·Facebook 공개범위·스레드 답글 체인을 수행한다. **게시 성공 신호는 ego-post의 DOM 증거 판정이다**(출력 URL 감지가 아니다):
+
+- `POSTED` + `urlRecovered:true` → 게시 URL 회수 완료, exit 0
+- `POSTED` + `urlRecovered:false` → **게시는 성립했다** — exit 0과 함께 큰 경고로 프로필 URL 확인을 지시한다. URL 회수 실패로 재시도하면 중복 게시가 된다
+- `PARTIAL_POSTED` → 부분 게시, exit 1 — 이미 게시된 URL과 함께 보고되며 **재시도 금지**
+- `POST_FAILED` → 게시되지 않았을 가능성이 크다, exit 1
+
+대상 플랫폼마다 한 번씩 **순차 전경 호출**로 실행한다(병렬 금지 — aside 시절 병렬은 자연어 실행 지연 흡수용이었고 ego는 전부 브라우저 UI라 경합만 남는다. 실측 2026-09-01: 브라우저+브라우저 조합 wall 422초·상한 초과). **하네스 Bash 도구의 기본 타임아웃(120초)이 ego-post 상한(세그먼트×60초+120초, 최대 570초)보다 짧다 — 반드시 timeout 파라미터를 늘려 호출한다**(single ≈ 300000ms, thread ≈ 600000ms). 한 플랫폼의 실패는 나머지를 중단하지 않고(bulkhead) 전 플랫폼의 종료 코드·출력을 보고한 뒤 Stage 10으로 간다. `posted_*` 기록(`post-state.sh set`)은 플랫폼별 호출 직후 순차로 한다.
 
 ### Stage 10 게시 후 검증 (read-back)
 
 게시 URL로 본문을 다시 읽어 승인 문구와 일치하는지 확인한다:
 
-- read-back은 **플랫폼 간에도 순차로** 실행하고 모든 병렬 게시 잡이 끝난 뒤 시작한다 — `aside account use`가 aside 전역 활성 계정을 바꾸므로 진행 중 exec와 겹치면 계정이 섞인 스냅샷을 읽는다. read-back은 repl로 한다: 먼저 `aside account use <id>`로 계정을 전환한다(**repl은 `--account`를 무시한다**), 게시글 URL를 연 뒤 snapshot으로 본문을 읽는다. 액션은 새 snapshot이 예상 상태를 보여주기 전까지 미확정이다
-- **스레드는 첫 게시물 URL에서 답글 체인 전체를 확인한다** — 게시물 수·순서·각 본문이 승인 문구와 일치하는지. 게시된 게시물 URL 목록 전체를 `post-log.md`에 남긴다
-- **불일치하면 즉시 사용자에게 보고한다** — 플랫폼의 삭제·수정 창이 닫히기 전이다. 조용히 넘기지 않는다
-- 결과를 `post-log.md`에 남기고 `post-state.sh set posted_<platform> <url>`로 기록한다(스레드는 첫 게시물 URL)
+```bash
+printf '%s' '{"urls":["<게시 URL 목록>"],"bodies":["<세그먼트 본문 순서>"]}' \
+  | node "${CLAUDE_SKILL_DIR}/scripts/ego-post.mjs" readback
+```
+
+- read-back은 플랫폼 간에도 순차로 실행한다(TaskSpace 하나를 공유하므로 직렬이 단순하다). 결과 `matched:false`가 있으면 **즉시 사용자에게 보고한다** — 플랫폼의 삭제·수정 창이 닫히기 전이다. 조용히 넘기지 않는다
+- **스레드는 회수된 URL 전체를 배열로 넘겨 세그먼트별 일치를 확인한다**. 게시된 게시물 URL 목록 전체를 `post-log.md`에 남긴다
+- 결과를 `post-log.md`에 남기고 `post-state.sh set posted_<platform> <url>`로 기록한다(스레드는 첫 게시물 URL). `urlRecovered:false`로 URL을 못 얻었으면 프로필에서 게시물을 찾아 확정한 뒤 기록한다
 
 ## 압축(compaction) 대비 재개
 

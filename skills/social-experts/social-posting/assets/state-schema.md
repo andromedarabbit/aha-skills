@@ -40,7 +40,7 @@ root:             # 작업 루트 절대경로 — 재개·이동 탐지용 (런
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 platforms: [x, linkedin]              # flow style 필수 — publish.sh가 파싱한다
-accounts: {x: u0, linkedin: u0}       # flow style 필수 — 플랫폼 → aside 프로필 식별자
+accounts: {x: <ego 신원>, linkedin: <ego 신원>}  # flow style 필수 — 플랫폼 → ego 바인딩 신원(setup이 확정한 handle·slug)
 source: {type: topic, topic: ...}     # 또는 {type: document, path: ...}
 status: {x: draft, linkedin: draft}   # draft → ready → posted (사람용 표시)
 post_intent: teaser                   # teaser | summary — Stage 2 포스트 목적 (선택 키)
@@ -49,7 +49,7 @@ post_intent: teaser                   # teaser | summary — Stage 2 포스트 �
 요건:
 
 - `platforms`·`accounts`·`status`는 **한 줄 flow style**(대괄호·중괄호)로 쓴다 — publish.sh가 sed로 파싱한다.
-- `accounts` 값은 aside 프로필 식별자(`u0`, `u1`)만 담는다. 이메일은 aside가 무시한다.
+- `accounts` 값은 ego 바인딩 신원만 담는다 — `ego-post.mjs setup`이 기록한 신원 문자열(X handle·LinkedIn slug 등). publish.sh가 이 값을 페이로드 `identity`로 실어 ego-post가 binding과 대조한다(불일치 = 계정 재타깃 → 게시 거부).
 - `post_intent`는 `teaser` 또는 `summary`만 담는다. 없으면 `summary`로 취급한다(기존 작업 호환). Stage 5 canonical이 이 값을 읽어 티저형(훅 1개 + 링크 유도만)과 요약형을 구분한다.
 
 ## 3. 초안 파일 형식 (drafts/<platform>.md)
@@ -79,8 +79,8 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 - `visibility`는 선택 키로 **facebook 전용**이다(`public`=공개, `friends`=친구만, `keep`=기존 설정 유지·기본값). Stage 2에서 사용자에게 반드시 묻고 답을 이 키에 기록한다 — publish.sh가 `public`/`friends`일 때 게시 지시에 공개 범위 설정을 포함하고, `keep`이면 지시하지 않는다(계정 기본 설정을 따른다). 하드 제약은 아니다(Convention 등급).
 - `format`과 게시물 수는 정합해야 한다: `single`은 게시물 정확히 1개, `thread`는 **2개 이상**(하드 제약 — 어긋나면 fail-closed).
 - 스레드(`format: thread`)는 **x·bluesky만 지원**한다 — 답글 체인이 네이티브인 플랫폼이다. linkedin·facebook은 네이티브 스레딩이 없어 `format: thread`가 하드 제약 위반으로 거부된다(단일 게시물로 작성한다). X 스레드는 게시물 25개 이하.
-- 스레드 게시는 각 세그먼트를 **이전 게시물에 대한 답글로 연결**한다(publish.sh가 지시) — 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공 신호는 URL 개수가 세그먼트 수 이상이다.
-- 본문은 게시 그대로의 문구다. **게시 실행은 본문만 전달된다**(publish.sh가 frontmatter를 제거한 페이로드를 동결하고 media/link는 지시로 전달) — 반면 승인 digest는 **초안 전체 파일**(frontmatter 포함) 기준이라 검증 대상과 게시 대상이 원본 하나로 묶인다.
+- 스레드 게시는 각 세그먼트를 **이전 게시물에 대한 답글로 연결**한다(ego-post 고정 스크립트가 수행) — 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공은 ego-post의 DOM 증거 판정이다(부분 게시는 `PARTIAL_POSTED`로 실패 종료, URL 회수 실패는 `POSTED`+`urlRecovered:false`로 성공 종료 — 재시도 금지).
+- 본문은 게시 그대로의 문구다. **게시 실행은 페이로드 JSON(body·media 절대경로+alt·link·visibility·identity)으로 전달된다**(publish.sh가 frontmatter를 제거해 조립, ego-post가 소비) — 반면 승인 digest는 **초안 전체 파일**(frontmatter 포함) 기준이라 검증 대상과 게시 대상이 원본 하나로 묶인다. `link` 키가 있으면 ego-post가 첫 세그먼트 끝에 링크를 한 줄 덧붙인다 — 본문에 이미 링크가 있으면 `link` 키를 비워라(중복 방지).
 
 ## 4. receipt.json (영수증)
 
