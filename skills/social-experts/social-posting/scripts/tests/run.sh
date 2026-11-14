@@ -53,6 +53,13 @@ for test_file in "$SCRIPT_TESTS"/*.test.sh; do
   suites_run=$((suites_run + 1))
 done
 
+# --- Node test suites (ego-post.mjs 실행 계층 계약) ---
+if command -v node >/dev/null 2>&1 && compgen -G "$SCRIPT_TESTS"/*.test.mjs >/dev/null; then
+  echo "  Running node --test ..."
+  node --test "$SCRIPT_TESTS"/*.test.mjs
+  suites_run=$((suites_run + 1))
+fi
+
 if [ "$suites_run" -eq 0 ]; then
   echo "❌ 오류: 실행된 테스트 스위트가 0개입니다" >&2
   exit 1
