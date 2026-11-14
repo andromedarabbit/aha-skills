@@ -1,14 +1,6 @@
-// ego-post.mjs — ego 실행 계층 계약 검증.
-// ego-ui.test.mjs(linkedin-followup) 방식을 social-posting 규모로 축약했다:
-// 실제 ego 런타임 DOM은 스텁하지 않는다(브라우저 없이는 의미가 없다). 대신
-// ① 프로세스 계약(spawn 인자·stdin 스크립트·JSON 1줄·스트림 상한·타임아웃)
-// ② 페이로드 검증·타임아웃 산식 등 순수 로직
-// ③ CLI 서브커맨드 end-to-end(가짜 실행파일·주입 binding)
-// ④ 고정 스크립트 금지 API 부재(소스 정규식)
-// 를 검증한다. 플랫폼 DOM 동작 자체는 첫 실환경 실행이 측정 지점이다.
-//
-// shortcut: DOM 시뮬레이션(ego-ui.test.mjs의 VM page stub) 없음 — 셀렉터 동작은
-// 실측으로 교정한다. upgrade: 셀렉터가 안정되면 stub DOM 회귀를 추가한다.
+// ego-post.mjs — 프로세스·페이로드·부모 CLI 결과 계약 검증.
+// ego-post-child.test.mjs는 실제로 전송된 자식 코드를 VM DOM에서 별도로 실행한다.
+// 실제 플랫폼 셀렉터의 유효성은 브라우저 실측이 필요하다.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -168,7 +160,7 @@ test('CLI post: POSTED + URL 회수 실패 → 여전히 exit 0 (게시는 성�
 });
 
 test('CLI post: PARTIAL_POSTED → exit 1 (부분 게시는 실패)', () => {
-  writeBinding(bindingFor(fakeEgo('partial', '{"status":"PARTIAL_POSTED","urls":["https://x.com/me/1"],"reason":"EGO_EVIDENCE_MISSING"}')));
+  writeBinding(bindingFor(fakeEgo('partial', '{"status":"PARTIAL_POSTED","urls":["https://x.com/me/1"],"postedCount":1,"reason":"EGO_EVIDENCE_MISSING"}')));
   const r = runCli(['post'], JSON.stringify({ ...basePayload, format: 'thread', body: 'a\n\n=== POST ===\n\nb' }));
   assert.equal(r.status, 1);
   assert.equal(cliJson(r).status, 'PARTIAL_POSTED');
@@ -231,6 +223,15 @@ test('CLI readback: READBACK_DONE 결과 전달', () => {
   assert.equal(cliJson(r).matched, true);
 });
 
+test('CLI readback: URL과 본문 배열 길이가 다르면 INVALID_PAYLOAD', () => {
+  writeBinding(bindingFor(fakeEgo('readback-count', '{"status":"READBACK_DONE","results":[],"matched":true}')));
+  for (const bodies of [[], ['하나', '둘']]) {
+    const r = runCli(['readback'], JSON.stringify({ urls: ['https://x.com/me/status/1'], bodies }));
+    assert.equal(r.status, 1);
+    assert.equal(cliJson(r).reason, 'INVALID_PAYLOAD');
+  }
+});
+
 test('CLI readback: 페이로드 스키마 위반 → INVALID_PAYLOAD', () => {
   writeBinding(bindingFor(fakeEgo('readback', '{"status":"READBACK_DONE","results":[],"matched":true}')));
   const r = runCli(['readback'], JSON.stringify({ urls: [] }));
@@ -256,6 +257,25 @@ test('POST_STEP_CODES·EGO_FAILURE_REASONS 열거 일관성', () => {
   assert.equal(mod.POST_STEP_CODES.includes('EGO_MEDIA_FAILED'), true);
   assert.equal(mod.EGO_FAILURE_REASONS.includes('EGO_TIMEOUT'), true);
   assert.equal(new Set(mod.POST_STEP_CODES).size, mod.POST_STEP_CODES.length, '단계 코드 중복 없음');
+});
+
+test('CLI post: 자식 프로세스 응답을 잃으면 POST_UNKNOWN이며 재게시를 단정하지 않는다', () => {
+  writeBinding(bindingFor(fakeEgo('lost-response', '#!/bin/sh\nexit 3\n')));
+  const r = runCli(['post'], JSON.stringify(basePayload));
+  assert.equal(r.status, 1);
+  assert.deepEqual(cliJson(r), { status: 'POST_UNKNOWN', urls: [], postedCount: 0, reason: 'EGO_CONNECT_FAILED' });
+});
+
+test('CLI post: 잘못된 게시 결과 스키마는 안전 재시도 가능한 실패가 아닌 POST_UNKNOWN', () => {
+  writeBinding(bindingFor(fakeEgo('bad-result', '{"status":"POSTED","urls":[]}')));
+  const r = runCli(['post'], JSON.stringify(basePayload));
+  assert.equal(r.status, 1);
+  assert.equal(cliJson(r).status, 'POST_UNKNOWN');
+});
+
+test('validatePostPayload: alt는 문자열이어야 하고 Bluesky는 비어 있을 수 없다', () => {
+  for (const alt of [null, {}, 12]) assert.throws(() => mod.validatePostPayload({ ...basePayload, media: [{ path: '/tmp/image.png', alt }] }), /INVALID_PAYLOAD/);
+  assert.throws(() => mod.validatePostPayload({ ...basePayload, platform: 'bluesky', media: [{ path: '/tmp/image.png', alt: '' }] }), /INVALID_PAYLOAD/);
 });
 
 // 정리

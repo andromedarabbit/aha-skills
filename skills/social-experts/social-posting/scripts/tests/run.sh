@@ -7,6 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SCRIPT_TESTS="$SKILL_DIR/scripts/tests"
 
+if compgen -G "$SCRIPT_TESTS/*.test.mjs" >/dev/null && ! command -v node >/dev/null 2>&1; then
+  printf '❌ 오류: node가 없어 ego 실행 계층 테스트를 실행할 수 없습니다\n' >&2
+  exit 1
+fi
+
 echo "=== social-posting tests ==="
 
 suites_run=0
@@ -54,7 +59,7 @@ for test_file in "$SCRIPT_TESTS"/*.test.sh; do
 done
 
 # --- Node test suites (ego-post.mjs 실행 계층 계약) ---
-if command -v node >/dev/null 2>&1 && compgen -G "$SCRIPT_TESTS"/*.test.mjs >/dev/null; then
+if compgen -G "$SCRIPT_TESTS/*.test.mjs" >/dev/null; then
   echo "  Running node --test ..."
   node --test "$SCRIPT_TESTS"/*.test.mjs
   suites_run=$((suites_run + 1))

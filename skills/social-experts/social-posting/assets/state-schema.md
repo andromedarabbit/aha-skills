@@ -79,7 +79,7 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 - `visibility`는 선택 키로 **facebook 전용**이다(`public`=공개, `friends`=친구만, `keep`=기존 설정 유지·기본값). Stage 2에서 사용자에게 반드시 묻고 답을 이 키에 기록한다 — publish.sh가 `public`/`friends`일 때 게시 지시에 공개 범위 설정을 포함하고, `keep`이면 지시하지 않는다(계정 기본 설정을 따른다). 하드 제약은 아니다(Convention 등급).
 - `format`과 게시물 수는 정합해야 한다: `single`은 게시물 정확히 1개, `thread`는 **2개 이상**(하드 제약 — 어긋나면 fail-closed).
 - 스레드(`format: thread`)는 **x·bluesky만 지원**한다 — 답글 체인이 네이티브인 플랫폼이다. linkedin·facebook은 네이티브 스레딩이 없어 `format: thread`가 하드 제약 위반으로 거부된다(단일 게시물로 작성한다). X 스레드는 게시물 25개 이하.
-- 스레드 게시는 각 세그먼트를 **이전 게시물에 대한 답글로 연결**한다(ego-post 고정 스크립트가 수행) — 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공은 ego-post의 DOM 증거 판정이다(부분 게시는 `PARTIAL_POSTED`로 실패 종료, URL 회수 실패는 `POSTED`+`urlRecovered:false`로 성공 종료 — 재시도 금지).
+- 스레드 게시는 각 세그먼트를 **이전 게시물에 대한 답글로 연결**한다(ego-post 고정 스크립트가 수행) — 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공은 ego-post의 DOM 증거 판정이다(부분 게시는 `PARTIAL_POSTED`, 클릭 후 결과 불명은 `POST_UNKNOWN`으로 실패 종료하며 둘 다 재시도 금지다. URL 회수 실패는 `POSTED`+`urlRecovered:false`로 성공 종료한다).
 - 본문은 게시 그대로의 문구다. **게시 실행은 페이로드 JSON(body·media 절대경로+alt·link·visibility·identity)으로 전달된다**(publish.sh가 frontmatter를 제거해 조립, ego-post가 소비) — 반면 승인 digest는 **초안 전체 파일**(frontmatter 포함) 기준이라 검증 대상과 게시 대상이 원본 하나로 묶인다. `link` 키가 있으면 ego-post가 첫 세그먼트 끝에 링크를 한 줄 덧붙인다 — 본문에 이미 링크가 있으면 `link` 키를 비워라(중복 방지).
 
 ## 4. receipt.json (영수증)
@@ -87,7 +87,7 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 ```json
 {
   "approved_digests": {"x": "sha256...", "linkedin": "sha256..."},
-  "approved_accounts": "{x: u0, linkedin: u1}",
+  "approved_accounts": "{x: my-handle, linkedin: my-slug}",
   "approved_at": "2026-09-01T00:00:00Z",
   "approved_via": "posttooluse-hook",
   "posted_x": "https://x.com/...",

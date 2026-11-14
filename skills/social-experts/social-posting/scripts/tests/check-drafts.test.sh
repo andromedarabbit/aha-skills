@@ -265,4 +265,12 @@ if run_check "$job18" >/dev/null 2>&1; then fail "하드 제약 위반(141자)�
 out="$({ run_check "$job18" || true; } | jq -c '{ok, warnings: (.warnings | length)}')"
 [ "$out" = '{"ok":false,"warnings":1}' ] || fail "위반(ok:false)과 경고(warnings:1)가 동시에 보고돼야 한다: $out"
 
+# link는 실행 계층에서 첫 세그먼트에만 줄바꿈과 함께 붙는다.
+job19="$sandbox/job-appended-link"; mkdir -p "$job19/drafts"
+printf -- '---\nplatform: x\nformat: single\nlink: https://example.com/run\n---\n%s\n' "$k140" >"$job19/drafts/x.md"
+if run_check "$job19" >/dev/null 2>&1; then fail "본문+줄바꿈+link가 X 상한을 넘으면 거부해야 한다"; fi
+printf -- '---\nplatform: x\nformat: thread\nlink: https://example.com/run\n---\n짧음\n\n=== POST ===\n\n%s\n' "$k140" >"$job19/drafts/x.md"
+counts="$(run_check "$job19" | jq -c '.platforms.x.counts')"
+[ "$counts" = '[28,280]' ] || fail "link는 첫 세그먼트에만 포함되어야 한다: $counts"
+
 echo "✅ check-drafts.test.sh 통과"

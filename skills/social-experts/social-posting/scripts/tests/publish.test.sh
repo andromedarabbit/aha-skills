@@ -39,7 +39,7 @@ if [ -z "$r" ]; then
   r='{"status":"POSTED","urls":["https://stub.example/post/1"],"urlRecovered":true,"identity":"me"}'
 fi
 printf '%s\n' "$r"
-exit 0
+exit "${SOCIAL_EGO_EXIT:-0}"
 EOF
 chmod +x "$SOCIAL_EGO_POST"
 
@@ -196,14 +196,19 @@ export SOCIAL_EGO_RESULT='{"status":"POST_FAILED","reason":"EGO_NEEDS_LOGIN"}'
 if bash "$PUBLISH" --job "$job" --platform x >/dev/null 2>&1; then
   fail "ego-post POST_FAILED는 exit 1이어야 한다"
 fi
-export SOCIAL_EGO_RESULT='{"status":"PARTIAL_POSTED","urls":["https://stub.example/post/1"],"reason":"EGO_EVIDENCE_MISSING"}'
+export SOCIAL_EGO_EXIT=1
+export SOCIAL_EGO_RESULT='{"status":"PARTIAL_POSTED","postedCount":1,"urls":["https://stub.example/post/1"],"reason":"EGO_EVIDENCE_MISSING"}'
 if bash "$PUBLISH" --job "$job" --platform x >/dev/null 2>&1; then
   fail "부분 게시(PARTIAL_POSTED)는 exit 1이어야 한다"
 fi
 out="$(bash "$PUBLISH" --job "$job" --platform x 2>&1 || true)"
 grep -q "stub.example/post/1" <<<"$out" || fail "부분 게시 메시지에 이미 게시된 URL이 담겨야 한다"
 grep -q "재시도 금지" <<<"$out" || fail "부분 게시 메시지에 재시도 금지 지시가 담겨야 한다"
-unset SOCIAL_EGO_RESULT
+export SOCIAL_EGO_RESULT='{"status":"POST_UNKNOWN","postedCount":0,"urls":[],"reason":"EGO_TIMEOUT"}'
+out="$(bash "$PUBLISH" --job "$job" --platform x 2>&1 || true)"
+grep -q '재시도 금지' <<<"$out" || fail "결과 불명은 재시도 금지를 명시해야 한다"
+if grep -q '게시되지 않았을 가능성이 크다' <<<"$out"; then fail "결과 불명을 미게시로 추정하면 안 된다"; fi
+unset SOCIAL_EGO_RESULT SOCIAL_EGO_EXIT
 
 # --- 10. POSTED + URL 회수 실패 → exit 0 + 경고 (중복 게시 재시도 차단) ---
 export SOCIAL_EGO_RESULT='{"status":"POSTED","urls":[],"urlRecovered":false,"identity":"me"}'
@@ -232,7 +237,7 @@ if [ -z "$r" ]; then
   r='{"status":"POSTED","urls":["https://stub.example/post/1"],"urlRecovered":true,"identity":"me"}'
 fi
 printf '%s\n' "$r"
-exit 0
+exit "${SOCIAL_EGO_EXIT:-0}"
 EOF
 chmod +x "$SOCIAL_EGO_POST"
 

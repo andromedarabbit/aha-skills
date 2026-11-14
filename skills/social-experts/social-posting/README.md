@@ -50,6 +50,8 @@ ego lite(ego-browser 고정 스크립트)를 실행 계층으로 사용해 X·Li
 - 게시물 2개 이상(X는 25개 이하). 길이 제한은 게시물별로 각각 적용된다 — X는 게시물당 280 가중(twitter-text v3 규칙: 한글·이모지·비라틴은 2로 계산), Bluesky는 300 grapheme.
 - **LinkedIn·Facebook은 스레드를 지원하지 않는다**(네이티브 스레딩 없음) — 단일 게시물로 쓴다.
 - 게시 성공 신호는 ego-post의 DOM 증거 판정이다: 부분 게시는 `PARTIAL_POSTED`로 실패 보고되고(재시도 금지), URL 회수 실패는 `POSTED`+`urlRecovered:false`로 성공 보고된다(중복 게시 방지).
+- `POST_UNKNOWN`은 게시 여부를 확정하지 못한 상태다. 재시도하지 말고 프로필에서 실제 게시 여부부터 확인한다.
+- 이전 Aside 버전에서 일괄 허용한 권한은 업데이트로 회수되지 않는다. 별도 승인·회수 절차는 `docs/REFERENCE.md`를 따른다.
 - 구조 규칙(훅→바디→클로저 3존, 번호 매기기)은 `docs/playbook-x.md`·`docs/playbook-bluesky.md`의 스레드 섹션 참조.
 
 ## 게시는 되돌릴 수 없다

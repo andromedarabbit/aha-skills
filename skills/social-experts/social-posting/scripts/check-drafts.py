@@ -217,8 +217,10 @@ def check_platform(platform: str, draft_path: str) -> dict:
     limits = LIMITS[platform]
     result["unit"] = limits["unit"]
 
+    link = str(meta.get("link") or "")
     for i, post in enumerate(posts, 1):
-        n = measure(post, limits["unit"])
+        published_body = post.strip() + ("\n" + link if i == 1 and link else "")
+        n = measure(published_body, limits["unit"])
         result["counts"].append(n)
         if n > limits["max"]:
             result["violations"].append(

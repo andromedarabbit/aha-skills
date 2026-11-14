@@ -147,12 +147,12 @@ run_ego_post() {
 }
 # ego-post는 자체 상한 타임아웃(세그먼트 수 산식, 최대 570s)으로 자식을 정리한다 —
 # 이 스크립트에는 감시 루프가 없다. 호출측(하네스 Bash)은 timeout을 넉넉히 줘야 한다.
-result="$(printf '%s' "$ego_payload" | run_ego_post)" \
-  || result=""
+result="$(printf '%s' "$ego_payload" | run_ego_post)"
+ego_exit=$?
 
 status="$(printf '%s' "$result" | jq -r '.status // ""' 2>/dev/null || true)"
 
-if [[ "$status" == "POSTED" ]]; then
+if [[ "$status" == "POSTED" && "$ego_exit" -eq 0 ]]; then
   url_recovered="$(printf '%s' "$result" | jq -r '.urlRecovered')"
   printf '%s\n' "$result"
   if [[ "$url_recovered" != "true" ]]; then
@@ -172,6 +172,9 @@ if [[ "$status" == "PARTIAL_POSTED" ]]; then
   die "부분 게시 — 세그먼트 일부만 게시됐다(사유: $reason). 이미 게시된 URL: ${partial_urls:-없음}. 재시도 금지 — 게시된 게시물을 확인하고 사용자에게 즉시 보고하세요"
 fi
 
-# POST_FAILED / 그 밖의 알 수 없는 출력 — 전부 실패-닫힘
+# 실행이 시작된 뒤 출력 유실·프로토콜 실패는 미게시의 증거가 아니다.
 [[ -n "$result" ]] && printf '%s\n' "$result"
-die "ego 실행 계층 실패(status: ${status:-불명}) — 게시되지 않았을 가능성이 크다. 위 출력의 reason을 확인하고, 게시가 확인된 경우에만 posted 기록 후 사용자에게 보고하세요"
+if [[ "$status" == "POST_FAILED" ]]; then
+  die "게시 전 실패 — 출력의 reason을 확인하세요. 이미 게시된 세그먼트가 없는지 확인한 뒤 사용자에게 보고하세요"
+fi
+die "게시 결과 불명(status: ${status:-불명}, exit: $ego_exit) — 재시도 금지. 프로필에서 실제 게시 여부와 세그먼트를 확인하고 사용자에게 즉시 보고하세요"

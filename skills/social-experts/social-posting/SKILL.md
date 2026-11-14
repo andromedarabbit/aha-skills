@@ -1,7 +1,7 @@
 ---
 name: social-posting
 description: 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text·스레드 규칙)을 기계 검증한 뒤 승인을 받아 ego lite(ego-browser 고정 스크립트) 실행 계층으로 실제 계정에 게시한다. 스레드(X·Bluesky 답글 체인)도 지원한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 스레드로 변환해줘", "스레드로 뽑아줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 ego-post 실행 계층으로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser·ego-browser 스킬 소관이다.
-version: 0.9.0
+version: 0.9.1
 context: inline
 language: "korean"
 dependencies:
@@ -26,6 +26,8 @@ bash "${CLAUDE_SKILL_DIR}/scripts/preflight.sh"
 ```
 
 출력은 JSON 한 줄이다(항상 exit 0, 실패는 필드에 표시). ego-browser가 없으면 설치 안내를 보여주고 그 자리에서 중단한다.
+
+이전 Aside 기반 버전에서 권한 일괄 허용을 썼다면 플러그인 업데이트로 기존 자동 허용이 회수되지 않는다고 알린다. 회수를 원할 때만 계정별 기존 규칙을 조회해 대상 규칙을 보여주고 별도 승인을 받는다. 승인한 규칙만 삭제한 뒤 재조회하며, 다른 용도의 규칙·ask·deny·기본값은 건드리지 않는다. 미회수 상태를 숨기지 않는다. 상세 절차는 사용자가 요청할 때만 `docs/REFERENCE.md`의 "Aside에서 이관할 때 기존 권한 회수"를 읽는다.
 
 ## 경로 규칙 (vault 독립)
 
@@ -65,20 +67,17 @@ PreToolUse 훅이 `*ego-post.mjs*` Bash 호출 시 자동으로 check-deps.sh를
 
 ### Stage 2 요구사항 수집·확인 — 입력 게이트
 
-preflight 결과를 바탕으로 **AskUserQuestion 한 번에 묶어** 묻는다:
+preflight 결과를 바탕으로 **플랫폼을 먼저 확정한 뒤 신원을 확인한다**. AskUserQuestion은 호출당 최대 4문항, 문항당 선택지 2~4개로 나눈다:
 
-1. 플랫폼 (multiSelect: X / LinkedIn / Facebook / Bluesky)
-2. 계정 — ego 바인딩 신원. preflight `ego.binding.identity`에 해당 플랫폼이 있으면 그 값을, 없으면 먼저 setup을 돌려 확정한다:
+1. 첫 호출: 플랫폼(multiSelect: X / LinkedIn / Facebook / Bluesky), 소재 유형(자유 주제 / 기존 문서 재활용), 포스트 목적(티저형 / 요약형)을 묻는다. 원문 링크 홍보는 티저형을 권장한다
+2. 선택된 플랫폼만 setup으로 라이브 신원을 확정한다(기존 바인딩도 갱신). 플랫폼 선택 전에 setup하지 않는다:
 
    ```bash
-   node "${CLAUDE_SKILL_DIR}/scripts/ego-post.mjs" setup --platform <p>
+   node "${CLAUDE_SKILL_DIR}/scripts/ego-post.mjs" setup --platform <p> --force
    ```
 
-   setup은 읽기 전용 프로필 확인이다(입력·게시 없음). 확정된 신원을 계정 문항 선택지로 보여 확인받는다 — ego lite에 로그인된 프로필이 곧 계정이므로 다른 계정을 원하면 사용자가 ego lite에서 프로필을 바꿔야 한다(바뀌면 게시 시 `EGO_ACCOUNT_MISMATCH`로 차단된다)
-3. 소재 유형 (자유 주제 / 기존 문서 재활용 — 문서 후보는 preflight가 제시한 목록에서)
-4. 강조점·원하는 반응 (선택 문항)
-5. 포스트 목적 — 티저형(궁금증 하나로 흥미를 만들고 링크로 보낸다. 원문 링크 홍보의 권장 기본) / 요약형(논지를 요약해 포스트 자체로 전달한다)
-6. Facebook 공개 범위 (facebook 포함 시에만) — 공개 / 친구만 / 기존 설정 유지. 답은 `drafts/facebook.md` frontmatter `visibility`(`public`/`friends`/`keep`)로 기록하고 게시 지시에 반영한다 — 계정 기본값으로 조용히 빠지지 않게 반드시 묻는다
+   setup은 읽기 전용 프로필 확인이다(입력·게시 없음). 다음 호출의 계정 문항은 플랫폼별 신원을 함께 보여주고 **이 계정으로 진행 / 계정 변경 후 다시 확인 / 취소**로 묻는다. 다른 계정을 원하면 사용자가 ego lite에서 로그인 계정을 바꾼 뒤 setup을 다시 실행한다. 게시 시에는 신원 불일치를 `EGO_ACCOUNT_MISMATCH`로 차단한다
+3. 같은 확인 호출에 강조점·원하는 반응(필요할 때만), Facebook 공개 범위(facebook 선택 시 필수: 공개 / 친구만 / 기존 설정 유지)를 묶는다. 공개 범위는 `drafts/facebook.md` frontmatter `visibility`(`public`/`friends`/`keep`)로 기록한다
 
 응답이 확정되면 작업 공간을 만들고 활성화한다:
 
@@ -153,8 +152,9 @@ publish.sh가 게시 직전에 6중 가드를 검사한다 — 승인 플랫폼 
 
 - `POSTED` + `urlRecovered:true` → 게시 URL 회수 완료, exit 0
 - `POSTED` + `urlRecovered:false` → **게시는 성립했다** — exit 0과 함께 큰 경고로 프로필 URL 확인을 지시한다. URL 회수 실패로 재시도하면 중복 게시가 된다
-- `PARTIAL_POSTED` → 부분 게시, exit 1 — 이미 게시된 URL과 함께 보고되며 **재시도 금지**
-- `POST_FAILED` → 게시되지 않았을 가능성이 크다, exit 1
+- `PARTIAL_POSTED` → 일부 세그먼트 게시 확정, exit 1 — `postedCount`와 회수된 URL을 보고하며 **재시도 금지**
+- `POST_UNKNOWN` → 클릭 이후 결과를 확정하지 못했거나 실행 응답이 유실됨, exit 1 — **재시도 금지**. 프로필에서 실제 게시 여부부터 확인한다
+- `POST_FAILED` → 게시 클릭 전 실패, exit 1. 원인을 해결하고 초안·계정·승인 상태를 재확인한다
 
 대상 플랫폼마다 한 번씩 **순차 전경 호출**로 실행한다(병렬 금지 — aside 시절 병렬은 자연어 실행 지연 흡수용이었고 ego는 전부 브라우저 UI라 경합만 남는다. 실측 2026-09-01: 브라우저+브라우저 조합 wall 422초·상한 초과). **하네스 Bash 도구의 기본 타임아웃(120초)이 ego-post 상한(세그먼트×60초+120초, 최대 570초)보다 짧다 — 반드시 timeout 파라미터를 늘려 호출한다**(single ≈ 300000ms, thread ≈ 600000ms). 한 플랫폼의 실패는 나머지를 중단하지 않고(bulkhead) 전 플랫폼의 종료 코드·출력을 보고한 뒤 Stage 10으로 간다. `posted_*` 기록(`post-state.sh set`)은 플랫폼별 호출 직후 순차로 한다.
 
@@ -167,6 +167,7 @@ printf '%s' '{"urls":["<게시 URL 목록>"],"bodies":["<세그먼트 본문 순
   | node "${CLAUDE_SKILL_DIR}/scripts/ego-post.mjs" readback
 ```
 
+- URL과 본문 배열은 같은 길이·같은 순서로 제공한다. 첫 세그먼트는 실제로 덧붙인 `link`까지 포함한다. 대상 URL에 해당하는 게시물 본문만 비교하며 전체 페이지 텍스트로 대신하지 않는다
 - read-back은 플랫폼 간에도 순차로 실행한다(TaskSpace 하나를 공유하므로 직렬이 단순하다). 결과 `matched:false`가 있으면 **즉시 사용자에게 보고한다** — 플랫폼의 삭제·수정 창이 닫히기 전이다. 조용히 넘기지 않는다
 - **스레드는 회수된 URL 전체를 배열로 넘겨 세그먼트별 일치를 확인한다**. 게시된 게시물 URL 목록 전체를 `post-log.md`에 남긴다
 - 결과를 `post-log.md`에 남기고 `post-state.sh set posted_<platform> <url>`로 기록한다(스레드는 첫 게시물 URL). `urlRecovered:false`로 URL을 못 얻었으면 프로필에서 게시물을 찾아 확정한 뒤 기록한다

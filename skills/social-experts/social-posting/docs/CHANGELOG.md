@@ -1,5 +1,15 @@
 # CHANGELOG — social-posting
 
+## 0.9.1 (2026-11-14)
+
+- 게시 확정 수와 URL 회수를 분리하고, 클릭 후 결과 불명은 `POST_UNKNOWN`으로 보고해 재시도를 막는다. exit 1의 부분 게시 JSON도 publish.sh가 보존한다
+- Facebook 숫자 프로필 ID, X 신원 폴링, PATH 실행파일 발견, X·Bluesky 절대 URL 답글 체인을 수정한다
+- URL은 전체 정규화 본문이 일치하는 후보 하나일 때만 회수한다. 같은 도입부의 과거 글과 중복 후보를 거부해 잘못된 답글 부모 선택을 막는다
+- LinkedIn 대체 에디터의 성공 판정, 미디어 alt 적용·검증, 대상 게시물 단위 read-back을 보강한다
+- 최종 본문의 링크까지 길이를 검사하고 Node 누락 시 테스트 러너를 즉시 실패시킨다. 실제 주입 스크립트와 실패 경로의 회귀 테스트를 추가한다
+- Stage 2를 플랫폼 선택 후 신원 확인 순서로 나누고, 이전 Aside 자동 허용 권한의 별도 승인·회수 절차를 명시한다. 사용자 설정은 자동 변경하지 않는다
+- 실계정 게시·미디어 UI 실측은 수행하지 않았다. 플랫폼 DOM 셀렉터는 실환경 확인이 필요하다
+
 ## 0.9.0 (2026-11-14)
 
 - 게시 실행 계층을 aside → **ego lite(ego-browser)**로 교체 — `ego-post.mjs`(setup·bootstrap·post·readback 고정 스크립트 실행 계층) 신설. 게시 성공 판정을 aside 출력 URL 감지에서 **ego DOM 증거 판정**으로 반전: `POSTED`+`urlRecovered:false`는 게시 성립으로 exit 0(중복 게시 재시도 차단), 부분 게시는 `PARTIAL_POSTED` exit 1(재시도 금지)

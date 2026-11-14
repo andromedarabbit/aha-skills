@@ -14,13 +14,6 @@
 
 set -uo pipefail
 
-capture() {
-  local cmd="$1"
-  shift
-  command -v "$cmd" >/dev/null 2>&1 || return 1
-  "$cmd" "$@" 2>/dev/null || true
-}
-
 ego_available=false
 ego_version=""
 ego_executable=""
