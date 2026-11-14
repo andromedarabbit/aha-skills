@@ -1,6 +1,6 @@
 ---
-name: linkedin-replies
-description: "LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다. \"LinkedIn 답장 안 한 메시지 확인해줘\", \"회신 초안 써줘\", \"LinkedIn 정기 확인 등록해줘\" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다."
+name: linkedin-followup
+description: "LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다(링크드인 팔로업 루프). \"LinkedIn 팔로업 확인해줘\", \"LinkedIn 답장 안 한 메시지 확인해줘\", \"회신 초안 써줘\", \"LinkedIn 정기 확인 등록해줘\" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다."
 version: "1.9.0"
 context: inline
 language: "korean"
@@ -238,7 +238,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/reply.mjs" --mode unattended scan < /dev/null
 아래 내용을 새 세션에 전달한다. 고정 캐시 경로나 현재 세션의 job을 넣지 않는다.
 
 ```text
-이번 호출은 무인(unattended) LinkedIn 정기 확인이다. /social-experts:linkedin-replies 스킬을 로드한다.
+이번 호출은 무인(unattended) LinkedIn 정기 확인이다. /social-experts:linkedin-followup 스킬을 로드한다.
 스킬 또는 필요한 연결을 찾을 수 없으면 환경 오류를 남기고 해당 호출을 끝낸다.
 스킬의 --mode unattended scan을 정확히 1회 수행한다. 재시도·확인 질문·setup·prepare·승인 생성·send·automation 변경·별도 알림은 하지 않는다.
 후보별 상대·대화 구분·최근 요청 요약·답장 초안과 조회 범위·완전성·실패 사유를 이 Orca 세션에 남긴다. 인증 오류·부분 조회·후보 0건을 구분한다.

@@ -30,14 +30,14 @@ Cloudflare Email Routing + Gmail 조합의 운영 계층 — 라우팅 설정 �
 
 ## social-experts
 
-### [linkedin-replies](skills/social-experts/linkedin-replies)
+### [linkedin-followup](skills/social-experts/linkedin-followup)
 
 **버전**: 1.9.0
 
-LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다. "LinkedIn 답장 안 한 메시지 확인해줘", "회신 초안 써줘", "LinkedIn 정기 확인 등록해줘" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다.
+LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다(링크드인 팔로업 루프). "LinkedIn 팔로업 확인해줘", "LinkedIn 답장 안 한 메시지 확인해줘", "회신 초안 써줘", "LinkedIn 정기 확인 등록해줘" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다.
 
-- [문서](skills/social-experts/linkedin-replies/README.md)
-- [구현 가이드](skills/social-experts/linkedin-replies/docs/GUIDELINES.md)
+- [문서](skills/social-experts/linkedin-followup/README.md)
+- [구현 가이드](skills/social-experts/linkedin-followup/docs/GUIDELINES.md)
 
 ### [social-posting](skills/social-experts/social-posting)
 

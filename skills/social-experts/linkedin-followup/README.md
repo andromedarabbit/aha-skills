@@ -1,4 +1,4 @@
-# linkedin-replies
+# linkedin-followup
 
 LinkedIn의 최근 대화 중 아직 답하지 않은 후보를 찾아 요약·답장 초안을 검토하고, 승인한 본문으로 기존 대화에 회신하는 스킬입니다.
 읽음 여부가 아니라 마지막 일반 메시지의 발신자를 기준으로 판단합니다. 그룹·홍보성·감사 메시지도 숨기지 않습니다.
@@ -30,10 +30,10 @@ LinkedIn의 최근 대화 중 아직 답하지 않은 후보를 찾아 요약·�
 
 1. 선택한 ego-browser 실행 파일의 절대경로와 `ego-browser --version`으로 확인한 버전을 사용합니다. TaskSpace 이름은 스킬 전용 고유 이름(예: `linkedin-replies-skill`)으로 정합니다. 로그인은 사용자가 ego lite에서 직접 완료한 상태를 전제하며 스킬은 1Password·비밀번호를 다루지 않습니다. 다른 실행 파일·계정으로 대체하지 않습니다. 문서가 설치·업데이트를 요구하면 중단하고 별도 동의를 받습니다.
 2. 사용자가 동의한 기존 LinkedIn 메시지 탭을 준비합니다. credentials 없는 정확한 HTTPS `www.linkedin.com` origin의 `/messaging`·`/messaging/` 하위 경로를 후보로 봅니다. query·fragment가 붙어도 제외하지 않지만 다른 origin·포트·로그인 화면·`/messaging-evil`은 거부합니다. 스크립트가 탭을 만들거나 이동하지는 않습니다. 사용자는 시험 중 이 탭을 조작하지 않습니다.
-3. 아래 네 필드를 stdin JSON으로 전달해 목록 탭 ID만 발견합니다. `SKILL_DIR`은 저장소 루트에서 아래와 같이 정합니다. 설치본은 실제 `linkedin-replies/SKILL.md`가 있는 절대경로를 사용합니다.
+3. 아래 네 필드를 stdin JSON으로 전달해 목록 탭 ID만 발견합니다. `SKILL_DIR`은 저장소 루트에서 아래와 같이 정합니다. 설치본은 실제 `linkedin-followup/SKILL.md`가 있는 절대경로를 사용합니다.
 
    ```bash
-   SKILL_DIR="$PWD/skills/social-experts/linkedin-replies"
+   SKILL_DIR="$PWD/skills/social-experts/linkedin-followup"
    node "$SKILL_DIR/scripts/reply.mjs" --mode manual inspect <<'JSON'
    {"executable":"/선택한/ego-browser/절대경로","taskSpaceName":"linkedin-replies-skill"}
    JSON
@@ -119,11 +119,11 @@ UI 금지 재조회 성공은 확인 당시의 접근 가능성만 뜻합니다.
 
 ## 스크립트 입력
 
-저장소를 클론했다면 **저장소 루트에서** 경로를 정합니다. 설치본은 `linkedin-replies/SKILL.md`가 있는
+저장소를 클론했다면 **저장소 루트에서** 경로를 정합니다. 설치본은 `linkedin-followup/SKILL.md`가 있는
 실제 디렉토리의 절대경로를 `SKILL_DIR`로 지정합니다. 캐시 해시나 최신 디렉토리를 추측하지 마세요.
 
 ```bash
-SKILL_DIR="$PWD/skills/social-experts/linkedin-replies"
+SKILL_DIR="$PWD/skills/social-experts/linkedin-followup"
 node "$SKILL_DIR/scripts/reply.mjs" --mode manual scan < /dev/null
 node "$SKILL_DIR/scripts/reply.mjs" --mode unattended scan < /dev/null
 bash "$SKILL_DIR/scripts/tests/run.sh"

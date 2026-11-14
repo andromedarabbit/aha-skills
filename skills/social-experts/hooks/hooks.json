@@ -22,7 +22,7 @@
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/linkedin-replies/scripts/record-approval.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/linkedin-followup/scripts/record-approval.mjs\""
           }
         ]
       }
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/linkedin-replies/scripts/record-approval.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/linkedin-followup/scripts/record-approval.mjs\""
           }
         ]
       }
