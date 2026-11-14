@@ -41,7 +41,7 @@ LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬
 
 ### [social-posting](skills/social-experts/social-posting)
 
-**버전**: 0.9.1
+**버전**: 0.9.2
 
 소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text·스레드 규칙)을 기계 검증한 뒤 승인을 받아 ego lite(ego-browser 고정 스크립트) 실행 계층으로 실제 계정에 게시한다. 스레드(X·Bluesky 답글 체인)도 지원한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 스레드로 변환해줘", "스레드로 뽑아줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 ego-post 실행 계층으로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser·ego-browser 스킬 소관이다.
 

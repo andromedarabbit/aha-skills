@@ -21,12 +21,12 @@ const stateDir = join(work, 'state');
 mkdirSync(stateDir, { recursive: true });
 
 // 가짜 ego 실행파일: spawn 인자는 ['nodejs'], 스크립트는 stdin으로 온다(둘 다 기록).
-// respond가 '#!'로 시작하면 스크립트 본문 그대로, 아니면 JSON 1줄 응답으로 쓴다.
+// 일반 응답은 stdin을 끝까지 읽어 EPIPE 경합을 피한다. '#!' 스크립트는 입력 소비도 직접 정의한다.
 function fakeEgo(name, respond) {
   const path = join(work, `${name}.sh`);
   const body = respond.startsWith('#!')
     ? respond
-    : `#!/bin/sh\nprintf '%s\\n' '${respond.replace(/'/g, `'\\''`)}'\n`;
+    : `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '${respond.replace(/'/g, `'\\''`)}'\n`;
   writeFileSync(path, body);
   chmodSync(path, 0o755);
   return path;
@@ -72,6 +72,20 @@ test('execute: stdout JSON 파싱', async () => {
   assert.deepEqual(await mod.execute(exe, 'ignored', 10000), { ok: true });
 });
 
+test('fakeEgo: 정상 응답 stub은 큰 stdin도 끝까지 소비한다', async () => {
+  const exe = fakeEgo('large-stdin', '{"ok":true}');
+  assert.deepEqual(await mod.execute(exe, 'x'.repeat(2 * 1024 * 1024), 10000), { ok: true });
+});
+
+test('execute: 입력을 닫은 자식은 유효한 JSON을 출력해도 EGO_STDIN_FAILED', async () => {
+  const exe = fakeEgo('closed-stdin', `#!/bin/sh
+exec 0<&-
+printf '%s\\n' '{"ok":true}'
+sleep 30
+`);
+  await assert.rejects(() => mod.execute(exe, 'x'.repeat(2 * 1024 * 1024), 10000), /EGO_STDIN_FAILED/);
+});
+
 test('execute: stderr JSON 재배선(0.6.3.14 계약) — notice 줄만 허용', async () => {
   const exe = fakeEgo('stderr-ok', `#!/bin/sh
 cat >/dev/null
@@ -97,6 +111,7 @@ test('execute: JSON 아님 → EGO_JSON_INVALID', async () => {
 
 test('execute: 자식 exit != 0 → EGO_CONNECT_FAILED', async () => {
   const exe = fakeEgo('exit1', `#!/bin/sh
+cat >/dev/null
 exit 3
 `);
   await assert.rejects(() => mod.execute(exe, 'ignored', 10000), /EGO_CONNECT_FAILED/);
@@ -260,7 +275,7 @@ test('POST_STEP_CODES·EGO_FAILURE_REASONS 열거 일관성', () => {
 });
 
 test('CLI post: 자식 프로세스 응답을 잃으면 POST_UNKNOWN이며 재게시를 단정하지 않는다', () => {
-  writeBinding(bindingFor(fakeEgo('lost-response', '#!/bin/sh\nexit 3\n')));
+  writeBinding(bindingFor(fakeEgo('lost-response', '#!/bin/sh\ncat >/dev/null\nexit 3\n')));
   const r = runCli(['post'], JSON.stringify(basePayload));
   assert.equal(r.status, 1);
   assert.deepEqual(cliJson(r), { status: 'POST_UNKNOWN', urls: [], postedCount: 0, reason: 'EGO_CONNECT_FAILED' });

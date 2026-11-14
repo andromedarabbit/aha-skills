@@ -1,5 +1,11 @@
 # CHANGELOG — social-posting
 
+## 0.9.2 (2026-11-14)
+
+- 테스트용 ego 응답 stub이 stdin을 끝까지 소비한 뒤 출력·종료하도록 수정한다. Linux에서 입력 파이프가 먼저 닫혀 `EGO_STDIN_FAILED`로 실패하던 경합을 제거한다
+- 큰 stdin 입력과 조기 입력 단절 회귀 테스트를 추가한다. 실제 실행 계층의 입력 오류 차단과 `POST_UNKNOWN` 계약은 유지한다
+- macOS·Node 26 및 Linux·Node 24에서 회귀를 검증한다. 실제 플랫폼 게시 동작은 변경하지 않는다
+
 ## 0.9.1 (2026-11-14)
 
 - 게시 확정 수와 URL 회수를 분리하고, 클릭 후 결과 불명은 `POST_UNKNOWN`으로 보고해 재시도를 막는다. exit 1의 부분 게시 JSON도 publish.sh가 보존한다
