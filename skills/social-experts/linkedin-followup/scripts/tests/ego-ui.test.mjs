@@ -1175,12 +1175,28 @@ test('클릭 뒤 증거 부족은 UNKNOWN으로 남기고 ledger를 유지한다
   await approve(t, f, question);
   const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
   assert.equal(result.data.status, 'UNKNOWN');
+  assert.deepEqual(result.data.verification, { checked: true, sent: false, note: 'seg 기록 없음' });
   const job = JSON.parse(readFileSync(join(f.home, '.local/share/aha-skills/linkedin-replies/jobs', jobId + '.json'), 'utf8'));
   assert.equal(job.state, 'unknown');
   const ledgerDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
   const ledger = JSON.parse(readFileSync(join(ledgerDir, readdirSync(ledgerDir)[0]), 'utf8'));
   assert.equal(ledger.state, 'unknown');
   assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')).filter(n => n.startsWith('ego-profile-')), []);
+});
+
+test('UNKNOWN은 read 확인 관측으로 sent 여부를 덧붙인다', async t => {
+  const f = sendSetup(t, { threadQueue: [{ isOther: true, text: '다른 내용' }], readEvents: { renderedCount: 1, events: [{ senderIsOther: false, text: BODY }] } });
+  // scan이 승격한 것처럼 seg 기록을 심는다 — 확인 관측이 이 seg로 스레드를 읽는다.
+  const recDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
+  mkdirSync(recDir, { recursive: true });
+  const seg = '2-OWNiMGNhZGUtYmVlZi00MTQxLThlYmItZDkwMGVhYjViZmIyXzEwMA==';
+  const recKey = createHash('sha256').update(JSON.stringify(['ego-observation', 'test-slug', 'uuid', CONV_UUID])).digest('hex');
+  writeFileSync(join(recDir, `ego-obs-${recKey}.json`), JSON.stringify({ uuid: CONV_UUID, name: 'Jingyu Kim', threadSeg: seg, status: 'candidate' }), { mode: 0o600 });
+  const { jobId, question } = prepareJob(t, f);
+  await approve(t, f, question);
+  const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  assert.equal(result.data.status, 'UNKNOWN');
+  assert.deepEqual(result.data.verification, { checked: true, sent: true });
 });
 
 test('영수증 없는 send는 자식을 시작하지 않고 APPROVAL_REQUIRED로 막는다', t => {

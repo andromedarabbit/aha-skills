@@ -439,7 +439,7 @@ async function send(input) {
 // 고정 전송 호출을 한 번 실행한다. 클릭 이전 실패는 안전 차단(ledger 제거·job stale), 클릭 뒤 증거 부족과
 // 부모 수준 실패(작업 종료 불명)는 unknown과 락 유지다.
 async function sendEgo(job, text) {
-  const { sendEgoThread, EGO_STEP_CODES } = await import('./ego-ui.mjs');
+  const { sendEgoThread, readEgoThread, EGO_STEP_CODES } = await import('./ego-ui.mjs');
   const link = egoBinding();
   if (link.executable !== job.executable || link.taskSpaceName !== job.taskSpaceName || link.account?.profileId !== job.account.id) { stale(job); throw fail('STALE'); }
   // send()가 이미 대화 락을 보유한다 — 재획득하지 않는다.
@@ -464,6 +464,7 @@ async function sendEgo(job, text) {
     let resultStatus = 'blocked';
     let blockReason = 'EGO_OUTCOME_UNKNOWN';
     let messageUrn = null;
+    let verification = null;
     try {
       durableWrite(join(lockPath, 'operation.json'), { operation: 'send', attemptId: job.jobId, startedAt: new Date().toISOString(), ownerPid: process.pid });
       const outcome = await sendEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
@@ -479,6 +480,25 @@ async function sendEgo(job, text) {
       } else if (code === 'SEND_UNKNOWN') {
         // 클릭은 있었고 증거가 없다 — 결과 불명이지만 자식 정상 종료로 작업 종료는 확인됐다.
         resultStatus = 'unknown';
+        // 확인 관측 1회(재전송이 아니라 관측이다): 증거 폴링이 늦은 렌더를 놓치는 실측(2026-11-15 Jane) 보강.
+        // 부모 수준 종료 불명(EGO_OUTCOME_UNKNOWN)에는 새 UI 호출을 하지 않는다.
+        try {
+          const recordPath = join(STATE_DIR, 'conversations', `ego-obs-${digest(['ego-observation', link.account?.slug ?? null, 'uuid', job.conversationId])}.json`);
+          let record = null;
+          try { record = readPrivate(recordPath); } catch { record = null; }
+          if (record && typeof record.threadSeg === 'string' && /^2-[A-Za-z0-9_-]{2,254}={0,2}$/.test(record.threadSeg)) {
+            const seen = await readEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
+              threadSeg: record.threadSeg, maxEventChars: 500, maxEvents: 3, deadlineMs: 20000 });
+            const last = Array.isArray(seen.events) && seen.events.length ? seen.events[seen.events.length - 1] : null;
+            const sent = !!last && last.senderIsOther === false &&
+              String(last.text || '').replace(/\s+/g, ' ').trim() === String(text).replace(/\s+/g, ' ').trim();
+            verification = { checked: true, sent };
+          } else {
+            verification = { checked: true, sent: false, note: 'seg 기록 없음' };
+          }
+        } catch {
+          verification = { checked: true, sent: false, note: '확인 관측 실패' };
+        }
       } else {
         resultStatus = 'blocked';
         blockReason = typeof code === 'string' ? code : 'EGO_OUTCOME_UNKNOWN';
@@ -502,7 +522,7 @@ async function sendEgo(job, text) {
     job.state = resultStatus;
     durableWrite(jobPath(job.jobId), job);
     eraseBody(job);
-    return { status: resultStatus === 'sent' ? 'SENT' : 'UNKNOWN', jobId: job.jobId, ...(messageUrn ? { eventId: messageUrn } : {}) };
+    return { status: resultStatus === 'sent' ? 'SENT' : 'UNKNOWN', jobId: job.jobId, ...(messageUrn ? { eventId: messageUrn } : {}), ...(verification ? { verification } : {}) };
   }
 }
 
