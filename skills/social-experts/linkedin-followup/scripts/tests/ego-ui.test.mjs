@@ -116,7 +116,14 @@ const pageStub = (label, baseUrl) => ({
       return state.thread ?? null;
     }
     if (src.includes('isOther')) return state.pre ?? { isOther: true };
-    if (src.includes('data-event-urn')) return state.eventCount ?? 2;
+    if (src.includes('data-event-urn')) {
+      if (Array.isArray(state.rowCountSequence) && state.rowCountSequence.length) {
+        const next = state.rowCountSequence.shift();
+        if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, rowCountSequence: state.rowCountSequence }));
+        return next;
+      }
+      return state.eventCount ?? 2;
+    }
     if (src.includes('initialCheck')) return state.composerBlocks ?? { found: true, text: '', match: true };
     if (src.includes('verifyCleared')) return state.clearedBlocks ?? { found: true, text: '', match: true };
     if (src.includes('verifyReadback')) return state.readbackBlocks ?? { found: true, text: '', match: true };
@@ -996,6 +1003,31 @@ test('read는 caps 입력을 받아 이벤트 수·본문 길이를 조정한다
   assert.equal(result.data.events.length, 3);
   assert.equal(result.data.history.returnedCount, 3);
   assert.equal(result.data.history.truncatedFromOldest, true);
+});
+
+test('read는 행 수가 안정될 때까지 대기해 늦게 렌더된 메시지를 놓치지 않는다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({
+    readEvents: { renderedCount: 2, events: [{ senderIsOther: true, text: '먼저 온 메시지' }, { senderIsOther: true, text: '나중에 온 메시지' }] },
+    rowCountSequence: [1, 1, 2, 2, 2],
+  });
+  const result = f.runRead({ maxEvents: 10, maxEventChars: 300 });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.events.length, 2, '안정화 후 2건을 반환한다');
+  assert.equal(result.data.history.renderedCount, 2);
+});
+
+test('read는 행 수가 이미 안정하면 곧바로 추출한다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({
+    readEvents: { renderedCount: 1, events: [{ senderIsOther: true, text: '단일 메시지' }] },
+    rowCountSequence: [1, 1, 1],
+  });
+  const result = f.runRead({ maxEvents: 10, maxEventChars: 300 });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.events.length, 1);
 });
 
 test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다', t => {

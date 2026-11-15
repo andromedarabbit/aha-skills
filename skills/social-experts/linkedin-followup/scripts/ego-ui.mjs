@@ -539,6 +539,19 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
           if (/^[0-9a-f-]{16,64}$/i.test(candidate)) uuid = candidate;
         } catch {}
         if (uuid) {
+          // 행 수 안정화(2틱): 최신 메시지의 늦은 렌더를 기다린다 — 즉시 추출은 이전분을 누락할 수 있다
+          // (2026-11-15 실측). deadline 잔여분 안에서만 대기한다.
+          let rowStable = 0;
+          let prevRows = -1;
+          const rowDeadline = Math.min(Date.now() + 5000, openDeadline);
+          while (Date.now() < rowDeadline) {
+            const rc = await page.evaluate(() => [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')].length);
+            if (rc == null) stop('EGO_EVAL_STOPPED');
+            rowStable = rc === prevRows ? rowStable + 1 : 1;
+            prevRows = rc;
+            if (rowStable >= 2) break;
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
           // 실측(2026-11-14, KTD19 반증): data-event-urn의 프로필 세그먼트는 메시지 발신자가 아니라
           // 수신함 소유자(나)다. 메시지 행(.msg-s-event-listitem)의 `--other` 클래스가 실제 발신 신호다 —
           // 상대 메시지에는 붙고 내 메시지에는 없다(그룹 스레드의 타 멤버 메시지에도 붙는다).
@@ -816,13 +829,21 @@ async function readThread(spaceName, threadUrl, maxEventChars, maxEvents, deadli
     await page.goto(threadUrl, { timeout: 45000 });
     const current = await page.url();
     if (!classify(current)) stop(login(current) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
-    // 렌더 폴링: 최소 1개의 메시지 행이 떠야 한다.
+    // 렌더 안정화: 최소 1행 이후 행 수가 3틱 연속 동일해야 추출한다 — 이 화면은 오래된 메시지를
+    // 늦게 렌더한다(2026-11-15 실측: 1행에서 추출해 이전 메시지를 누락, 실제 2행). deadlineMs 내에서만 대기.
     let ready = false;
+    let lastCount = 0;
+    let stableTicks = 0;
     const readyDeadline = Date.now() + Math.min(20000, Number(deadlineMs) || 20000);
     while (Date.now() < readyDeadline) {
       const probe = await page.evaluate(() => [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')].length);
       if (probe == null) stop('EGO_EVAL_STOPPED');
-      if (probe >= 1) { ready = true; break; }
+      if (probe >= 1) {
+        ready = true;
+        stableTicks = probe === lastCount ? stableTicks + 1 : 1;
+        lastCount = probe;
+        if (stableTicks >= 3) break;
+      }
       await new Promise(resolve => setTimeout(resolve, 300));
     }
     if (!ready) stop('EGO_SNAPSHOT_FAILED');
