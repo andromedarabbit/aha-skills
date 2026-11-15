@@ -970,6 +970,72 @@ export async function bootstrap(platform, env = process.env, count = 20) {
   return output;
 }
 
+function scanDate(value) {
+  if (typeof value !== 'string' || !/(?:Z|[+-]\d\d:\d\d)$/.test(value)) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function validateScanPayload(payload) {
+  if (!exactKeys(payload, ['platform', 'since', 'until', 'cursor'])) throw fail('INVALID_PAYLOAD');
+  if (!PLATFORMS.includes(payload.platform) || payload.cursor !== null) throw fail('INVALID_PAYLOAD');
+  const since = scanDate(payload.since);
+  const until = scanDate(payload.until);
+  if (!since || !until || since >= until) throw fail('INVALID_PAYLOAD');
+  return payload;
+}
+
+function normalizeText(value) {
+  return String(value ?? '').toLowerCase().replace(/\s+/g, ' ').replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+}
+
+function similarity(left, right) {
+  const a = new Set(normalizeText(left).split(' ').filter(Boolean));
+  const b = new Set(normalizeText(right).split(' ').filter(Boolean));
+  if (!a.size || !b.size) return 0;
+  let common = 0;
+  for (const token of a) if (b.has(token)) common += 1;
+  return common / Math.max(a.size, b.size);
+}
+
+function validCandidate(value) {
+  return exactKeys(value, ['id', 'url', 'text']) && validString(value.id, 512) && validString(value.url, 2048) && typeof value.text === 'string';
+}
+
+export function compareCandidates(payload) {
+  if (!exactKeys(payload, ['candidate', 'existing']) || !validCandidate(payload.candidate) || !Array.isArray(payload.existing) || payload.existing.some(item => !validCandidate(item))) throw fail('INVALID_PAYLOAD');
+  const exact = payload.existing.filter(item => item.url === payload.candidate.url || normalizeText(item.text) === normalizeText(payload.candidate.text));
+  if (exact.length) return { status: 'COMPARISON_DONE', decision: 'duplicate', evidence: exact.map(item => item.id) };
+  const similar = payload.existing.filter(item => similarity(item.text, payload.candidate.text) >= 0.6);
+  return { status: 'COMPARISON_DONE', decision: similar.length ? 'needs_review' : 'new', evidence: similar.map(item => item.id) };
+}
+
+export async function scan(payload, env = process.env) {
+  validateScanPayload(payload);
+  const binding = readBinding(env);
+  const identity = binding?.identity?.[payload.platform];
+  if (!binding || !identity) throw fail('EGO_NOT_BOUND');
+  const observed = await bootstrap(payload.platform, env, 50);
+  const since = new Date(payload.since).getTime();
+  const until = new Date(payload.until).getTime();
+  const timed = observed.posts.filter(post => scanDate(post.time));
+  const candidates = timed.filter(post => {
+    const time = new Date(post.time).getTime();
+    return time >= since && time < until;
+  }).map(post => ({ id: post.url || `${post.time}:${normalizeText(post.text).slice(0, 160)}`, url: post.url || '', text: post.text, publishedAt: post.time, media: [] }));
+  const times = timed.map(post => new Date(post.time).getTime());
+  return {
+    status: 'SCAN_DONE', platform: payload.platform, identity, candidates,
+    coverage: {
+      requestedSince: payload.since, requestedUntil: payload.until,
+      observedOldest: times.length ? new Date(Math.min(...times)).toISOString() : null,
+      observedNewest: times.length ? new Date(Math.max(...times)).toISOString() : null,
+      complete: false, stopReason: 'PROFILE_SCROLL_LIMIT',
+    },
+    nextCursor: null,
+  };
+}
+
 export function validatePostPayload(payload) {
   if (!exactKeys(payload, ['platform', 'format', 'body', 'media', 'link', 'visibility', 'identity'])) throw fail('INVALID_PAYLOAD');
   if (!PLATFORMS.includes(payload.platform)) throw fail('INVALID_PAYLOAD');
@@ -1063,6 +1129,14 @@ async function main() {
       const count = Number(flag('--count') ?? 20);
       if (!platform || !Number.isInteger(count) || count < 1 || count > 50) throw fail('INVALID_ARGUMENT');
       emit(await bootstrap(platform, process.env, count));
+      return;
+    }
+    if (command === 'scan') {
+      emit(await scan(JSON.parse(await readStdin()), process.env));
+      return;
+    }
+    if (command === 'compare') {
+      emit(compareCandidates(JSON.parse(await readStdin())));
       return;
     }
     if (command === 'post') {

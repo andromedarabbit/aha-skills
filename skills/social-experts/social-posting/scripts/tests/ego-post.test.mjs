@@ -151,6 +151,31 @@ test('postTimeoutMs: 세그먼트 수에 비례, 상한 570s', () => {
   assert.equal(mod.postTimeoutMs(25), 570000);
 });
 
+test('validateScanPayload: timezone 범위와 cursor를 엄격히 검증한다', () => {
+  const payload = { platform: 'x', since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00+00:00', cursor: null };
+  assert.deepEqual(mod.validateScanPayload(payload), payload);
+  assert.throws(() => mod.validateScanPayload({ ...payload, since: '2026-11-15T00:00:00Z', until: '2026-11-14T00:00:00Z' }), /INVALID_PAYLOAD/);
+  assert.throws(() => mod.validateScanPayload({ ...payload, since: '2026-11-14' }), /INVALID_PAYLOAD/);
+});
+
+test('compareCandidates: URL/정규화 본문 일치는 duplicate, 유사 본문은 needs_review다', () => {
+  const candidate = { id: 'source', url: 'https://x.com/me/1', text: '발행 파이프라인의 실패를 줄였습니다' };
+  assert.equal(mod.compareCandidates({ candidate, existing: [{ id: 'url', url: candidate.url, text: '다른 본문' }] }).decision, 'duplicate');
+  assert.equal(mod.compareCandidates({ candidate, existing: [{ id: 'similar', url: 'https://bsky.app/a', text: '발행 파이프라인 실패를 줄였습니다' }] }).decision, 'needs_review');
+  assert.equal(mod.compareCandidates({ candidate, existing: [{ id: 'other', url: 'https://bsky.app/b', text: '전혀 다른 소식' }] }).decision, 'new');
+});
+
+test('CLI scan: bound identity와 관찰 범위를 보존하고 완료를 가장하지 않는다', () => {
+  writeBinding(bindingFor(fakeEgo('scan', '{"status":"BOOTSTRAP_OBSERVED","posts":[{"text":"최근 글","url":"https://x.com/me/1","time":"2026-11-14T12:00:00Z"}]}')));
+  const r = runCli(['scan'], JSON.stringify({ platform: 'x', since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', cursor: null }));
+  assert.equal(r.status, 0, r.stderr);
+  const out = cliJson(r);
+  assert.equal(out.status, 'SCAN_DONE');
+  assert.equal(out.identity, 'me');
+  assert.equal(out.candidates.length, 1);
+  assert.equal(out.coverage.complete, false);
+});
+
 test('discoverExecutable: SOCIAL_EGO_EXECUTABLE 절대경로 우선', () => {
   assert.equal(mod.discoverExecutable({ SOCIAL_EGO_EXECUTABLE: '/opt/ego/ego-browser' }), '/opt/ego/ego-browser');
   assert.equal(mod.discoverExecutable({ SOCIAL_EGO_EXECUTABLE: 'relative/path' }), null);
