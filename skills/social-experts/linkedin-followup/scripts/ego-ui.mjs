@@ -558,11 +558,14 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
           const thread = await page.evaluate(eventTextMax => {
             const extract = row => {
               const isOther = /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(row.className || ''));
+              // 블록 경계 공백 복원: 이 편집기는 문단을 블록으로 만들고 textContent 직렬화가 경계
+              // 공백을 유실한다(2026-11-15 실측: "connecting.You're"). 블록별 텍스트를 공백으로 이어 붙인다.
               // 이벤트 컨테이너 textContent는 'View <이름>'s profile … 시각 … 이모지 액션 바'가 앞에 붙는다.
               // 복제본에서 헤더·액션 마크업을 떼고 버블 본문만 남긴다.
               const clone = row.cloneNode(true);
               for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
-              return { senderIsOther: isOther, text: (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, eventTextMax) };
+              const parts = clone.children.length ? [...clone.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean) : [(clone.textContent || '').replace(/\s+/g, ' ').trim()];
+              return { senderIsOther: isOther, text: parts.join(' ').slice(0, eventTextMax) };
             };
             const rows = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
             const all = rows.map(extract);
@@ -767,7 +770,8 @@ async function sendThread(spaceName, messagingUrl, conversationName, conversatio
         if (last) {
           const clone = last.cloneNode(true);
           for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
-          text = (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+          const parts = clone.children.length ? [...clone.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean) : [(clone.textContent || '').replace(/\s+/g, ' ').trim()];
+          text = parts.join(' ').slice(0, 400);
         }
         const urn = last ? String(last.getAttribute('data-event-urn') || '') : '';
         return { isOther, text, urn };
@@ -853,7 +857,8 @@ async function readThread(spaceName, threadUrl, maxEventChars, maxEvents, deadli
         // 이벤트 컨테이너 textContent는 헤더·시각·액션 바가 앞에 붙는다 — 복제본에서 떼고 버블 본문만 남긴다.
         const clone = row.cloneNode(true);
         for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
-        return { senderIsOther: isOther, text: (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, eventTextMax) };
+        const parts = clone.children.length ? [...clone.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean) : [(clone.textContent || '').replace(/\s+/g, ' ').trim()];
+              return { senderIsOther: isOther, text: parts.join(' ').slice(0, eventTextMax) };
       };
       const rows = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
       const renderedCount = rows.length;
