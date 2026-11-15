@@ -702,7 +702,13 @@ export async function scanEgo(input) {
       detailOpened += 1;
       item.conversationUuid = opened.conversationUuid;
       item.lastSenderIsOther = opened.lastSenderIsOther;
-      if (opened.proofMatch !== true) { item.status = 'review'; item.reason = 'LATEST_EVENT_UNPROVEN'; continue; }
+      if (opened.proofMatch !== true) {
+        item.status = 'review'; item.reason = 'LATEST_EVENT_UNPROVEN';
+        // 개방에 성공한 검토 항목도 seg 기록을 승격한다 — read로 본문을 확인할 수 있어야 실제 검토가 가능하다(2026-11-15).
+        durableWrite(join(recordsDir, `ego-obs-${digest(['ego-observation', slug, 'uuid', opened.conversationUuid])}.json`),
+          { uuid: opened.conversationUuid, name: item.name, previewHash: item.previewHash, lastSenderKind: opened.lastSenderIsOther ? 'other' : 'self', status: 'review', observedAt: new Date().toISOString(), threadSeg: opened.threadSeg });
+        continue;
+      }
       if (opened.lastSenderIsOther !== true) {
         item.status = 'answered';
         answeredNames.push(item.name);
