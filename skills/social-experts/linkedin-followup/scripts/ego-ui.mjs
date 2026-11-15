@@ -612,6 +612,7 @@ export async function openEgoThread(binding) {
 // readback → 전송 버튼 1회 클릭 → 새 자기 발신 이벤트 증거. 클릭 이전 단계의 실패는 안전 차단이고,
 // 클릭 뒤 증거 부족은 SEND_UNKNOWN(결과 불명)이다.
 async function sendThread(spaceName, messagingUrl, conversationName, conversationUuid, expectedBody, deadlineMs, classify, login) {
+
   let task;
   try { task = await taskSpace(spaceName); }
   catch (error) {
@@ -683,39 +684,59 @@ async function sendThread(spaceName, messagingUrl, conversationName, conversatio
       return { isOther: !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || '')) };
     });
     if (!pre || pre.isOther !== true) stop('CRITERIA_CHANGED');
-    // 기존 composer 잔여 본문: 승인된 본문 전체와 정확히 일치하는 잔여분만은 이전 시도가 남긴 것이므로
-    // 네이티브 키보드로 정리한다 — 그 외 내용은 덮지 않는 원칙은 유지한다.
-    const composer = await page.evaluate(() => {
+    // 기존 composer 잔여 본문: 승인된 본문과 블록 구조까지 정확히 일치하는 잔여분만은 이전 시도가 남긴
+    // 것이므로 네이티브 키보드로 정리한다 — 그 외 내용은 덮지 않는 원칙은 유지한다.
+    const composer = await page.evaluate(expectedText => {
       const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
       if (!box) return { found: false };
-      return { found: true, text: (box.innerText || '') };
-    });
+      const blocks = [...box.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+      if (!blocks.length) blocks.push((box.textContent || '').replace(/\s+/g, ' ').trim());
+      const want = String(expectedText).split('\n').map(line => line.replace(/\s+/g, ' ').trim());
+      const match = blocks.length === want.length && blocks.every((b, i) => b === want[i]);
+      return { found: true, text: blocks.join('\n'), match, marker: 'initialCheck' };
+    }, expectedBody);
     if (!composer || composer.found !== true) stop('EGO_SCHEMA_INVALID');
     if (String(composer.text ?? '').trim()) {
-      if (String(composer.text ?? '') !== expectedBody) stop('COMPOSER_NOT_EMPTY');
+      if (composer.match !== true) stop('COMPOSER_NOT_EMPTY');
       try {
         await page.focus('[role="textbox"], [contenteditable="true"]');
         await page.keyboard.press('ControlOrMeta+A');
         await page.keyboard.press('Backspace');
       } catch { stop('EGO_ATTACH_FAILED'); }
-      const cleared = await page.evaluate(() => {
+      const cleared = await page.evaluate(expectedText => {
         const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
-        return { text: box ? (box.innerText || '') : null, cleared: true };
-      });
+        if (!box) return { found: false };
+        const blocks = [...box.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+        if (!blocks.length) blocks.push((box.textContent || '').replace(/\s+/g, ' ').trim());
+        const want = String(expectedText).split('\n').map(line => line.replace(/\s+/g, ' ').trim());
+        const match = blocks.length === want.length && blocks.every((b, i) => b === want[i]);
+        return { found: true, text: blocks.join('\n'), match, marker: 'verifyCleared' };
+      }, expectedBody);
       if (!cleared || typeof cleared.text !== 'string' || cleared.text.trim()) stop('COMPOSER_NOT_EMPTY');
     }
     // 본문 삽입: 네이티브 keyboard.insertText(신뢰 입력). execCommand는 비신뢰 이벤트라 LinkedIn 에디터
     // 모델이 등록하지 않는다(2026-11-15 실측 — DOM에 텍스트가 보여도 전송 UI가 렌더되지 않았다).
     try {
       await page.focus('[role="textbox"], [contenteditable="true"]');
-      await page.keyboard.insertText(expectedBody);
+      // 줄바꿈은 Shift+Enter로 편집기 방식대로 넣는다 — insertText의 \n은 블록으로 확장돼
+      // innerText가 부풀려진다(2026-11-15 실측: \n\n → \n\n\n\n\n). 연속 빈 줄은 경계 수만큼 누른다.
+      const lines = String(expectedBody).split('\n');
+      for (let i = 0; i < lines.length; i += 1) {
+        if (i > 0) await page.keyboard.press('Shift+Enter');
+        if (lines[i]) await page.keyboard.insertText(lines[i]);
+      }
     } catch { stop('EGO_ATTACH_FAILED'); }
-    // readback: 공백 정규화 없이 정확히 일치해야 전송 동작을 한다.
-    const readback = await page.evaluate(() => {
+    // readback: 블록 구조가 승인된 본문과 정확히 일치해야 전송 동작을 한다.
+    const readback = await page.evaluate(expectedText => {
       const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
-      return { text: box ? (box.innerText || '') : null };
-    });
-    if (!readback || typeof readback.text !== 'string' || readback.text !== expectedBody) stop('READBACK_MISMATCH');
+      if (!box) return { found: false };
+      const blocks = [...box.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+      if (!blocks.length) blocks.push((box.textContent || '').replace(/\s+/g, ' ').trim());
+      const want = String(expectedText).split('\n').map(line => line.replace(/\s+/g, ' ').trim());
+      const match = blocks.length === want.length && blocks.every((b, i) => b === want[i]);
+      return { found: true, text: blocks.join('\n'), match, marker: 'verifyReadback' };
+    }, expectedBody);
+    if (!readback || readback.found !== true || readback.match !== true) stop('READBACK_MISMATCH');
     // 전송 동작: 이 UI 변형에는 전송 버튼이 없다 — composer 힌트가 "Press Enter to Send"이므로(2026-11-15
     // 사용자 실측) Enter 1회로 전송한다. 클릭과 같은 전송 동작이므로 이전 실패는 BLOCKED, 이후 불명은 UNKNOWN이다.
     try {

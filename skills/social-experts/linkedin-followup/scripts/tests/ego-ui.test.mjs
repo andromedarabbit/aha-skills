@@ -117,11 +117,9 @@ const pageStub = (label, baseUrl) => ({
     }
     if (src.includes('isOther')) return state.pre ?? { isOther: true };
     if (src.includes('data-event-urn')) return state.eventCount ?? 2;
-    if (src.includes('cleared')) return state.cleared ?? { text: '', cleared: true };
-    if (src.includes('execCommand')) return state.fillOk ?? { ok: true };
-    if (src.includes('textbox') && src.includes('found')) return state.composer ?? { found: true, text: '' };
-    if (src.includes('textbox')) return state.readback ?? { text: '' };
-    if (src.includes("code: 'SEND_CLICKED'")) return state.sendClick ?? { code: 'SEND_CLICKED' };
+    if (src.includes('initialCheck')) return state.composerBlocks ?? { found: true, text: '', match: true };
+    if (src.includes('verifyCleared')) return state.clearedBlocks ?? { found: true, text: '', match: true };
+    if (src.includes('verifyReadback')) return state.readbackBlocks ?? { found: true, text: '', match: true };
     if (src.includes("li').length")) return state.listProbe ?? { rows: 2 };
     if (src.includes('ACoAAA')) return state.acoid ?? null;
     if (src.includes('hasConversationList')) return state.fingerprint ?? null;
@@ -1032,10 +1030,8 @@ const sendSetup = (t, extra = {}) => {
     click: { __setUrl: `https://www.linkedin.com/messaging/thread/${threadSeg}/`, __ret: { code: 'CLICKED' } },
     eventCount: 2,
     pre: { isOther: true },
-    composer: { found: true, text: '' },
-    fillOk: { ok: true },
-    readback: { text: BODY },
-    sendClick: { code: 'SEND_CLICKED' },
+    composerBlocks: { found: true, text: '', match: true },
+    readbackBlocks: { found: true, text: BODY, match: true },
     threadQueue: [{ isOther: false, text: BODY }],
     ...extra,
   });
@@ -1097,7 +1093,7 @@ test('전송 직전 기준 변화는 BLOCKED로 차단하고 ledger를 제거해
 });
 
 test('composer에 기존 내용이 있으면 READBACK·클릭 없이 차단한다', async t => {
-  const f = sendSetup(t, { composer: { found: true, text: '남의 초안' } });
+  const f = sendSetup(t, { composerBlocks: { found: true, text: '남의 초안', match: false } });
   const { jobId, question } = prepareJob(t, f);
   await approve(t, f, question);
   const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
@@ -1106,7 +1102,7 @@ test('composer에 기존 내용이 있으면 READBACK·클릭 없이 차단한�
 });
 
 test('composer의 승인 본문 잔여분만은 네이티브 키보드로 정리한 뒤 전송을 진행한다', async t => {
-  const f = sendSetup(t, { composer: { found: true, text: BODY }, cleared: { text: '', cleared: true } });
+  const f = sendSetup(t, { composerBlocks: { found: true, text: BODY, match: true } });
   const { jobId, question } = prepareJob(t, f);
   await approve(t, f, question);
   const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
@@ -1117,8 +1113,23 @@ test('composer의 승인 본문 잔여분만은 네이티브 키보드로 정리
   assert.ok(ops.includes('key:Backspace'), '삭제 키 기록이 남는다');
 });
 
+test('다중 문단 본문은 Shift+Enter로 줄바꿈을 넣어 전송한다', async t => {
+  const multi = '첫 문단입니다\n\n둘째 문단입니다';
+  // 실제 DOM 증거 추출은 공백을 정규화해 반환하므로 스텁도 평문을 serve한다.
+  const flat = multi.replace(/\s+/g, ' ');
+  const f = sendSetup(t, { readbackBlocks: { found: true, text: multi, match: true }, threadQueue: [{ isOther: false, text: flat }] });
+  const prepared = f.runReply({ conversationId: CONV_UUID, sessionId: 'sess-1', text: multi, conversationName: 'Jingyu Kim' }, 'manual', 'prepare');
+  assert.equal(prepared.data.status, 'OK');
+  await approve(t, f, prepared.data.question);
+  const result = f.runReply({ jobId: prepared.data.jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  assert.equal(result.data.status, 'SENT');
+  const ops = f.records('operations');
+  assert.ok(ops.includes('key:Shift+Enter'), 'Shift+Enter 기록이 남는다');
+  assert.ok(ops.filter(op => op === 'insertText').length >= 2, '문단별 insertText가 남는다');
+});
+
 test('readback 불일치는 클릭 없이 차단한다', async t => {
-  const f = sendSetup(t, { readback: { text: '다른 본문' } });
+  const f = sendSetup(t, { readbackBlocks: { found: true, text: '다른 본문', match: false } });
   const { jobId, question } = prepareJob(t, f);
   await approve(t, f, question);
   const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
