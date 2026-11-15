@@ -897,7 +897,89 @@ export async function readEgoThread(binding) {
       !Number.isSafeInteger(output.renderedCount) || output.renderedCount < 0 || output.renderedCount > 1999 ||
       !Number.isSafeInteger(output.returnedCount) || output.returnedCount < 0 || output.returnedCount > 50 ||
       output.renderedCount < output.returnedCount ||
-      output.truncatedFromOldest !== (output.renderedCount > output.returnedCount)) throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
-  if (!eventsOk) throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+      output.truncatedFromOldest !== (output.renderedCount > output.returnedCount)) throw Object.assign(fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID'), { detail: JSON.stringify(output).slice(0, 160) });
+  if (!eventsOk) throw Object.assign(fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID'), { detail: JSON.stringify(output).slice(0, 160) });
+  return output;
+}
+
+// messengerMessages 캡처: 스레드 페이지가 자체 요청한 GraphQL 엔드포인트를 performance API로 관측해
+// 같은 세션에서 재호출한다 — URL을 합성하지 않는다. 비공식 API 응답 읽기이므로 수동 호출에서만 쓰고,
+// 응답 원문은 저장하지 않고 events만 돌린다(2026-11-15 probe9-11 실측).
+async function captureThread(spaceName, threadUrl, selfProfileId, maxEventChars, maxEvents, deadlineMs, classify, login) {
+  let task;
+  try { task = await taskSpace(spaceName); }
+  catch (error) {
+    const nameInUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
+    console.log(JSON.stringify({ status: nameInUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
+    return;
+  }
+  const stop = code => { throw Object.assign(new Error, { code }); };
+  try {
+    const pages = await task.pages();
+    if (!Array.isArray(pages)) stop('EGO_TABS_FAILED');
+    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
+    if (!page) stop('EGO_ATTACH_FAILED');
+    await page.goto(threadUrl, { timeout: 45000 });
+    const current = await page.url();
+    if (!classify(current)) stop(login(current) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    let endpoint = null;
+    const capDeadline = Date.now() + Math.min(4000, Number(deadlineMs) || 4000);
+    while (!endpoint && Date.now() < capDeadline) {
+      const urls = await page.evaluate(() => performance.getEntriesByType('resource').map(e => e.name).filter(u => u.includes('messengerMessages')));
+      endpoint = Array.isArray(urls) && urls.length ? urls[0] : null;
+      if (!endpoint) await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    if (!endpoint) { console.log(JSON.stringify({ status: 'CAPTURE_NO_ENDPOINT' })); return; }
+    const csrf = await page.evaluate(() => (document.cookie.match(/(?:^|;)\s*JSESSIONID=([^;]+)/) || [])[1] || null);
+    if (!csrf) { console.log(JSON.stringify({ status: 'CAPTURE_NO_CSRF' })); return; }
+    const res = await page.fetch(endpoint, { headers: { accept: 'application/vnd.linkedin.normalized+json+2.1', 'csrf-token': csrf, 'x-restli-protocol-version': '2.0.0' }, timeout: 15000 });
+    if (!res || res.ok !== true || typeof res.body !== 'string') { console.log(JSON.stringify({ status: 'CAPTURE_FETCH_FAILED' })); return; }
+    let body = null;
+    try { body = JSON.parse(res.body); } catch { body = null; }
+    const included = body && Array.isArray(body.included) ? body.included : [];
+    const msgs = included.filter(e => e && e.$type === 'com.linkedin.messenger.Message');
+    const events = msgs
+      .map(m => ({
+        deliveredAt: Number(m.deliveredAt) || 0,
+        senderIsOther: !String(m['*sender'] || '').includes(selfProfileId),
+        text: String((m.body && m.body.text) || '').replace(/\s+/g, ' ').trim().slice(0, maxEventChars),
+      }))
+      .filter(e => e.text)
+      .sort((a, b) => a.deliveredAt - b.deliveredAt);
+    const returned = events.slice(-maxEvents);
+    console.log(JSON.stringify({
+      status: 'CAPTURED', events: returned.map(({ deliveredAt, ...rest }) => rest),
+      renderedCount: events.length, returnedCount: returned.length,
+      truncatedFromOldest: events.length > returned.length,
+    }));
+  } catch (error) {
+    const codes = ['EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_TAB_NOT_FOUND'];
+    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
+  }
+}
+
+export async function captureEgoThread(binding) {
+  if (!exactKeys(binding, ['executable', 'taskSpaceName', 'threadSeg', 'selfProfileId', 'maxEventChars', 'maxEvents', 'deadlineMs'])) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
+  if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
+  if (typeof binding.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}={0,2}$/.test(binding.threadSeg)) throw fail('INVALID_ARGUMENT');
+  if (typeof binding.selfProfileId !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(binding.selfProfileId)) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.maxEventChars) || binding.maxEventChars < 40 || binding.maxEventChars > 1000) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.maxEvents) || binding.maxEvents < 1 || binding.maxEvents > 50) throw fail('INVALID_ARGUMENT');
+  if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 60000) throw fail('INVALID_ARGUMENT');
+  const threadUrl = `https://www.linkedin.com/messaging/thread/${binding.threadSeg}/`;
+  const script = `(${captureThread.toString()})(${JSON.stringify(binding.taskSpaceName)}, ${JSON.stringify(threadUrl)}, ${JSON.stringify(binding.selfProfileId)}, ${JSON.stringify(binding.maxEventChars)}, ${JSON.stringify(binding.maxEvents)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_ATTACH_FAILED' })); });`;
+  const output = await execute(binding, script);
+  const captureCodes = ['CAPTURE_NO_ENDPOINT', 'CAPTURE_NO_CSRF', 'CAPTURE_FETCH_FAILED'];
+  if (exactKeys(output, ['status']) && (EGO_STEP_CODES.includes(output.status) || captureCodes.includes(output.status))) throw Object.assign(fail(output.status), { detail: String(output.diagTmp ?? output.reason ?? '') || null });
+  const eventsOk = Array.isArray(output.events) && output.events.length <= 50 &&
+    output.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
+      typeof e.text === 'string' && e.text.length >= 1 && e.text.length <= 1000);
+  if (!exactKeys(output, ['status', 'events', 'renderedCount', 'returnedCount', 'truncatedFromOldest']) || output.status !== 'CAPTURED' ||
+      !Number.isSafeInteger(output.renderedCount) || output.renderedCount < 0 || output.renderedCount > 1999 ||
+      !Number.isSafeInteger(output.returnedCount) || output.returnedCount < 0 || output.returnedCount > 50 ||
+      output.renderedCount < output.returnedCount ||
+      output.truncatedFromOldest !== (output.renderedCount > output.returnedCount) || !eventsOk) throw Object.assign(fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID'), { detail: JSON.stringify(output).slice(0, 160) });
   return output;
 }

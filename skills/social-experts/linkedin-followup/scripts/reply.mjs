@@ -773,16 +773,20 @@ export async function scanEgo(input) {
 // 대화 전체 읽기(KTD25): scan이 승격한 UUID 키 기록의 관측 threadSeg로 스레드에 직행해 렌더된
 // 이벤트 전체를 반환한다. 수동 전용(무인 게이트가 차단)이며 URL 합성·목록 클릭 순회가 없고,
 // 이벤트 본문은 stdout·세션에만 흐르고 저장하지 않는다.
-export async function readEgo(input) {
-  const { readEgoThread, EGO_STEP_CODES, EGO_FAILURE_REASONS } = await import('./ego-ui.mjs');
+export async function readEgo(input, mode = 'manual') {
+  const { readEgoThread, captureEgoThread, EGO_STEP_CODES, EGO_FAILURE_REASONS } = await import('./ego-ui.mjs');
   const keys = ['transport', 'executable', 'taskSpaceName', 'conversationUuid'];
   if (input.maxEventChars !== undefined) keys.push('maxEventChars');
   if (input.maxEvents !== undefined) keys.push('maxEvents');
+  if (input.source !== undefined) keys.push('source');
   if (Object.keys(input).some(key => !keys.includes(key)) ||
       input.transport !== 'ego-ui/1' || typeof input.executable !== 'string' || !input.executable.startsWith('/') ||
       input.executable.length > 4096 || /[\x00-\x1f\x7f]/.test(input.executable) || typeof input.taskSpaceName !== 'string' ||
       !input.taskSpaceName || input.taskSpaceName.startsWith('-') || input.taskSpaceName.length > 512 ||
-      typeof input.conversationUuid !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(input.conversationUuid)) throw fail('INVALID_ARGUMENT');
+      typeof input.conversationUuid !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(input.conversationUuid) ||
+      (input.source !== undefined && !['capture', 'dom', 'auto'].includes(input.source))) throw fail('INVALID_ARGUMENT');
+  // unattended 회차는 캡처(비공식 API 응답 읽기)를 시도하지 않는다 — DOM 관측만 허용된다.
+  const source = mode === 'unattended' ? 'dom' : (input.source ?? 'auto');
   const maxEventChars = input.maxEventChars ?? 300;
   const maxEvents = input.maxEvents ?? 12;
   if (!Number.isSafeInteger(maxEventChars) || maxEventChars < 40 || maxEventChars > 1000) throw fail('INVALID_ARGUMENT');
@@ -809,16 +813,52 @@ export async function readEgo(input) {
     const fd = openSync(join(STATE_DIR, 'locks'), constants.O_RDONLY);
     try { fsyncSync(fd); } finally { closeSync(fd); }
     phase = 'UI_OPERATION_FAILED';
-    const result = await readEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
+    const normalize = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const domRead = () => readEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
       threadSeg: record.threadSeg, maxEventChars, maxEvents, deadlineMs: 20000 });
+    let captured = null;
+    let captureNote = null;
+    if (source !== 'dom') {
+      try {
+        captured = await captureEgoThread({ executable: link.executable, taskSpaceName: link.taskSpaceName,
+          threadSeg: record.threadSeg, selfProfileId: link.account.profileId, maxEventChars, maxEvents, deadlineMs: 20000 });
+      } catch (error) {
+        captureNote = (typeof error?.code === 'string' ? error.code : 'CAPTURE_FAILED') + (error?.reason ? `(${error.reason})` : '') + (error?.detail ? `[${String(error.detail).slice(0, 120)}]` : '');
+        if (source === 'capture') {
+          rmSync(join(path, 'operation.json'));
+          rmdirSync(path);
+          return { status: captureNote.split('(')[0], conversationUuid: input.conversationUuid,
+            name: typeof record.name === 'string' ? record.name : null, reason: 'capture 요청 실패 — DOM 폴백 없음', note: captureNote.includes('(') ? captureNote.slice(captureNote.indexOf('(') + 1, -1) : null };
+        }
+      }
+    }
+    const dom = await domRead();
+    let source2 = 'dom';
+    let crossCheck;
+    if (captured) {
+      // 교차 검증: capture와 DOM의 마지막 이벤트 본문 대조 — 불일치면 DOM을 신뢰한다.
+      const capLast = normalize(captured.events[captured.events.length - 1]?.text);
+      const domLast = normalize(dom.events[dom.events.length - 1]?.text);
+      if (!dom.events.length || domLast === capLast) source2 = 'capture';
+      else crossCheck = 'capture 마지막 이벤트가 DOM과 불일치해 DOM 결과를 반환한다';
+    } else if (captureNote) {
+      crossCheck = `capture 미사용(${captureNote}) — DOM 결과를 반환한다`;
+    }
     rmSync(join(path, 'operation.json'));
     rmdirSync(path);
-    return { status: 'OK', transport: 'ego-ui/1', conversationUuid: input.conversationUuid,
+    const result = { status: 'OK', transport: 'ego-ui/1', conversationUuid: input.conversationUuid,
       name: typeof record.name === 'string' ? record.name : null,
-      events: result.events,
-      history: { renderedCount: result.renderedCount, returnedCount: result.returnedCount,
-        truncatedFromOldest: result.truncatedFromOldest, scope: 'dom-rendered',
-        note: '스크롤 lazy-load분은 미포함 — 렌더된 메시지만 반환합니다' } };
+      events: source2 === 'capture' ? captured.events : dom.events,
+      history: source2 === 'capture'
+        ? { renderedCount: captured.renderedCount, returnedCount: captured.returnedCount,
+            truncatedFromOldest: captured.truncatedFromOldest, scope: 'api-capture',
+            note: '페이지가 자체 요청한 messengerMessages 응답을 같은 세션에서 재호출해 읽었다' }
+        : { renderedCount: dom.renderedCount, returnedCount: dom.returnedCount,
+            truncatedFromOldest: dom.truncatedFromOldest, scope: 'dom-rendered',
+            note: '스크롤 lazy-load분은 미포함 — 렌더된 메시지만 반환합니다' },
+      source: source2 };
+    if (crossCheck) result.crossCheck = crossCheck;
+    return result;
   } catch (error) {
     const allowed = [...EGO_STEP_CODES];
     return {
@@ -852,7 +892,7 @@ async function run(args, input) {
   if (command === 'scan' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');
   // read는 transport 조건 없이 명령만 검사한다 — transport 검증은 readEgo 내부에서 하고,
   // 여기 조건을 붙이면 알 수 없는 명령이 send로 추락하는 기존 fall-through와 결합해 read가 send로 샌다.
-  if (command === 'read') return readEgo(input);
+  if (command === 'read') return readEgo(input, mode);
   // 빈 입력 scan(SKILL.md의 `scan < /dev/null`)은 저장된 ego binding을 그대로 사용한다 — 무인 정기 회차의 정상 입구.
   if (command === 'scan' && !Object.keys(input).length) {
     const bindingPath = join(STATE_DIR, 'binding.json');

@@ -51,7 +51,7 @@ UI 전환은 완료하지 않았다. UI 시험 요청에는 아래 관측 절차
 scan이 관측한 대화의 렌더된 메시지 이력을 조회한다. 수동 전용 — 무인 단계는 `BLOCKED_UNATTENDED`로 차단된다.
 
 1. `reply.mjs --mode manual read`에 stdin JSON으로 `{"transport":"ego-ui/1","executable":"/절대경로","taskSpaceName":"linkedin-replies-skill","conversationUuid":"scan 후보의 대화 UUID"}`를 전달한다. 선택 키 `maxEventChars`(기본 300·범위 40–1000), `maxEvents`(기본 12·범위 1–50)로 본문 길이·반환 개수를 조정한다.
-2. read는 scan이 관측해 UUID 키 기록에 남긴 원 `threadSeg`(스레드 URL 경로 세그먼트)로 `/messaging/thread/<seg>/`에 직행한다. 목록 클릭 순회가 없어 무관한 스레드를 개방하는 부작용이 없고, URL을 합성하지도 않는다. 기록에 seg가 없거나 구형 기록이면 `EGO_THREAD_NOT_OBSERVED`로 종료하니 먼저 scan을 실행한다 — read는 scan 뒤에 온다.
+2. read는 scan이 관측해 UUID 키 기록에 남긴 원 `threadSeg`(스레드 URL 경로 세그먼트)로 `/messaging/thread/<seg>/`에 직행한다. 목록 클릭 순회가 없어 무관한 스레드를 개방하는 부작용이 없고, URL을 합성하지도 않는다. 기록에 seg가 없거나 구형 기록이면 `EGO_THREAD_NOT_OBSERVED`로 종료하니 먼저 scan을 실행한다 — read는 scan 뒤에 온다.입력 `source`(기본 `auto`)로 경로를 고른다: `auto`는 먼저 messengerMessages 캡처(비공식 API 응답 읽기 — 스레드 페이지가 자체 요청한 엔드포인트를 performance API로 관측해 같은 세션에서 재호출하며 URL을 합성하지 않는다)를 시도하고, 마지막 이벤트를 DOM 결과와 교차 검증해 일치할 때만 채택한다. 실패·불일치·엔드포인트 미발견은 DOM 결과로 폴백하고, `capture` 명시 시 폴백 없이 실패를 반환하며, `dom`은 캡처를 시도하지 않는다. 캡처는 비공식 API 경계이므로 **수동 호출에서 사용자 동의를 얻은 뒤에만** 사용하고 무인 회차에서는 시도하지 않는다(unattended는 자동으로 dom 강제). 응답 원문은 저장하지 않고 events만 stdout으로 흘린다 — 어떤 경로를 반환했는지는 응답의 `source`·`crossCheck`로 본다.
 3. 반환은 후보 목록처럼 이벤트 배열 `{senderIsOther, text}`와 `history`(렌더 총수·반환 수·`truncatedFromOldest`)다. 이력 범위는 **DOM에 렌더된 분만**이며 스킬은 스크롤하지 않는다 — 스크롤 lazy-load된 과거분은 포함하지 않고, 완전성은 보고할 뿐 전체 이력을 주장하지 않는다. 이벤트 본문은 stdout·세션에만 흐르고 저장하지 않는다. 개방이 읽음 상태에 영향을 줄 수 있음(미확정)도 scan과 동일하게 적용된다.
 
 ### 수동 UI 관측 시험

@@ -34,6 +34,7 @@ try {
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import vm from 'node:vm';
 if (process.argv[2] === '--version') { console.log('ego-browser stub 1.0.0'); process.exit(0); }
+
 const home = process.env.HOME;
 let script = ''; for await (const chunk of process.stdin) script += chunk;
 appendFileSync(home + '/calls', JSON.stringify({ args: process.argv.slice(2), env: process.env }) + '\\n');
@@ -81,6 +82,7 @@ const pageStub = (label, baseUrl) => ({
   },
   waitForLoadState: async () => {},
   waitForFunction: async () => {},
+  fetch: async () => { record('fetch'); return state.fetchResponse ?? { ok: false, status: 599, body: '' }; },
   focus: async () => { record('focus'); },
   keyboard: {
     press: async key => { record('key:' + key); },
@@ -99,6 +101,8 @@ const pageStub = (label, baseUrl) => ({
     // 추출 evaluate(openThread·readThread 공용)는 cloneNode·data-event-urn을 모두 포함하므로
     // 마커(renderedCount)로 먼저 판정해야 한다. 그렇지 않으면 아래 cloneNode 분기(sendThread
     // 증거 evaluate·구 thread evaluate용)가 잘못 serve한다.
+    if (src.includes('getEntriesByType')) return state.resourceUrls ?? null;
+    if (src.includes('JSESSIONID')) return state.csrf ?? 'ajax:fixture-csrf';
     if (src.includes('renderedCount')) {
       if (Array.isArray(state.readEventsQueue) && state.readEventsQueue.length) {
         const next = state.readEventsQueue.shift();
@@ -174,7 +178,7 @@ const context = {
   claimTaskSpace: async id => { record('claim:' + id); return 'claimed'; },
   listTaskSpaces: async () => { record('listTaskSpaces'); return []; },
 };
-try { await vm.runInNewContext('(async () => {' + script + '})()', context, { timeout: 1000 }); }
+try { await vm.runInNewContext('(async () => {' + script + '})()', context, { timeout: 30000 }); }
 catch (error) { console.log(JSON.stringify({ status: 'EGO_ATTACH_FAILED', diag: String(error && error.message || error).slice(0, 120) })); }
 `, { mode: 0o700 });
   const binding = { executable, taskSpaceName: 'linkedin-replies-skill', pageLabel: 'p1' };
@@ -259,11 +263,6 @@ try {
   };
   const readWorker = join(dir, 'read-worker.mjs');
   writeFileSync(readWorker, `
-const nativeTimer = globalThis.setTimeout;
-globalThis.setTimeout = (fn, delay, ...args) => {
-  if (delay === 125000) delay = 2000;
-  return nativeTimer(fn, delay, ...args);
-};
 try {
   const { readEgo } = await import(${JSON.stringify(join(dir, 'reply.mjs'))});
   let input = ''; for await (const chunk of process.stdin) input += chunk;
@@ -912,11 +911,12 @@ test('read는 기록된 threadSeg로 스레드 URL에 직행한다', t => {
   assert.deepEqual(result.data.events, [
     { senderIsOther: true, text: '첫 인사' }, { senderIsOther: false, text: '네 확인했습니다' }, { senderIsOther: true, text: 'p1 요청 드립니다' },
   ]);
+  assert.equal(result.data.source, 'dom', 'auto는 캡처 실패 시 DOM 결과를 반환한다');
   assert.deepEqual(result.data.history, { renderedCount: 3, returnedCount: 3, truncatedFromOldest: false, scope: 'dom-rendered',
     note: '스크롤 lazy-load분은 미포함 — 렌더된 메시지만 반환합니다' });
   const readGotos = f.records('operations').filter(op => op.startsWith('goto:')).slice(gotosBefore);
-  assert.deepEqual(readGotos, [`goto:/messaging/thread/${threadSeg}/`],
-    '목록 클릭 순회 없이 기록된 seg로 한 번 직행한다');
+  assert.deepEqual(readGotos, [`goto:/messaging/thread/${threadSeg}/`, `goto:/messaging/thread/${threadSeg}/`],
+    '목록 클릭 순회 없이 기록된 seg로 직행한다 — auto는 캡처 시도와 DOM 폴백 두 번');
   assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')), [], '성공 시 락을 해제한다');
 });
 
@@ -1028,6 +1028,71 @@ test('read는 행 수가 이미 안정하면 곧바로 추출한다', t => {
   const result = f.runRead({ maxEvents: 10, maxEventChars: 300 });
   assert.equal(result.data.status, 'OK');
   assert.equal(result.data.events.length, 1);
+});
+
+const SELF_PROFILE = 'ACoAAA0123456789abcdefghijklmnopqrst';
+const OTHER_PROFILE = 'ACoAADG6kd0BZCxhJWn0ZqSbc_6p-EIzWeayGT0';
+const captureMessage = (deliveredAt, self, text) => ({
+  $type: 'com.linkedin.messenger.Message', deliveredAt,
+  '*sender': `urn:li:msg_messagingParticipant:urn:li:fsd_profile:${self ? SELF_PROFILE : OTHER_PROFILE}`,
+  body: { text },
+});
+const CAPTURE_URL = 'https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql?queryId=messengerMessages.abc&variables=(x:1)';
+
+test('read auto는 messengerMessages 캡처를 우선하고 교차 검증해 채택한다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({
+    resourceUrls: [CAPTURE_URL],
+    fetchResponse: { ok: true, status: 200, body: JSON.stringify({ included: [
+      captureMessage(1000, false, '먼저 온 캡처 메시지'),
+      captureMessage(2000, false, '나중에 온 캡처 메시지'),
+    ] }) },
+    readEvents: { renderedCount: 1, events: [{ senderIsOther: true, text: '나중에 온 캡처 메시지' }] },
+  });
+  const result = f.runRead({ maxEvents: 10, maxEventChars: 300 });
+  try { console.error('U5-OPS-TAIL', JSON.stringify(f.records('operations').slice(-14))); } catch {}
+  try { console.error('U5-STDERR', JSON.stringify(String(result.stderr).slice(0, 300))); } catch {}
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.source, 'capture');
+  assert.equal(result.data.events.length, 2);
+  assert.equal(result.data.events[0].text, '먼저 온 캡처 메시지');
+  assert.equal(result.data.history.scope, 'api-capture');
+});
+
+test('read auto는 캡처 실패 시 DOM 결과로 폴백한다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({
+    resourceUrls: [],
+    readEvents: { renderedCount: 1, events: [{ senderIsOther: true, text: '단일 메시지' }] },
+  });
+  const result = f.runRead({ maxEvents: 10, maxEventChars: 300 });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.source, 'dom');
+  assert.match(String(result.data.crossCheck), /CAPTURE_NO_ENDPOINT/);
+});
+
+test('read auto는 캡처와 DOM 마지막 이벤트가 불일치하면 DOM 결과를 반환한다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({
+    resourceUrls: [CAPTURE_URL],
+    fetchResponse: { ok: true, status: 200, body: JSON.stringify({ included: [captureMessage(1000, false, '캡처의 마지막')] }) },
+    readEvents: { renderedCount: 1, events: [{ senderIsOther: true, text: 'DOM의 마지막' }] },
+  });
+  const result = f.runRead({ maxEvents: 10, maxEventChars: 300 });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.source, 'dom');
+  assert.match(String(result.data.crossCheck), /불일치/);
+});
+
+test('read capture 명시는 실패 시 폴백 없이 실패를 반환한다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({ resourceUrls: [] });
+  const result = f.runRead({ source: 'capture', maxEvents: 10, maxEventChars: 300 });
+  assert.equal(result.data.status, 'CAPTURE_NO_ENDPOINT');
 });
 
 test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다', t => {
