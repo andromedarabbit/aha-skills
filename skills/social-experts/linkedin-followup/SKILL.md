@@ -1,7 +1,7 @@
 ---
 name: linkedin-followup
 description: "LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다(링크드인 팔로업 루프). \"LinkedIn 팔로업 확인해줘\", \"LinkedIn 답장 안 한 메시지 확인해줘\", \"회신 초안 써줘\", \"LinkedIn 정기 확인 등록해줘\" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다."
-version: "1.11.0"
+version: "1.12.0"
 context: inline
 language: "korean"
 dependencies:
@@ -173,12 +173,14 @@ ego 연결(transport `ego-ui/1`)에서 `prepare`는 브라우저를 건드리지
 stdin JSON은 `{"conversationId":"scan 후보의 대화 UUID","sessionId":"하네스 session ID","text":"정확한 최종 본문","conversationName":"후보 표시 이름"}`이다(`conversationName`은 선택).
 준비 뒤 승인 질문·영수증·send 절차는 아래와 같고, 전송 자체는 브라우저 UI에서 이루어진다:
 대화 개방 → URL의 스레드 UUID가 job과 일치하는지 확인 → 마지막 이벤트가 여전히 상대 발신인지 재검증 →
-빈 composer 확인(기존 내용이 있으면 덮지 않음 — 승인된 본문과 정확히 일치하는 이전 시도의 잔여분만은
-네이티브 키보드로 정리한 뒤 진행) → 본문 삽입(네이티브 keyboard.insertText — execCommand는 비신뢰 이벤트라
-LinkedIn 에디터 모델이 등록하지 않는다, 2026-11-15 실측) → 공백 정규화 없이 정확한 readback → Enter 키 1회 전송
-(이 UI 변형에는 전송 버튼이 없고 composer 힌트가 "Press Enter to Send"다, 2026-11-15 실측) → 새 자기 발신 이벤트와
-본문 일치로 성공 증명. 전송 동작 이전 실패는 `BLOCKED`(재준비 가능),
-전송 동작 뒤 증거 부족과 작업 종료 불명은 `UNKNOWN`이다. 실환경 전송은 G3의 개별 승인 전에는 실행하지 않는다.
+빈 composer 확인(기존 내용이 있으면 덮지 않음 — 승인된 본문과 블록 구조까지 일치하는 이전 시도의 잔여분만은
+네이티브 키보드로 정리한 뒤 진행) → 본문 삽입(문단별 네이티브 insertText + 문단 경계 Shift+Enter — execCommand와
+insertText의 \n은 모델 미등록·블록 팽창이라 2026-11-15 실측에서 배제) → 블록 구조 readback(이 편집기는 문단을
+<p> 블록으로 만들어 innerText 줄바꿈 수가 입력과 달라진다 — 빈 줄 1개가 innerText로는 \n 5개, 2026-11-15 실측 —
+블록 배열과 본문 줄 배열의 정확 대조) → Enter 키 1회 전송(이 UI 변형에는 전송 버튼이 없고 composer 힌트가
+"Press Enter to Send"다, 2026-11-15 실측) → 새 자기 발신 이벤트와 본문 일치로 성공 증명. 전송 동작 이전 실패는
+`BLOCKED`(재준비 가능), 전송 동작 뒤 증거 부족과 작업 종료 불명은 `UNKNOWN`이며 UNKNOWN에서는 재전송 없이
+같은 대화를 read로 1회 확인해 `verification`을 덧붙인다. 실환경 전송은 G3의 개별 승인 전에는 실행하지 않는다.
 
 legacy 연결에서 `전송` 선택 뒤 `send`에 `{"jobId":"prepare가 반환한 UUID","sessionId":"동일한 하네스 session ID"}`를
 stdin JSON으로 전달한다. `send`는 대화별 배타락 안에서 계정·참여자·최신 메시지를 재조회한다.
