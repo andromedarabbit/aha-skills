@@ -8,6 +8,8 @@
 
 검증기·표준 문서·`skill-author`는 상류 저장소에서 이식했습니다. 출처와 의도적 차이는 [docs/UPSTREAM.md](docs/UPSTREAM.md) 참조.
 
+코드를 작성하거나 리뷰하기 전에 [CODING_STANDARDS.md](CODING_STANDARDS.md)의 작성 기준과 [REVIEW.md](REVIEW.md)의 리뷰 정책을 확인하고, 변경으로 규칙이 생기거나 사라지면 해당 문서를 갱신합니다.
+
 ## 개발 명령어
 
 ### 검증 및 테스트
