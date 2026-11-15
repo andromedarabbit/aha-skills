@@ -81,6 +81,11 @@ const pageStub = (label, baseUrl) => ({
   },
   waitForLoadState: async () => {},
   waitForFunction: async () => {},
+  focus: async () => { record('focus'); },
+  keyboard: {
+    press: async key => { record('key:' + key); },
+    insertText: async text => { record('insertText'); },
+  },
   evaluate: async fn => {
     record('evaluate');
     // 폴링 코드와 큐의 정렬을 피한다: evaluate 대상 함수 소스로 종별을 판정해 고정 응답을 serve하고,
@@ -112,6 +117,7 @@ const pageStub = (label, baseUrl) => ({
     }
     if (src.includes('isOther')) return state.pre ?? { isOther: true };
     if (src.includes('data-event-urn')) return state.eventCount ?? 2;
+    if (src.includes('cleared')) return state.cleared ?? { text: '', cleared: true };
     if (src.includes('execCommand')) return state.fillOk ?? { ok: true };
     if (src.includes('textbox') && src.includes('found')) return state.composer ?? { found: true, text: '' };
     if (src.includes('textbox')) return state.readback ?? { text: '' };
@@ -1097,6 +1103,18 @@ test('composer에 기존 내용이 있으면 READBACK·클릭 없이 차단한�
   const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
   assert.equal(result.data.status, 'BLOCKED');
   assert.equal(result.data.reason, 'COMPOSER_NOT_EMPTY');
+});
+
+test('composer의 승인 본문 잔여분만은 네이티브 키보드로 정리한 뒤 전송을 진행한다', async t => {
+  const f = sendSetup(t, { composer: { found: true, text: BODY }, cleared: { text: '', cleared: true } });
+  const { jobId, question } = prepareJob(t, f);
+  await approve(t, f, question);
+  const result = f.runReply({ jobId, sessionId: 'sess-1' }, 'manual', 'send');
+  assert.equal(result.data.status, 'SENT');
+  const ops = f.records('operations');
+  assert.ok(ops.includes('insertText'), '네이티브 insertText 기록이 남는다');
+  assert.ok(ops.includes('key:ControlOrMeta+A'), '전체선택 단축키 기록이 남는다');
+  assert.ok(ops.includes('key:Backspace'), '삭제 키 기록이 남는다');
 });
 
 test('readback 불일치는 클릭 없이 차단한다', async t => {

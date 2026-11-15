@@ -696,7 +696,7 @@ export async function scanEgo(input) {
       } catch (error) {
         if (['EGO_NEEDS_LOGIN', 'EGO_ORIGIN_MISMATCH', 'EGO_SPACE_NAME_IN_USE'].includes(error?.code)) throw error;
         item.status = 'review';
-        item.reason = `THREAD_OPEN_FAILED:${error?.code ?? String(error?.message || error).slice(0, 60)}`;
+        item.reason = `THREAD_OPEN_FAILED:${error?.code ?? String(error?.message || error).slice(0, 60)}${error?.reason ? `:${error.reason}` : ''}`;
         continue;
       }
       detailOpened += 1;
@@ -770,7 +770,7 @@ export async function readEgo(input) {
   const recordPath = join(STATE_DIR, 'conversations', `ego-obs-${digest(['ego-observation', slug, 'uuid', input.conversationUuid])}.json`);
   let record;
   try { record = readPrivate(recordPath); } catch { record = null; }
-  if (!record || typeof record.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}$/.test(record.threadSeg)) {
+  if (!record || typeof record.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}={0,2}$/.test(record.threadSeg)) {
     return { status: 'EGO_THREAD_NOT_OBSERVED', conversationUuid: input.conversationUuid,
       message: '이 대화는 scan이 관측한 스레드 seg 기록이 없습니다. 먼저 --mode manual scan을 실행하세요.' };
   }

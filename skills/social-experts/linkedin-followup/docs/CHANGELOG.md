@@ -1,5 +1,16 @@
 # 변경 이력
 
+## 1.11.0 — 2026-11-15
+
+첫 실환경 전송 실측(2026-11-15, ego-browser 0.6.3.14)과 LinkedIn 마크업 변화로 발견한 결함들을 교정하고 전송 경로를 재작성한다.
+
+- **스레드 URL seg base64 패딩 허용**: LinkedIn이 스레드 seg에 패딩(`=`)을 붙이기 시작했다(2026-11-15 실측 — `2-…XzEwMA==`). 디코더는 애초 패딩을 허용했지만 검증 정규식 3곳(openEgoThread·readEgoThread·read 기록 검증)이 `=`를 거절해 상세 개방·read가 전부 `EGO_SCHEMA_INVALID`로 실패했다. `/^2-[A-Za-z0-9_-]{2,254}={0,2}$/`로 고쳤다.
+- **전송 삽입 경로를 네이티브 키보드로 교체**: `execCommand('insertText')`는 비신뢰 이벤트라 LinkedIn 에디터 모델이 등록하지 않았다(2026-11-15 실측 — DOM에는 텍스트가 보이지만 전송 UI가 렌더되지 않는 상태). 네이티브 `page.focus` + `page.keyboard.insertText`(신뢰 입력)로 바꿨다.
+- **전송 동작을 Enter 키로 교체**: 이 UI 변형에는 전송 버튼이 없다 — composer 힌트가 "Press Enter to Send"다(2026-11-15 사용자 실측). 전송 버튼 탐색·클릭을 Enter 1회로 바꾸고, 전송 동작 이전 실패는 `BLOCKED`(재준비 가능), 이후 불명은 `UNKNOWN` 유지.
+- **승인 본문 잔여분 정리**: 이전 시도가 BLOCKED로 끝나 composer에 남은 승인된 본문과 정확히 일치하는 잔여분만은 네이티브 키보드(전체선택→삭제)로 정리한 뒤 진행한다. 그 외 내용은 덮지 않는 기존 원칙 유지.
+- **스캔·read 실패 사유 노출**: scan의 상세 개방 실패 시 review 사유에 `error.reason`(EGO_SCHEMA_INVALID vs EGO_JSON_INVALID 등)까지 포함해 원인 구분이 가능해졌다.
+- 테스트 stub에 네이티브 입력 API(focus·keyboard.press·insertText)를 추가하고 잔여분 정리 경로 테스트를 새로 뒀다(367건 전부 통과, 실환경 전송 1건 `SENT` 실증).
+
 ## 1.10.0 — 2026-11-15
 
 - **대화 전체 읽기(`read`)를 추가한다.** `--mode manual read`는 scan이 승격한 UUID 키 기록의 관측 `threadSeg`(스레드 URL 경로 세그먼트)로 `/messaging/thread/<seg>/`에 직행해 렌더된 메시지 이벤트 전체를 추출한다. 목록 클릭 순회가 없어 무관한 스레드 개방·읽음 부작용이 없고, URL 합성도 하지 않는다. 입력 `{"transport":"ego-ui/1","executable":"...","taskSpaceName":"...","conversationUuid":"..."}`(선택 `maxEventChars` 기본 300·범위 40–1000, `maxEvents` 기본 12·범위 1–50). 기록에 seg가 없거나 구형 기록이면 `EGO_THREAD_NOT_OBSERVED`로 종료한다 — read는 scan 뒤에 온다. 실패 시 관측 락 유지·성공 시 해제는 scan과 동일하다.

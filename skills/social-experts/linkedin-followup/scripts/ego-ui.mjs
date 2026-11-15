@@ -598,7 +598,7 @@ export async function openEgoThread(binding) {
   const output = await execute(binding, script);
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   const uuidOk = typeof output.conversationUuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(output.conversationUuid);
-  const segOk = typeof output.threadSeg === 'string' && /^2-[A-Za-z0-9_-]{2,254}$/.test(output.threadSeg);
+  const segOk = typeof output.threadSeg === 'string' && /^2-[A-Za-z0-9_-]{2,254}={0,2}$/.test(output.threadSeg);
   const eventsOk = Array.isArray(output.events) && output.events.length <= 12 &&
     output.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
       typeof e.text === 'string' && e.text.length <= 300);
@@ -683,38 +683,44 @@ async function sendThread(spaceName, messagingUrl, conversationName, conversatio
       return { isOther: !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || '')) };
     });
     if (!pre || pre.isOther !== true) stop('CRITERIA_CHANGED');
-    // 기존 composer 내용이 있으면 덮지 않는다.
+    // 기존 composer 잔여 본문: 승인된 본문 전체와 정확히 일치하는 잔여분만은 이전 시도가 남긴 것이므로
+    // 네이티브 키보드로 정리한다 — 그 외 내용은 덮지 않는 원칙은 유지한다.
     const composer = await page.evaluate(() => {
       const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
       if (!box) return { found: false };
       return { found: true, text: (box.innerText || '') };
     });
     if (!composer || composer.found !== true) stop('EGO_SCHEMA_INVALID');
-    if (String(composer.text ?? '').trim()) stop('COMPOSER_NOT_EMPTY');
-    // 본문 삽입: 에디터 모델에 반영되도록 execCommand insertText를 쓴다.
-    const fill = await page.evaluate(bodyText => {
-      const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
-      if (!box) return { ok: false };
-      box.focus();
-      let ok = false;
-      try { ok = document.execCommand('insertText', false, bodyText); } catch {}
-      return { ok: ok === true };
-    }, expectedBody);
-    if (!fill || fill.ok !== true) stop('EGO_SCHEMA_INVALID');
-    // readback: 공백 정규화 없이 정확히 일치해야 클릭한다.
+    if (String(composer.text ?? '').trim()) {
+      if (String(composer.text ?? '') !== expectedBody) stop('COMPOSER_NOT_EMPTY');
+      try {
+        await page.focus('[role="textbox"], [contenteditable="true"]');
+        await page.keyboard.press('ControlOrMeta+A');
+        await page.keyboard.press('Backspace');
+      } catch { stop('EGO_ATTACH_FAILED'); }
+      const cleared = await page.evaluate(() => {
+        const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
+        return { text: box ? (box.innerText || '') : null, cleared: true };
+      });
+      if (!cleared || typeof cleared.text !== 'string' || cleared.text.trim()) stop('COMPOSER_NOT_EMPTY');
+    }
+    // 본문 삽입: 네이티브 keyboard.insertText(신뢰 입력). execCommand는 비신뢰 이벤트라 LinkedIn 에디터
+    // 모델이 등록하지 않는다(2026-11-15 실측 — DOM에 텍스트가 보여도 전송 UI가 렌더되지 않았다).
+    try {
+      await page.focus('[role="textbox"], [contenteditable="true"]');
+      await page.keyboard.insertText(expectedBody);
+    } catch { stop('EGO_ATTACH_FAILED'); }
+    // readback: 공백 정규화 없이 정확히 일치해야 전송 동작을 한다.
     const readback = await page.evaluate(() => {
       const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
       return { text: box ? (box.innerText || '') : null };
     });
     if (!readback || typeof readback.text !== 'string' || readback.text !== expectedBody) stop('READBACK_MISMATCH');
-    // 전송 버튼 1회 클릭.
-    const clickSend = await page.evaluate(() => {
-      const btn = document.querySelector('[type="submit"], button.msg-composer__send-btn');
-      if (!btn || btn.disabled) return { code: 'NO_BUTTON' };
-      btn.click();
-      return { code: 'SEND_CLICKED' };
-    });
-    if (!clickSend || clickSend.code !== 'SEND_CLICKED') stop('SEND_BUTTON_NOT_FOUND');
+    // 전송 동작: 이 UI 변형에는 전송 버튼이 없다 — composer 힌트가 "Press Enter to Send"이므로(2026-11-15
+    // 사용자 실측) Enter 1회로 전송한다. 클릭과 같은 전송 동작이므로 이전 실패는 BLOCKED, 이후 불명은 UNKNOWN이다.
+    try {
+      await page.keyboard.press('Enter');
+    } catch { stop('SEND_BUTTON_NOT_FOUND'); }
     // 성공 증거 폴링: 마지막 이벤트가 내 발신이고 본문이 일치해야 한다.
     const evidenceDeadline = Date.now() + Math.min(20000, Number(deadlineMs) || 20000);
     let nullTicks = 0;
@@ -829,7 +835,7 @@ export async function readEgoThread(binding) {
   if (!exactKeys(binding, ['executable', 'taskSpaceName', 'threadSeg', 'maxEventChars', 'maxEvents', 'deadlineMs'])) throw fail('INVALID_ARGUMENT');
   if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
   if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
-  if (typeof binding.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}$/.test(binding.threadSeg)) throw fail('INVALID_ARGUMENT');
+  if (typeof binding.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}={0,2}$/.test(binding.threadSeg)) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.maxEventChars) || binding.maxEventChars < 40 || binding.maxEventChars > 1000) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.maxEvents) || binding.maxEvents < 1 || binding.maxEvents > 50) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 60000) throw fail('INVALID_ARGUMENT');
