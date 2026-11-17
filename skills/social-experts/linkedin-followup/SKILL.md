@@ -1,7 +1,7 @@
 ---
 name: linkedin-followup
 description: "LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다(링크드인 팔로업 루프). \"LinkedIn 팔로업 확인해줘\", \"LinkedIn 답장 안 한 메시지 확인해줘\", \"회신 초안 써줘\", \"LinkedIn 정기 확인 등록해줘\" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다."
-version: "1.11.0"
+version: "1.12.0"
 context: inline
 language: "korean"
 dependencies:
@@ -44,7 +44,7 @@ UI 전환은 완료하지 않았다. UI 시험 요청에는 아래 관측 절차
 2. `reply.mjs --mode manual setup`에 stdin으로 `{"transport":"ego-ui/1","executable":"/선택한/ego-browser/절대경로","taskSpaceName":"linkedin-replies-skill"}`을 전달한다. 스킬이 `/in/me`와 `/messaging/`을 관측해 계정 slug·내 프로필 ID·화면 구조 fingerprint를 확보하고 `CONFIRM_ACCOUNT`로 제시한다. 대화 클릭·입력·전송은 없다.
 2. **부수 부작용 설명을 확인하고 동의한 뒤에만 2단계로 진행한다:** `/messaging/` 접속 시 마지막 활성 스레드가 자동 개방될 수 있으며(2026-11-13 관측) 이 읽음 영향은 아직 미확정이다.
 4. 같은 입력에 반환된 정확한 `account.slug`·`account.profileId`를 `accountId`·`profileId`로 추가해 다시 호출한다. 재관측 일치 시에만 binding이 저장되고, 불일치·로그인 필요(`EGO_NEEDS_LOGIN`)·사용자 소유 스페이스 충돌(`EGO_SPACE_NAME_IN_USE`)은 저장 없이 중단한다.
-5. `scan`(ego-ui/1)은 저장된 binding으로 조회를 수행한다: 구조 fingerprint 일치 검사, 필터 발견, lazy append 목록 순회(잘린 목록은 미완료 보고) 후, **상세 계층**으로 후보 판정을 완성한다. 상세 계층은 목록 항목을 클릭해 개방하고(입력 `detailOpenCap`, 기본 10·최대 25) 마지막 메시지 행의 `msg-s-event-listitem--other` 클래스로 발신자를 판정한다(2026-11-14 실측: `data-event-urn`의 프로필 세그먼트는 발신자가 아니라 수신함 소유자다) — 클래스 있음(상대 발신) → `candidates`, 없음(내 발신) → answered 제외, 입증 실패·개방 실패·상한 초과는 `검토 필요`(각각 `LATEST_EVENT_UNPROVEN`·`THREAD_OPEN_FAILED`·`OPEN_CAP_EXCEEDED`). 개방 성공분의 관측 기록은 대화 UUID 키로 승격한다. 상세 개방은 같은 개방 1회에서 렌더된 메시지 이벤트(발신자·버블 본문, 행당 300자·최신 12개 고정 상한)를 같이 추출해 **입증된 후보에만** `events`로 덧붙인다 — answered·미입증 스레드는 이벤트 없이 식별자·해시 기록만 남긴다(토큰 최소화). 개방이 읽음 상태를 바꿀 수 있으므로 호출 전에 예상 개방 수를 사용자에게 설명한다.
+5. `scan`(ego-ui/1)은 저장된 binding으로 조회를 수행한다. **수신 응답 관측 계층(1.12.0)**: 목록 자식 안에서 `page.cdp('Network.enable')`을 건 뒤 `/messaging/`에 접속해, 브라우저가 스스로 수신한 messaging API 응답 본문(`page.events()` 버퍼 → `Network.getResponseBody`)을 자식 안에서 파싱해 대화 UUID·마지막 발신자(발신자 식별자 vs 소유자 slug·프로필 ID 대조)를 확정한다. 관측은 페이지가 이미 받은 응답만 읽는다 — 새 요청·재요청·쿼리 식별자·해시 고정·쿠키 접근은 없으며, 응답 형식이 불명이면 관측 0건으로 기존 **상세 계층**에 폴백한다. 상세 계층은 캡처로 판정 못한 항목만 목록 항목을 클릭해 개방하고(입력 `detailOpenCap`, 기본 10·최대 25) 마지막 메시지 행의 `msg-s-event-listitem--other` 클래스로 발신자를 판정한다(2026-11-14 실측: `data-event-urn`의 프로필 세그먼트는 발신자가 아니라 수신함 소유자다) — 클래스 있음(상대 발신) → `candidates`, 없음(내 발신) → answered 제외, 내용 미가독·개방 실패·상한 초과는 `검토 필요`(각각 `LATEST_EVENT_UNPROVEN`·`THREAD_OPEN_FAILED`·`OPEN_CAP_EXCEEDED`). 접두 입증(버블 본문 ↔ 목록 미리보기)이 실패해도 렌더된 마지막 버블 내용이 읽혔으면 DOM 발신자 판정으로 확정한다(2026-11-17 실측: InMail 제목형 미리보기는 버블에 렌더되지 않아 접두 입증이 구조적으로 실패한다) — `LATEST_EVENT_UNPROVEN`은 내용을 아예 읽지 못한 경우(빈 버블·반응 이벤트)에만 남는다. 개방 성공분의 관측 기록은 대화 UUID 키로 승격한다. 상세 개방은 같은 개방 1회에서 렌더된 메시지 이벤트(발신자·버블 본문, 행당 300자·최신 12개 고정 상한)를 같이 추출해 **내용이 읽힌 후보에만** `events`로 덧붙인다 — answered·미입증 스레드는 이벤트 없이 식별자·해시 기록만 남긴다(토큰 최소화). 캡처 후보는 payload 유래 `events`(≤12개)를 인라인으로 실어 반환하며 threadSeg 승격이 없어 `read` 미지원이다. 개방이 읽음 상태를 바꿀 수 있으므로 호출 전에 예상 개방 수를 사용자에게 설명한다. 목록 순회는 캡처 계층이 켜져 있을 때 행 개수가 두 뷰 연속 동일하면 완료로 본다 — 기존 안정 조건(`total === items.length`)은 행이 계속 갱신되는 실환경에서 발동하지 않아 순회 예산을 전부 태웠다(2026-11-16 실측).
 
 ### 대화 전체 읽기(read, ego-ui/1)
 

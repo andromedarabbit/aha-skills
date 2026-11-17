@@ -351,7 +351,7 @@ export async function acquireEgoIdentity(binding) {
 
 // scan 고정 작업(U9·U10): fingerprint 검사 → 필터 발견 → lazy append 목록 순회.
 // 상세 개방·클릭·입력 없이 목록 관측만 한다. deadline 초과 시 부분 관측으로 정상 종료한다.
-async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadlineMs, classify, login) {
+async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadlineMs, classify, login, ownerSlug, ownerProfileId) {
   let task;
   try { task = await taskSpace(spaceName); }
   catch (error) {
@@ -365,10 +365,179 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
     if (!Array.isArray(pages)) stop('EGO_TABS_FAILED');
     const page = pages.length ? task.page(pages[0].label) : await task.newPage();
     if (!page) stop('EGO_ATTACH_FAILED');
+    // 수동 응답 관측 준비(2026-11-16): Network 도메인을 켜고, 페이지가 스스로 수신한 messaging API 응답
+    // 본문만 읽는다. 새 요청을 만들지 않고 쿼리 식별자·해시를 굳히지 않으며, 어떤 관측 실패도
+    // captureCount 0으로 내려보내 DOM 증명 계층이 이어받는다(KTD13 — 판정 불명은 부분 종료가 우선).
+    let netCapture = false;
+    try { await page.cdp('Network.enable', {}); netCapture = true; } catch {}
+    const captureBodies = [];
+    const capturePending = new Map();
+    const captureSeen = new Set();
+    const matchMessagingUrl = value => typeof value === 'string' && value.includes('/voyager/api/') &&
+      (/messaging/i.test(value) || value.includes('voyagerMessagingGraphQL'));
+    const drainCapture = async () => {
+      if (!netCapture) return;
+      try {
+        const evs = await page.events();
+        for (const e of Array.isArray(evs) ? evs : []) {
+          const requestId = e?.params?.requestId;
+          const method = e?.method;
+          if (method === 'Network.responseReceived' && typeof requestId === 'string' && !captureSeen.has(requestId) &&
+              matchMessagingUrl(e?.params?.response?.url)) capturePending.set(requestId, e.params.response.url);
+          if (method === 'Network.loadingFinished' && typeof requestId === 'string' &&
+              capturePending.has(requestId) && !captureSeen.has(requestId)) {
+            captureSeen.add(requestId);
+            if (captureBodies.length >= 8) continue;
+            try {
+              const body = await page.cdp('Network.getResponseBody', { requestId });
+              const text = body?.base64Encoded ? Buffer.from(String(body?.body ?? ''), 'base64').toString('utf8') : String(body?.body ?? '');
+              if (text) captureBodies.push(text);
+            } catch {}
+          }
+        }
+      } catch { netCapture = false; }
+    };
+    // 대화·메시지 객체를 셰이프 방식으로 찾는다: 대화는 uuid 식별자 + 이벤트 배열을 함께 갖는 노드,
+    // 메시지는 conversationUrn(uuid)을 가진 단독 노드(normalized+json included 레이아웃 대응).
+    // 본문·발신자는 알려진 키만 좁게 읽고, urn·URL·긴 base64 모양 문자열은 본문 후보에서 제외한다.
+    const textOf = value => {
+      if (typeof value === 'string') {
+        // JSON 문자열 본문(normalized+json)은 1회 파싱해 재시도한다.
+        if (value.startsWith('{"')) {
+          try { return textOf(JSON.parse(value)); } catch { return ''; }
+        }
+        if (/^(urn:|https?:\/\/|[A-Za-z0-9+/=]{80,})$/.test(value.trim())) return '';
+        return value.trim() ? value : '';
+      }
+      if (!value || typeof value !== 'object') return '';
+      for (const key of ['text', 'body', 'messageBody', 'attributedBody']) {
+        if (value[key] !== undefined) {
+          const got = textOf(value[key]);
+          if (got) return got;
+        }
+      }
+      const content = value.eventContent;
+      if (content && typeof content === 'object' && !Array.isArray(content)) {
+        for (const v of Object.values(content)) {
+          if (!v || typeof v !== 'object') continue;
+          for (const key of ['attributedBody', 'body', 'text', 'messageBody']) {
+            if (v[key] !== undefined) {
+              const got = textOf(v[key]);
+              if (got) return got;
+            }
+          }
+        }
+      }
+      return '';
+    };
+    const senderOf = ev => {
+      const out = { slug: null, id: null };
+      const dig = (node, depth) => {
+        if (!node || typeof node !== 'object' || depth > 4) return;
+        if (Array.isArray(node)) { for (const x of node) dig(x, depth + 1); return; }
+        if (typeof node.publicIdentifier === 'string' && node.publicIdentifier && !out.slug) out.slug = node.publicIdentifier;
+        if (!out.id) {
+          for (const key of ['entityUrn', 'objectUrn']) {
+            const value = node[key];
+            if (typeof value !== 'string') continue;
+            if (value.startsWith('ACoAAA')) { out.id = value; break; }
+            const m = /ACoAAA[A-Za-z0-9]+/.exec(value);
+            if (m) { out.id = m[0]; break; }
+          }
+        }
+        for (const v of Object.values(node)) dig(v, depth + 1);
+      };
+      const from = ev?.from ?? ev?.sender ?? ev?.actor ?? ev?.senderUrn ?? ev?.actorUrn;
+      if (typeof from === 'string') dig({ entityUrn: from }, 0);
+      else dig(from, 0);
+      return out.slug || out.id ? out : null;
+    };
+    const extractConversations = text => {
+      let data;
+      try { data = JSON.parse(text); } catch { return []; }
+      const conversations = new Map();
+      const uuidFrom = value => {
+        if (typeof value !== 'string') return null;
+        const m = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(value);
+        return m ? m[0] : null;
+      };
+      const eventsOf = node => {
+        for (const key of ['events', 'backendMessages']) {
+          if (Array.isArray(node[key]) && node[key].length && node[key].every(x => x && typeof x === 'object')) return node[key];
+        }
+        // 실측(2026-11-16) GraphQL 형태: 대화 노드의 messages는 객체이고 배열은 messages.elements에 있다.
+        for (const key of ['messages']) {
+          const nested = node[key];
+          if (nested && typeof nested === 'object' && !Array.isArray(nested) &&
+              Array.isArray(nested.elements) && nested.elements.length && nested.elements.every(x => x && typeof x === 'object')) return nested.elements;
+          if (Array.isArray(node[key]) && node[key].length && node[key].every(x => x && typeof x === 'object')) return node[key];
+        }
+        return node.lastEvent && typeof node.lastEvent === 'object' ? [node.lastEvent] : null;
+      };
+      // 실측(2026-11-16): 대화 uuid는 conversationUrl의 스레드 seg(2-+base64url(uuid_n))에 있다 — DOM 계층과
+      // 같은 규칙. entityUrn·backendUrn에는 uuid가 없다. 구형 형태(conversationUrn 등)는 키 기반으로 보조한다.
+      const segUuidOf = node => {
+        const seg = /\/messaging\/thread\/([^/]+)/.exec(String(node.conversationUrl ?? ''))?.[1] ?? null;
+        if (!seg || !seg.startsWith('2-')) return null;
+        try {
+          const decoded = Buffer.from(seg.slice(2).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+          const candidate = decoded.split('_')[0];
+          return /^[0-9a-f-]{16,64}$/i.test(candidate) ? candidate : null;
+        } catch { return null; }
+      };
+      const walk = (node, depth) => {
+        if (!node || typeof node !== 'object' || depth > 12) return;
+        if (Array.isArray(node)) { for (const x of node) walk(x, depth + 1); return; }
+        const evs = eventsOf(node);
+        const uuid = segUuidOf(node) ?? uuidFrom(node.conversationUuid) ?? uuidFrom(node.conversationUrn) ??
+          uuidFrom(node.entityUrn) ?? uuidFrom(node.dashEntityUrn) ?? uuidFrom(node.backendUrn);
+        if (evs && uuid) {
+          const entry = conversations.get(uuid) ?? { uuid, events: [], node };
+          if (!entry.node) entry.node = node;
+          for (const ev of evs) if (ev && typeof ev === 'object') entry.events.push(ev);
+          conversations.set(uuid, entry);
+          return;
+        }
+        // 대화 노드가 아니면서 conversationUrn을 가진 메시지 단독 노드도 수집한다.
+        if (!evs && uuid) {
+          const lastSender = senderOf(node);
+          const body = textOf(node);
+          if (lastSender || body) {
+            const entry = conversations.get(uuid) ?? { uuid, events: [] };
+            entry.events.push(node);
+            conversations.set(uuid, entry);
+          }
+        }
+        for (const v of Object.values(node)) walk(v, depth + 1);
+      };
+      walk(data, 0);
+      // 이벤트 정렬: 타임스탬프가 있으면 오름차순, 없으면 배열 순서를 유지한다. 마지막(최신)이 판정 대상이다.
+      const stampOf = ev => {
+        for (const key of ['deliveredAt', 'createdAt']) {
+          const v = ev[key];
+          if (typeof v === 'number' && Number.isFinite(v)) return v;
+        }
+        return null;
+      };
+      for (const entry of conversations.values()) {
+        const withStamp = entry.events.every(ev => stampOf(ev) !== null);
+        if (withStamp) entry.events.sort((a, b) => stampOf(a) - stampOf(b));
+        entry.last = entry.events[entry.events.length - 1] ?? null;
+      }
+      return [...conversations.values()];
+    };
+    const captured = [];
+    const ownerMatches = sender => {
+      if (!sender) return null;
+      if (ownerSlug && typeof ownerSlug === 'string' && sender.slug === ownerSlug) return true;
+      if (ownerProfileId && typeof ownerProfileId === 'string' && sender.id === ownerProfileId) return true;
+      return false;
+    };
     await page.goto(messagingUrl, { timeout: 45000 });
     const currentUrl = await page.url();
     if (!classify(currentUrl)) stop(login(currentUrl) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
     try { await page.waitForFunction(() => (document.body?.innerText?.length ?? 0) > 200, undefined, { timeout: 20000 }); } catch {}
+    await drainCapture();
     // 이동 비용을 순회 예산에서 제외해 부모 상한과의 산수 충돌을 피한다(리뷰 #8).
     const deadline = Date.now() + deadlineMs;
     const fingerprint = await page.evaluate(expected => {
@@ -399,6 +568,80 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
         })).filter(item => item.name && (item.preview.length || item.time.length)),
       };
     });
+    const resolved = new Map();
+    const resolveVisible = items => {
+    // 캡처 본문 → 대화 추출 → DOM 항목 매칭 → 방향 판정. 이름 일치 1건이 1차, 정규화 본문↔프리뷰 접두
+    // 일치(openThread의 want 규칙과 동일)가 2차이며, 0건·2건 이상은 모호로 보고 캡처하지 않는다.
+    const normalizeForMatch = value => String(value ?? '').replace(/\s+/g, ' ').trim()
+      .replace(/^InMail\s*(?:•\s*)?/i, '')
+      .replace(/^[^:]{1,60}:\s*/, '');
+    if (netCapture && ownerSlug) {
+      const extracted = [];
+      for (const text of captureBodies) for (const conv of extractConversations(text)) extracted.push(conv);
+      const norm = value => String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const nameOf = conv => {
+        // 실측 형태: 1:1 목록 행의 표시 이름은 소유자를 제외한 참가자의 member 이름이다.
+        const members = Array.isArray(conv.node?.conversationParticipants) ? conv.node.conversationParticipants : [];
+        const names = [];
+        for (const p of members) {
+          const member = p?.participantType?.member;
+          const first = typeof member?.firstName === 'string' ? member.firstName : '';
+          const last = typeof member?.lastName === 'string' ? member.lastName : '';
+          const full = `${first} ${last}`.trim();
+          if (!full) continue;
+          const urns = [p.entityUrn, p.hostIdentityUrn, p.backendUrn].filter(v => typeof v === 'string').join(' ');
+          const m = /ACoAAA[A-Za-z0-9]+/.exec(urns);
+          if (m && ownerProfileId && m[0] === ownerProfileId) continue;
+          names.push(full);
+        }
+        if (names.length === 1) return names[0];
+        for (const ev of conv.events) {
+          const from = ev.from ?? ev.sender ?? ev.actor;
+          if (!from || typeof from !== 'object') continue;
+          for (const v of Object.values(from)) {
+            if (!v || typeof v !== 'object') continue;
+            const first = typeof v.firstName === 'string' ? v.firstName : '';
+            const last = typeof v.lastName === 'string' ? v.lastName : '';
+            const full = `${first} ${last}`.trim();
+            if (full) return full;
+          }
+        }
+        for (const key of ['conversationName', 'name', 'title', 'headlineText']) {
+          if (typeof conv.node?.[key] === 'string' && conv.node[key].trim()) return conv.node[key];
+        }
+        return null;
+      };
+      for (const item of items) {
+        const wantPreview = normalizeForMatch(item.preview);
+        if (!wantPreview && !norm(item.name)) continue;
+        const nameMatches = norm(item.name) ? extracted.filter(conv => norm(nameOf(conv)) === norm(item.name)) : [];
+        const previewMatches = wantPreview ? extracted.filter(conv => {
+          const body = normalizeForMatch(textOf(conv.last));
+          return body.startsWith(wantPreview);
+        }) : [];
+        let match = null;
+        if (nameMatches.length === 1) match = nameMatches[0];
+        else if (nameMatches.length === 0 && previewMatches.length === 1) match = previewMatches[0];
+        if (!match || !match.last) continue;
+        // 입증(증명): 캡처한 마지막 본문이 목록 프리뷰와 접두 일치해야 한다 — DOM 증명과 같은 규칙.
+        const proof = normalizeForMatch(textOf(match.last)).startsWith(wantPreview);
+        if (wantPreview && !proof) continue;
+        const sender = senderOf(match.last);
+        if (!sender) continue;
+        const direction = ownerMatches(sender) ? 'self' : 'other';
+        const events = match.events.slice(-12)
+          .map(ev => ({ senderIsOther: !ownerMatches(senderOf(ev)), text: textOf(ev).slice(0, 300) }))
+          .filter(e => e.text);
+        resolved.set(item.index, {
+          conversationUuid: match.uuid,
+          lastSenderIsOther: direction === 'other',
+          senderSlug: sender.slug,
+          events: events.slice(0, 12),
+        });
+      }
+    }
+
+    };
     const views = [];
     let totals = [];
     let stableRounds = 0;
@@ -409,6 +652,8 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
       if (!view || !Array.isArray(view.items)) break;
       const currentUrl2 = await page.url();
       if (!classify(currentUrl2)) stop(login(currentUrl2) ? 'EGO_NEEDS_LOGIN' : 'EGO_ORIGIN_MISMATCH');
+      await drainCapture();
+      resolveVisible(view.items);
       const previous = views[views.length - 1];
       views.push(view.items);
       totals.push(view.total);
@@ -416,6 +661,11 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
         stableRounds += 1;
         if (stableRounds >= 2 && view.total === view.items.length) { complete = true; break; }
       } else stableRounds = 0;
+      // 수신 응답 관측이 켜져 있으면 payload가 순회 근거다. 행 개수가 두 뷰 연속 동일하면 더 이상 늘어나지
+      // 않는다는 뜻이고, 기존 total===items.length 조건은 행이 계속 갱신되는 실환경에서 발동하지 않았다
+      // (2026-11-16 실측 — 목록 단계가 매번 순회 예산 100초를 전부 태우는 것이 병목이었다). 캡처로 해소 못한
+      // 항목은 상세 개방 계층이 이어받는다.
+      if (netCapture && resolved.size > 0 && previous && view.items.length === previous.length) { complete = true; break; }
       if (Date.now() + 1500 >= deadline) break;
       await page.mouse.move(200, 300);
       await page.mouse.wheel(0, 800);
@@ -423,10 +673,14 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
       await new Promise(resolve => setTimeout(resolve, 400));
     }
     const lastItems = views[views.length - 1] ?? [];
+    await drainCapture();
+    resolveVisible(lastItems);
+    const items = lastItems.map(item => ({ ...item, capture: resolved.get(item.index) ?? null }));
     console.log(JSON.stringify({
-      status: 'SCAN_OBSERVED', filters, items: lastItems,
+      status: 'SCAN_OBSERVED', filters, items,
       itemCount: lastItems.length, complete,
       scrollRounds: Math.max(0, views.length - 1),
+      captureCount: resolved.size,
     }));
   } catch (error) {
     const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_FINGERPRINT_MISMATCH'];
@@ -434,25 +688,38 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
   }
 }
 
-// scan 목록 관측(부모 검증): fingerprint 일치를 강제하고 항목·필터 형식을 검증한다(U9·U10).
+// scan 목록 관측(부모 검증): fingerprint 일치를 강제하고 항목·필터·캡처 형식을 검증한다(U9·U10).
 export async function scanEgoList(binding) {
-  if (!exactKeys(binding, ['executable', 'taskSpaceName', 'fingerprint', 'deadlineMs'])) throw fail('INVALID_ARGUMENT');
+  if (!exactKeys(binding, ['executable', 'taskSpaceName', 'fingerprint', 'deadlineMs', 'ownerSlug', 'ownerProfileId'])) throw fail('INVALID_ARGUMENT');
   if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
   if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
   const fp = binding.fingerprint;
   if (!fp || !exactKeys(fp, ['labels', 'hasConversationList']) || !Array.isArray(fp.labels) || !fp.labels.length ||
       fp.labels.some(label => !validString(label, 64)) || typeof fp.hasConversationList !== 'boolean') throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 115000) throw fail('INVALID_ARGUMENT');
-  const script = `(${scanList.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(fp)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()}).catch(() => { console.log(JSON.stringify({ status: 'EGO_SNAPSHOT_FAILED' })); });`;
+  if (binding.ownerSlug !== null && !validString(binding.ownerSlug, 128)) throw fail('INVALID_ARGUMENT');
+  if (binding.ownerProfileId !== null && !validString(binding.ownerProfileId, 64)) throw fail('INVALID_ARGUMENT');
+  const script = `(${scanList.toString()})(${JSON.stringify(binding.taskSpaceName)}, 'https://www.linkedin.com/messaging/', ${JSON.stringify(fp)}, ${JSON.stringify(binding.deadlineMs)}, ${messageLocation.toString()}, ${loginPath.toString()}, ${JSON.stringify(binding.ownerSlug)}, ${JSON.stringify(binding.ownerProfileId)}).catch(() => { console.log(JSON.stringify({ status: 'EGO_SNAPSHOT_FAILED' })); });`;
   const output = await execute(binding, script);
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
-  if (!exactKeys(output, ['status', 'filters', 'items', 'itemCount', 'complete', 'scrollRounds']) || output.status !== 'SCAN_OBSERVED' ||
+  const captureOk = capture => {
+    if (capture === null) return true;
+    if (!exactKeys(capture, ['conversationUuid', 'lastSenderIsOther', 'senderSlug', 'events'])) return false;
+    if (typeof capture.conversationUuid !== 'string' || !/^[A-Za-z0-9-]{8,64}$/.test(capture.conversationUuid)) return false;
+    if (typeof capture.lastSenderIsOther !== 'boolean') return false;
+    if (capture.senderSlug !== null && !validString(capture.senderSlug, 128)) return false;
+    return Array.isArray(capture.events) && capture.events.length <= 12 &&
+      capture.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
+        typeof e.text === 'string' && e.text.length <= 300);
+  };
+  if (!exactKeys(output, ['status', 'filters', 'items', 'itemCount', 'complete', 'scrollRounds', 'captureCount']) || output.status !== 'SCAN_OBSERVED' ||
       !Array.isArray(output.filters) || output.filters.some(f => !f || typeof f.label !== 'string' || typeof f.checked !== 'string') ||
       !Array.isArray(output.items) || output.items.length !== output.itemCount ||
-      output.items.some(item => !item || !exactKeys(item, ['index', 'name', 'preview', 'time']) ||
+      output.items.some(item => !item || !exactKeys(item, ['index', 'name', 'preview', 'time', 'capture']) ||
         !Number.isSafeInteger(item.index) || item.index < 0 || item.index > 199 ||
-        typeof item.name !== 'string' || typeof item.preview !== 'string' || typeof item.time !== 'string') ||
-      !Number.isSafeInteger(output.itemCount) || typeof output.complete !== 'boolean' || !Number.isSafeInteger(output.scrollRounds)) {
+        typeof item.name !== 'string' || typeof item.preview !== 'string' || typeof item.time !== 'string' || !captureOk(item.capture)) ||
+      !Number.isSafeInteger(output.itemCount) || typeof output.complete !== 'boolean' || !Number.isSafeInteger(output.scrollRounds) ||
+      !Number.isSafeInteger(output.captureCount)) {
     throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
   }
   return output;
@@ -519,6 +786,7 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
     let conversationUuid = null;
     let lastSenderIsOther = false;
     let proofMatch = false;
+    let lastEventReadable = false;
     let threadSeg = null;
     let events = [];
     let segSeen = false;
@@ -563,8 +831,11 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
             conversationUuid = uuid;
             lastSenderIsOther = thread.lastSenderIsOther;
             proofMatch = normalize(thread.text).startsWith(want);
+            // 가독 판정(2026-11-17 실측): InMail 제목형 프리뷰는 버블에 렌더되지 않아 접두 입증이
+            // 구조적으로 실패한다. 마지막 버블 내용이 읽혔으면 DOM 발신자 판정을 그대로 신뢰한다.
+            lastEventReadable = normalize(thread.text).length > 0;
             threadSeg = seg;
-            events = proofMatch && lastSenderIsOther && Array.isArray(thread.events) ? thread.events.slice(-EVENT_MAX) : [];
+            events = lastEventReadable && lastSenderIsOther && Array.isArray(thread.events) ? thread.events.slice(-EVENT_MAX) : [];
             if (proofMatch) break;
             // 같은 UUID에서 세 틱 연속 입증 실패면 이미 열린 스레드가 그것이라는 뜻이다 — 대기 없이 UNPROVEN으로 마친다.
             if (uuid === prevUuid) { stableTicks += 1; if (stableTicks >= 3) break; }
@@ -577,7 +848,7 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
     if (!segSeen) stop('EGO_ATTACH_FAILED');
     console.log(JSON.stringify({
       status: 'THREAD_OBSERVED', conversationUuid,
-      lastSenderIsOther, proofMatch, threadSeg, events,
+      lastSenderIsOther, proofMatch, lastEventReadable, threadSeg, events,
     }));
   } catch (error) {
     const codes = ['EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_TAB_NOT_FOUND'];
@@ -602,9 +873,9 @@ export async function openEgoThread(binding) {
   const eventsOk = Array.isArray(output.events) && output.events.length <= 12 &&
     output.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
       typeof e.text === 'string' && e.text.length <= 300);
-  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSenderIsOther', 'proofMatch', 'threadSeg', 'events']) || output.status !== 'THREAD_OBSERVED' ||
+  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSenderIsOther', 'proofMatch', 'lastEventReadable', 'threadSeg', 'events']) || output.status !== 'THREAD_OBSERVED' ||
       !uuidOk || !segOk || !eventsOk || typeof output.lastSenderIsOther !== 'boolean' ||
-      typeof output.proofMatch !== 'boolean') throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+      typeof output.proofMatch !== 'boolean' || typeof output.lastEventReadable !== 'boolean') throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
   return output;
 }
 
@@ -612,6 +883,7 @@ export async function openEgoThread(binding) {
 // readback → 전송 버튼 1회 클릭 → 새 자기 발신 이벤트 증거. 클릭 이전 단계의 실패는 안전 차단이고,
 // 클릭 뒤 증거 부족은 SEND_UNKNOWN(결과 불명)이다.
 async function sendThread(spaceName, messagingUrl, conversationName, conversationUuid, expectedBody, deadlineMs, classify, login) {
+
   let task;
   try { task = await taskSpace(spaceName); }
   catch (error) {
@@ -683,39 +955,59 @@ async function sendThread(spaceName, messagingUrl, conversationName, conversatio
       return { isOther: !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || '')) };
     });
     if (!pre || pre.isOther !== true) stop('CRITERIA_CHANGED');
-    // 기존 composer 잔여 본문: 승인된 본문 전체와 정확히 일치하는 잔여분만은 이전 시도가 남긴 것이므로
-    // 네이티브 키보드로 정리한다 — 그 외 내용은 덮지 않는 원칙은 유지한다.
-    const composer = await page.evaluate(() => {
+    // 기존 composer 잔여 본문: 승인된 본문과 블록 구조까지 정확히 일치하는 잔여분만은 이전 시도가 남긴
+    // 것이므로 네이티브 키보드로 정리한다 — 그 외 내용은 덮지 않는 원칙은 유지한다.
+    const composer = await page.evaluate(expectedText => {
       const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
       if (!box) return { found: false };
-      return { found: true, text: (box.innerText || '') };
-    });
+      const blocks = [...box.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+      if (!blocks.length) blocks.push((box.textContent || '').replace(/\s+/g, ' ').trim());
+      const want = String(expectedText).split('\n').map(line => line.replace(/\s+/g, ' ').trim());
+      const match = blocks.length === want.length && blocks.every((b, i) => b === want[i]);
+      return { found: true, text: blocks.join('\n'), match, marker: 'initialCheck' };
+    }, expectedBody);
     if (!composer || composer.found !== true) stop('EGO_SCHEMA_INVALID');
     if (String(composer.text ?? '').trim()) {
-      if (String(composer.text ?? '') !== expectedBody) stop('COMPOSER_NOT_EMPTY');
+      if (composer.match !== true) stop('COMPOSER_NOT_EMPTY');
       try {
         await page.focus('[role="textbox"], [contenteditable="true"]');
         await page.keyboard.press('ControlOrMeta+A');
         await page.keyboard.press('Backspace');
       } catch { stop('EGO_ATTACH_FAILED'); }
-      const cleared = await page.evaluate(() => {
+      const cleared = await page.evaluate(expectedText => {
         const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
-        return { text: box ? (box.innerText || '') : null, cleared: true };
-      });
+        if (!box) return { found: false };
+        const blocks = [...box.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+        if (!blocks.length) blocks.push((box.textContent || '').replace(/\s+/g, ' ').trim());
+        const want = String(expectedText).split('\n').map(line => line.replace(/\s+/g, ' ').trim());
+        const match = blocks.length === want.length && blocks.every((b, i) => b === want[i]);
+        return { found: true, text: blocks.join('\n'), match, marker: 'verifyCleared' };
+      }, expectedBody);
       if (!cleared || typeof cleared.text !== 'string' || cleared.text.trim()) stop('COMPOSER_NOT_EMPTY');
     }
     // 본문 삽입: 네이티브 keyboard.insertText(신뢰 입력). execCommand는 비신뢰 이벤트라 LinkedIn 에디터
     // 모델이 등록하지 않는다(2026-11-15 실측 — DOM에 텍스트가 보여도 전송 UI가 렌더되지 않았다).
     try {
       await page.focus('[role="textbox"], [contenteditable="true"]');
-      await page.keyboard.insertText(expectedBody);
+      // 줄바꿈은 Shift+Enter로 편집기 방식대로 넣는다 — insertText의 \n은 블록으로 확장돼
+      // innerText가 부풀려진다(2026-11-15 실측: \n\n → \n\n\n\n\n). 연속 빈 줄은 경계 수만큼 누른다.
+      const lines = String(expectedBody).split('\n');
+      for (let i = 0; i < lines.length; i += 1) {
+        if (i > 0) await page.keyboard.press('Shift+Enter');
+        if (lines[i]) await page.keyboard.insertText(lines[i]);
+      }
     } catch { stop('EGO_ATTACH_FAILED'); }
-    // readback: 공백 정규화 없이 정확히 일치해야 전송 동작을 한다.
-    const readback = await page.evaluate(() => {
+    // readback: 블록 구조가 승인된 본문과 정확히 일치해야 전송 동작을 한다.
+    const readback = await page.evaluate(expectedText => {
       const box = document.querySelector('[role="textbox"], [contenteditable="true"]');
-      return { text: box ? (box.innerText || '') : null };
-    });
-    if (!readback || typeof readback.text !== 'string' || readback.text !== expectedBody) stop('READBACK_MISMATCH');
+      if (!box) return { found: false };
+      const blocks = [...box.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+      if (!blocks.length) blocks.push((box.textContent || '').replace(/\s+/g, ' ').trim());
+      const want = String(expectedText).split('\n').map(line => line.replace(/\s+/g, ' ').trim());
+      const match = blocks.length === want.length && blocks.every((b, i) => b === want[i]);
+      return { found: true, text: blocks.join('\n'), match, marker: 'verifyReadback' };
+    }, expectedBody);
+    if (!readback || readback.found !== true || readback.match !== true) stop('READBACK_MISMATCH');
     // 전송 동작: 이 UI 변형에는 전송 버튼이 없다 — composer 힌트가 "Press Enter to Send"이므로(2026-11-15
     // 사용자 실측) Enter 1회로 전송한다. 클릭과 같은 전송 동작이므로 이전 실패는 BLOCKED, 이후 불명은 UNKNOWN이다.
     try {

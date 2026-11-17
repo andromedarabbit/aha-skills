@@ -1,5 +1,18 @@
 # 변경 이력
 
+## 1.12.0 — 2026-11-16
+
+scan에 **수신 응답 관측 계층**을 추가해 상세 개방 없이 판정을 끝낼 수 있게 한다.
+
+- **수신 응답 관측(티어 A)**: 목록 자식 안에서 `page.cdp('Network.enable')` → `/messaging/` 1회 접속 → `page.events()` 버퍼의 `Network.responseReceived`/`loadingFinished`에서 페이지가 스스로 수신한 messaging API 응답만 골라 `Network.getResponseBody`로 본문을 읽고 자식 안에서 파싱한다. 응답 원문은 자식 밖으로 나가지 않고 요약(uuid·발신자·프리뷰 대조용 본문)만 반환된다. 방향 판정은 발신자 식별자(`miniProfile.publicIdentifier`·urn의 ACoAAA)를 binding의 소유자 slug·프로필 ID와 대조하는 방식이다 — 서버가 방향 필드를 주지 않기 때문이다. 입증 규칙은 상세 계층과 동일(정규화 본문 ↔ 목록 프리뷰 접두 대조)이고, 이름 일치 1건이 1차 매칭이며 정확히 1건일 때만 캡처한다.
+- **계약**: 관측은 페이지가 이미 받은 응답만 읽는다 — 새 요청·재요청·쿼리 식별자·해시 고정·쿠키 접근 없음. 응답 형식이 불명이면 관측 0건으로 기존 상세 개방 계층(DOM 증명)에 폴백하며 신규 실패 코드는 없다. 진단은 `coverage.capturedCount`로 한다.
+- **coverage**: `capturedCount` 추가, completeness 조건에 캡처 해소 포함. 캡처 후보는 payload 유래 `events`(≤12개)를 인라인으로 실어 반환하며 threadSeg 승격이 없어 `read`는 `EGO_THREAD_NOT_OBSERVED`다 — 후보 초안 작성은 인라인 이벤트로 충분하다.
+- **계기**: baseline 실측(2026-11-16, 목록 11건)에서 scan 126초·개방 10회·partial이 구조화됐다. 스레드마다 새 ego 자식+전체 리로드가 상수 비용이었다.
+- **목록 순회 조기 종료**: 기존 안정 조건(`total === items.length`)은 LinkedIn이 행을 계속 갱신하는 실환경에서 발동하지 않아 목록 단계가 매번 순회 예산(100초)을 전부 태웠다. 캡처 계층이 켜져 있으면 payload가 순회 근거가 되고, 행 개수가 두 뷰 연속 동일하면 순회 완료(`complete: true`)로 본다. 캡처가 꺼져 있으면 기존 규칙 그대로다.
+- **실측(2026-11-16, ego-browser 0.6.3.14, 목록 11건)**: 개선 전 126.1초(2회 동일)·개방 10회·`OPEN_CAP_EXCEEDED`·partial → 개선 후 17.6초/16.6초·개방 5회(캡처 6건 해소)·상한 초과 해소·`complete: true`. 후보 집합(이름+UUID 4건) 양방향 parity 확인. 잔여 개방 5건은 InMail 발신자(urn에 ACoAAA 없음)와 프리뷰 미입증분 — 후속 개선 여지.
+- **가독 판정 승격(2026-11-17)**: InMail 제목형 프리뷰는 스레드 버블에 렌더되지 않아(read 실측: 렌더 이벤트 1건이 내 발신 "예 감사합니다!"뿐) 접두 입증이 구조적으로 실패하고, 해당 스레드가 매 회차 `LATEST_EVENT_UNPROVEN` 검토 필요로 영구 남았다. 접두 입증 실패여도 렌더된 마지막 버블 내용이 읽혔으면(`lastEventReadable`) DOM 발신자 판정으로 answered/후보를 확정하고, `LATEST_EVENT_UNPROVEN`은 내용 미가독(빈 버블·반응 이벤트)에만 남긴다. 검증 scan(2026-11-17): 검토 필요 2건 → 0건, answered 4→6, 완전성 partial → complete.
+- **페이로드 실측 형태**: 대화 uuid는 `conversationUrl`의 스레드 seg(2-+base64url) 디코딩(DOM 계층과 동일 규칙), 방향은 `sender.entityUrn`의 ACoAAA vs binding 프로필 ID, 본문은 `body.text`, 표시 이름은 소유자를 제외한 참가자의 `participantType.member` 이름. 첫 구현의 범용 walker 가정(events 배열·conversationUrn·miniProfile.publicIdentifier)은 공개 자료 기반 추정과 달랐다 — 진단 스크립트로 실측해 교정했다.
+
 ## 1.11.0 — 2026-11-15
 
 첫 실환경 전송 실측(2026-11-15, ego-browser 0.6.3.14)과 LinkedIn 마크업 변화로 발견한 결함들을 교정하고 전송 경로를 재작성한다.
