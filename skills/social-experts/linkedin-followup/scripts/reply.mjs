@@ -678,12 +678,14 @@ export async function scanEgo(input) {
   const answeredNames = [];
   let capExceeded = false;
   let detailOpened = 0;
+  let capturedCount = 0;
   try {
     durableWrite(join(path, 'operation.json'), { operation: 'scan', attemptId: randomUUID(), startedAt: new Date().toISOString(), ownerPid: process.pid });
     const fd = openSync(join(STATE_DIR, 'locks'), constants.O_RDONLY);
     try { fsyncSync(fd); } finally { closeSync(fd); }
     phase = 'UI_OPERATION_FAILED';
-    observed = await scanEgoList({ executable: link.executable, taskSpaceName: link.taskSpaceName, fingerprint: link.fingerprint, deadlineMs: 100000 });
+    observed = await scanEgoList({ executable: link.executable, taskSpaceName: link.taskSpaceName, fingerprint: link.fingerprint, deadlineMs: 100000,
+      ownerSlug: link.account?.slug ?? null, ownerProfileId: link.account?.profileId ?? null });
     // 관측 기록은 락 안에서 쓴다(KTD20). 원문 대신 preview·time 해시만 저장해 변경을 감지한다.
     const slug = link.account?.slug ?? null;
     for (const item of observed.items) {
@@ -692,10 +694,27 @@ export async function scanEgo(input) {
       let previous = null;
       try { previous = readPrivate(recordPath); } catch { previous = null; }
       const changed = !previous || previous.previewHash !== previewHash;
+      const capture = item.capture ?? null;
       try {
-        durableWrite(recordPath, { name: item.name, previewHash, observedAt: new Date().toISOString(), changed });
+        // 캡처 해소분은 uuid·발신자 종별·출처를 이름 키 기록에 남긴다. threadSeg는 DOM 개방분만 승격된다 —
+        // 캡처 후보의 전체 이력 read는 미지원(후보에 ≤12개 이벤트가 인라인으로 실린다).
+        durableWrite(recordPath, capture ? {
+          name: item.name, previewHash, observedAt: new Date().toISOString(), changed,
+          uuid: capture.conversationUuid, lastSenderKind: capture.lastSenderIsOther ? 'other' : 'self', source: 'capture',
+        } : { name: item.name, previewHash, observedAt: new Date().toISOString(), changed });
       } catch { recordWriteFailed = true; }
-      review.push({ ...item, previewHash, status: 'review', reason: 'DETAIL_NOT_PERMITTED', changed });
+      if (capture) {
+        capturedCount += 1;
+        if (capture.lastSenderIsOther === true) {
+          candidates.push({ name: item.name, conversationUuid: capture.conversationUuid,
+            preview: item.preview, time: item.time, events: Array.isArray(capture.events) ? capture.events : [] });
+        } else {
+          answeredNames.push(item.name);
+        }
+        continue;
+      }
+      review.push({ index: item.index, name: item.name, preview: item.preview, time: item.time,
+        previewHash, status: 'review', reason: 'DETAIL_NOT_PERMITTED', changed });
     }
     // 상세 계층(KTD22–24): 개방 대상 선정(기록 없음·변경 우선) → cap 내 순차 개방 → 판정·UUID 키 승격.
     const { openEgoThread } = await import('./ego-ui.mjs');
@@ -722,7 +741,9 @@ export async function scanEgo(input) {
       detailOpened += 1;
       item.conversationUuid = opened.conversationUuid;
       item.lastSenderIsOther = opened.lastSenderIsOther;
-      if (opened.proofMatch !== true) {
+      // 가독 판정 승격(2026-11-17): 접두 입증 실패여도 마지막 버블 내용이 읽혔으면 DOM 발신자
+      // 판정으로 answered/후보를 확정한다. UNPROVEN은 내용 미가독(빈 버블·반응 이벤트)에만 남는다.
+      if (opened.proofMatch !== true && opened.lastEventReadable !== true) {
         item.status = 'review'; item.reason = 'LATEST_EVENT_UNPROVEN';
         // 개방에 성공한 검토 항목도 seg 기록을 승격한다 — read로 본문을 확인할 수 있어야 실제 검토가 가능하다(2026-11-15).
         durableWrite(join(recordsDir, `ego-obs-${digest(['ego-observation', slug, 'uuid', opened.conversationUuid])}.json`),
@@ -758,14 +779,16 @@ export async function scanEgo(input) {
   const reason = capExceeded ? '개방 상한 초과분은 미개방 검토 필요입니다'
     : openFailedCount > 0 && detailOpened === 0 ? '상세 개방이 실패해 발신자 판정을 확정하지 못했습니다'
     : openFailedCount > 0 ? '일부 항목의 상세 개방이 실패했습니다'
+    : capturedCount > 0 && detailOpened === 0 ? '수신 응답 관측으로 발신자를 확정했습니다'
+    : capturedCount > 0 ? '수신 응답 관측과 상세 개방으로 발신자를 확정했습니다'
     : '상세 개방으로 발신자를 확정했습니다';
   return {
     status: 'OK', transport: 'ego-ui/1', candidates, review: finalReview,
     filters: observed.filters, complete: observed.complete,
     coverage: { listed: observed.itemCount, detailOpened, openCap: cap, capExceeded,
-      answeredCount: answeredNames.length,
+      answeredCount: answeredNames.length, capturedCount,
       recordWriteFailed: observed.recordWriteFailed,
-      completeness: observed.complete && !capExceeded && finalReview.length === 0 && detailOpened > 0 ? 'complete' : 'partial',
+      completeness: observed.complete && !capExceeded && finalReview.length === 0 && (detailOpened > 0 || capturedCount > 0) ? 'complete' : 'partial',
       reason },
   };
 }

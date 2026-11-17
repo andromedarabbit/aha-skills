@@ -38,7 +38,7 @@ approved_accounts: "{x: u0}"           # 계정 매핑 — 훅만 기록
 
 **3. 검증 아티팩트와 실행 페이로드를 의식적으로 정합시킨다.** 실행 계층에 넘기는 것과 검증한 것이 같은지 자문한다. 게시 페이로드는 본문만 담고(frontmatter 제거), 미디어·링크는 절대경로·alt 지시로 명시 전달한다 — 반면 승인 digest는 **원본 전체 파일** 기준을 유지해 "검증된 원본"과 "게시된 파생물"이 하나의 원본으로 묶이게 한다. 동결 직후 원본을 다시 해싱해 승인 digest와 비교하면 검사-동결 사이 TOCTOU도 같이 닫힌다.
 
-**4. 성공 신호는 기계 감지다.** 실행 계층(자연어 에이전트)의 exit code는 성공을 증명하지 않는다. 스크립트가 출력에서 결과의 존재 증거(게시 URL `https?://`)를 grep하고, 없으면 "게시 여부 불명"으로 실패 종료한다. 침묵 실패가 사용자에게 도달하는 기계 경로를 만드는 것이 목적이다.
+**4. 성공 신호는 기계 감지다.** 실행 계층(자연어 에이전트)의 exit code는 성공을 증명하지 않는다. 스크립트가 출력에서 결과의 존재 증거(게시 URL `https?://`)를 grep하고, 없으면 "게시 여부 불명"으로 실패 종료한다. 침묵 실패가 사용자에게 도달하는 기계 경로를 만드는 것이 목적이다. 단, 기계 신호 자체도 실제 환경 구조 때문에 항상-참이 될 수 있다 — 신호는 실환경에서 반증 가능함(가드를 무력화하는 입력에서 거짓이 나옴)을 확인해야 하며, 스텁 환경의 변이 테스팅은 실환경 구조가 만드는 항상-참을 잡지 못한다(실측 사례: [dom-evidence-guard-scoping.md](dom-evidence-guard-scoping.md)).
 
 ## Why This Matters
 
@@ -70,5 +70,6 @@ current_digest="$(hash_file "$DRAFT")"
 ## Related
 
 - `machine-checked-doc-invariants.md` — 문서 불변식의 기계 검증. 이 문서는 그 원칙을 "동작 가드"로 확장한다
+- `dom-evidence-guard-scoping.md` — 기계 성공 신호가 실환경 구조(형제 창 잔존 렌더)로 항상-참이 되어 가드를 무력화한 실측 사례
 - `career-memoir-interview-pipeline.md` — 비가역 단계 앞의 기계 강제 게이트 패턴 (state SSOT + 복구)
 - 구현: `skills/social-experts/social-posting/scripts/{publish.sh, record-approval.sh, post-state.sh, lib/receipt.sh}` (커밋 `d8831e8`)

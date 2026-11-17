@@ -147,6 +147,30 @@ const pageStub = (label, baseUrl) => ({
     return value;
   },
   snapshot: async () => { record('snapshot'); return state.snapshot; },
+  cdp: async (method, params) => {
+    record('cdp:' + method);
+    if (method === 'Network.enable') {
+      if (state.cdpEnableError) throw new Error('cdp unavailable');
+      return {};
+    }
+    if (method === 'Network.getResponseBody') {
+      const map = state.cdpBody ?? {};
+      const got = map[params?.requestId];
+      if (got === undefined) throw new Error('no body');
+      return got;
+    }
+    return {};
+  },
+  events: async () => {
+    record('events');
+    if (state.eventsThrow) throw new Error('events unavailable');
+    if (Array.isArray(state.eventsQueue) && state.eventsQueue.length) {
+      const next = state.eventsQueue.shift();
+      if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, eventsQueue: state.eventsQueue }));
+      return next;
+    }
+    return state.cdpEvents ?? [];
+  },
   mouse: { move: async () => { record('mouse-move'); }, wheel: async () => { record('wheel'); } },
 });
 const task = {
@@ -829,7 +853,6 @@ test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정�
     { lastSenderIsOther: false, text: 'p2 확인했습니다', renderedCount: 1, events: [{ senderIsOther: false, text: 'p2 확인했습니다' }] },
   ] });
   const result = f.runScan({ detailOpenCap: 2 });
-  if (result.data?.coverage?.detailOpened !== 2) console.error('DBGY', JSON.stringify(result.data.review?.map(r => [r.name, r.reason])), JSON.stringify(result.stderr || '').slice(0, 300));
   assert.equal(result.data.status, 'OK');
   assert.equal(result.data.coverage.detailOpened, 2);
   assert.equal(result.data.coverage.openCap, 2);
@@ -1051,8 +1074,6 @@ test('read auto는 messengerMessages 캡처를 우선하고 교차 검증해 채
     readEvents: { renderedCount: 1, events: [{ senderIsOther: true, text: '나중에 온 캡처 메시지' }] },
   });
   const result = f.runRead({ maxEvents: 10, maxEventChars: 300 });
-  try { console.error('U5-OPS-TAIL', JSON.stringify(f.records('operations').slice(-14))); } catch {}
-  try { console.error('U5-STDERR', JSON.stringify(String(result.stderr).slice(0, 300))); } catch {}
   assert.equal(result.data.status, 'OK');
   assert.equal(result.data.source, 'capture');
   assert.equal(result.data.events.length, 2);
@@ -1095,21 +1116,51 @@ test('read capture 명시는 실패 시 폴백 없이 실패를 반환한다', t
   assert.equal(result.data.status, 'CAPTURE_NO_ENDPOINT');
 });
 
-test('proof 불일치는 LATEST_EVENT_UNPROVEN으로 후보에서 제외한다', t => {
-  const f = detailSetup(t);
-  f.save({
-    fingerprint: { labels: ['Focused', 'Unread'], hasConversationList: true },
-    filters: [{ label: 'Focused', checked: 'false' }],
+test('InMail 제목형 프리뷰는 내용이 읽히면 DOM 발신자 판정으로 후보 승격한다', t => {
+  // 실측(2026-11-17): InMail 제목은 스레드 버블에 렌더되지 않아 접두 입증이 구조적으로 실패한다.
+  // 접두 입증 실패여도 렌더 버블이 읽히면(마지막 행 발신자 클래스 판독 성공) 판정한다.
+  const f = detailSetup(t, {
+    evaluateQueue: [
+      { items: [{ index: 0, name: 'A', preview: 'InMail • 국내 커머스 CTO 포지션 제안(confidential)', time: 'Nov 2' }], total: 1 },
+      { items: [{ index: 0, name: 'A', preview: 'InMail • 국내 커머스 CTO 포지션 제안(confidential)', time: 'Nov 2' }], total: 1 },
+      { items: [{ index: 0, name: 'A', preview: 'InMail • 국내 커머스 CTO 포지션 제안(confidential)', time: 'Nov 2' }], total: 1 },
+    ],
+    readEvents: { lastSenderIsOther: true, text: '안녕하세요 재훈님, 인사드립니다.', renderedCount: 1, events: [{ senderIsOther: true, text: '안녕하세요 재훈님, 인사드립니다.' }] },
+  });
+  const result = f.runScan({ detailOpenCap: 1 });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.candidates.length, 1);
+  assert.equal(result.data.candidates[0].events.length, 1, '가독 판정 승격 후보에도 이벤트가 붙는다');
+  assert.equal(result.data.review.length, 0);
+});
+
+test('InMail 제목형 프리뷰는 내용이 읽히면 DOM 판정으로 answered 처리한다(마지막 발신자=나)', t => {
+  // 실제 케이스(김충수, 2026-11-17 read 실측): 렌더 이벤트 1건이 내 발신("예 감사합니다!")이고
+  // 목록 프리뷰는 InMail 제목이라 접두 입증이 실패했던 스레드.
+  const f = detailSetup(t, {
+    evaluateQueue: [
+      { items: [{ index: 0, name: 'A', preview: '국내 커머스 CTO 포지션 제안(confidential)', time: 'Nov 2' }], total: 1 },
+      { items: [{ index: 0, name: 'A', preview: '국내 커머스 CTO 포지션 제안(confidential)', time: 'Nov 2' }], total: 1 },
+      { items: [{ index: 0, name: 'A', preview: '국내 커머스 CTO 포지션 제안(confidential)', time: 'Nov 2' }], total: 1 },
+    ],
+    readEvents: { lastSenderIsOther: false, text: '예 감사합니다!', renderedCount: 1, events: [{ senderIsOther: false, text: '예 감사합니다!' }] },
+  });
+  const result = f.runScan({ detailOpenCap: 1 });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.candidates.length, 0);
+  assert.equal(result.data.review.length, 0);
+  assert.equal(result.data.coverage.answeredCount, 1);
+});
+
+test('렌더된 내용을 읽지 못하면 LATEST_EVENT_UNPROVEN 검토 필요로 남는다', t => {
+  // 유지되는 가드: 버블이 아예 읽히지 않으면(예: 마지막 이벤트가 이모지 반응) 판정하지 않는다.
+  const f = detailSetup(t, {
     evaluateQueue: [
       { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
       { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
       { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 },
     ],
-    readEventsQueue: [
-      { lastSenderIsOther: true, text: '전혀 다른 본문 내용', renderedCount: 1, events: [{ senderIsOther: true, text: '전혀 다른 본문 내용' }] },
-      { lastSenderIsOther: true, text: '전혀 다른 본문 안정 틱 판정', renderedCount: 1, events: [{ senderIsOther: true, text: '전혀 다른 본문 안정 틱 판정' }] },
-      { lastSenderIsOther: true, text: '전혀 다른 본문 세 번째 틱', renderedCount: 1, events: [{ senderIsOther: true, text: '전혀 다른 본문 세 번째 틱' }] },
-    ],
+    readEvents: { lastSenderIsOther: false, text: '', renderedCount: 3, events: [] },
   });
   const result = f.runScan({ detailOpenCap: 1 });
   assert.equal(result.data.candidates.length, 0);
@@ -1345,4 +1396,208 @@ test('scanEgo의 잘못된 입력·binding 불일치는 거부되고 aside scan�
   assert.equal(f.runScan({ taskSpaceName: 'different-skill' }).data.status, 'NEEDS_SETUP');
   assert.deepEqual(f.runReply({ transport: 'aside-ui/1' }, 'manual', 'scan').data, { status: 'UI_NOT_ACTIVATED' });
   assert.equal(existsSync(join(f.home, 'auth-called')), false);
+});
+
+// ── 수동 응답 관측 계층(1.12.0): Network.enable로 켠 도메인의 버퍼 이벤트에서 페이지가 스스로
+// 수신한 messaging API 응답만 읽어 발신자를 확정한다. 관측에 실패한 항목은 기존 DOM 증명으로 폴백한다.
+const captureUuidA = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+const captureUuidB = '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e';
+const OWNER_ID = 'ACoAAA0123456789abcdefghijklmnopqrst';
+const OTHER_ID = 'ACoAAAzzzzzzzzzzzzzzzzzzzzzzzzzzz';
+const capMsg = ({ uuid = captureUuidA, slug = 'other-slug', id = OTHER_ID, body = 'p1 요청 드립니다',
+  firstName = '', lastName = '', withFrom = true, urnOnly = false } = {}) => ({
+  conversationUrn: `urn:li:fsd_conversation:${uuid}`,
+  deliveredAt: 1730000000000,
+  body: { text: body },
+  ...(withFrom ? { from: { miniProfile: { publicIdentifier: slug,
+    entityUrn: urnOnly ? `urn:li:fs_miniProfile:${id}` : `urn:li:member:${id}`, firstName, lastName } } } : {}),
+});
+const capPair = requestId => [
+  { method: 'Network.responseReceived', params: { requestId, response: { url: 'https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql?queryId=messengerConversations.deadbeef&variables=(mailbox)' } } },
+  { method: 'Network.loadingFinished', params: { requestId } },
+];
+const nameRecordPath = (f, name) => join(f.home, '.local/share/aha-skills/linkedin-replies/conversations',
+  `ego-obs-${createHash('sha256').update(JSON.stringify(['ego-observation', 'test-slug', name])).digest('hex')}.json`);
+// 캡처 테스트용 2항목 뷰 — A(상대 발신 프리뷰 p1)·B(own 발신 프리뷰 p2). 안정 완료를 위해 동일 뷰 4회.
+const captureSetup = t => {
+  const f = scanSetup(t);
+  const view = { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 };
+  f.save({ evaluateQueue: [view, view, view, view] });
+  return f;
+};
+
+test('수신 응답 관측은 상세 개방 없이 후보·answered를 판정하고 이름 키 기록에 출처를 남긴다', t => {
+  const f = captureSetup(t);
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ uuid: captureUuidA, body: 'p1 요청 드립니다', firstName: 'A' }),
+    capMsg({ uuid: captureUuidB, slug: 'test-slug', id: OWNER_ID, body: 'p2 확인했습니다', firstName: 'B' }),
+  ] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.coverage.detailOpened, 0, '캡처로 판정된 항목은 상세 개방하지 않는다');
+  assert.equal(result.data.coverage.capturedCount, 2);
+  assert.equal(result.data.candidates.length, 1);
+  assert.deepEqual(result.data.candidates[0], { name: 'A', conversationUuid: captureUuidA,
+    preview: 'p1', time: 'Nov 12', events: [{ senderIsOther: true, text: 'p1 요청 드립니다' }] });
+  assert.equal(result.data.review.length, 0);
+  assert.equal(result.data.coverage.answeredCount, 1, '소유자 발신은 answered로 판정된다');
+  assert.equal(result.data.coverage.completeness, 'complete', '개방 0회여도 캡처 해소면 complete다');
+  const ops = f.records('operations');
+  assert.ok(ops.includes('cdp:Network.enable'));
+  assert.ok(ops.indexOf('cdp:Network.enable') < ops.indexOf('goto:/messaging/', ops.indexOf('cdp:Network.enable')), 'enable은 goto보다 앞선다');
+  assert.equal(f.records('calls').length, 2, 'setup 외 목록 자식 1회면 충분하다');
+  const record = JSON.parse(readFileSync(nameRecordPath(f, 'A'), 'utf8'));
+  assert.equal(record.source, 'capture');
+  assert.equal(record.uuid, captureUuidA);
+  assert.equal(record.lastSenderKind, 'other');
+  assert.equal('threadSeg' in record, false, '캡처분은 seg 승격이 없다');
+  assert.equal('events' in record, false, '본문은 기록에 남지 않는다');
+});
+
+test('캡처는 발신자 urn 비교로도 방향을 판정한다', t => {
+  const f = scanSetup(t);
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ slug: 'not-owner-slug', id: OWNER_ID, body: 'p1 제가 보낸 메시지', firstName: 'A' }),
+  ] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.candidates.length, 0);
+  assert.equal(result.data.coverage.answeredCount, 1);
+});
+
+test('캡처에 없는 항목만 상세 개방으로 폴백한다', t => {
+  const f = captureSetup(t);
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ body: 'p1 요청 드립니다', firstName: 'A' }),
+  ] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.coverage.capturedCount, 1);
+  assert.equal(result.data.candidates.length, 1);
+  assert.equal(result.data.review.length, 1);
+  assert.match(result.data.review[0].reason, /^THREAD_OPEN_FAILED:/);
+});
+
+for (const [label, patch] of [
+  ['cdp 사용 불가', { cdpEnableError: true }],
+  ['events 사용 불가', { eventsThrow: true }],
+  ['응답 미발견', { eventsQueue: [capPair('r1')], cdpBody: {} }],
+  ['응답이 JSON이 아님', { eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: 'not-json' } } }],
+  ['응답 셰이프 불명', { eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: '{"unrelated":1}' } } }],
+  ['발신자 식별 불가(InMail)', { eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ withFrom: false, body: 'p1 요청 드립니다' }),
+  ] }) } } }],
+  ['이름 충돌', { eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ body: 'p1 요청 드립니다', firstName: 'A' }),
+    capMsg({ uuid: captureUuidB, body: 'p1 요청 드립니다', firstName: 'A' }),
+  ] }) } } }],
+]) test(`관측 실패·불명 항목은 캡처 없이 DOM 증명으로 폴백한다: ${label}`, t => {
+  const f = captureSetup(t);
+  f.save(patch);
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK', '관측 실패는 scan 실패가 아니다');
+  assert.equal(result.data.coverage.capturedCount, 0);
+  assert.equal(result.data.candidates.length, 0);
+  assert.equal(result.data.review.length, 2);
+  assert.match(result.data.review[0].reason, /^(THREAD_OPEN_FAILED|OPEN_CAP_EXCEEDED)/);
+});
+
+test('같은 requestId 재수신은 중복 수집하지 않는다', t => {
+  const f = scanSetup(t);
+  f.save({ cdpEvents: capPair('r1').concat(capPair('r2')), cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ body: 'p1 요청 드립니다', firstName: 'A' }),
+  ] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.coverage.capturedCount, 1);
+  assert.deepEqual(result.data.candidates[0].events, [{ senderIsOther: true, text: 'p1 요청 드립니다' }]);
+});
+
+test('base64 응답 본문도 디코딩해 파싱한다', t => {
+  const f = scanSetup(t);
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: true,
+    body: Buffer.from(JSON.stringify({ included: [capMsg({ body: 'p1 요청 드립니다', firstName: 'A' })] })).toString('base64') } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.coverage.capturedCount, 1);
+  assert.equal(result.data.candidates.length, 1);
+});
+
+test('캡처의 과도한 senderSlug는 부모 스키마 검증으로 거부된다', t => {
+  const f = scanSetup(t);
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ slug: 'x'.repeat(200), body: 'p1 요청 드립니다', firstName: 'A' }),
+  ] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'EGO_OUTCOME_UNKNOWN');
+  assert.equal(result.data.reason, 'EGO_SCHEMA_INVALID');
+  assert.equal(result.data.profileLockRetained, true);
+});
+
+test('실측 형태(2026-11-16) 페이로드는 seg uuid·참가자 이름·sender urn으로 판정한다', t => {
+  const realSegOf = uuid => '2-' + Buffer.from(`${uuid}_100`).toString('base64url');
+  const capConvReal = ({ uuid = captureUuidA, name = 'A', selfSent = false, body = 'p1 요청 드립니다' } = {}) => ({
+    notificationStatus: 'ACTIVE',
+    conversationParticipants: [
+      { entityUrn: `urn:li:msg_messagingParticipant:(urn:li:fsd_profile:x-${name})`,
+        participantType: { member: { firstName: name, lastName: '', profileUrl: `https://www.linkedin.com/in/other-${name}` } } },
+      { entityUrn: `urn:li:msg_messagingParticipant:${OWNER_ID}`,
+        participantType: { member: { firstName: '재훈', lastName: '최', profileUrl: 'https://www.linkedin.com/in/x' } } },
+    ],
+    conversationUrl: `https://www.linkedin.com/messaging/thread/${realSegOf(uuid)}/`,
+    messages: { _type: 'com.linkedin.messenger.Messages', elements: [
+      { deliveredAt: 1730000000000, body: { text: body },
+        sender: { entityUrn: selfSent ? `urn:li:msg_messagingParticipant:${OWNER_ID}` : `urn:li:msg_messagingParticipant:ACoAAAother01${name}` } },
+    ] },
+  });
+  const f = captureSetup(t);
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ data: { messengerConversationsBySyncToken: { elements: [
+    capConvReal({ uuid: captureUuidA, name: 'A', selfSent: false, body: 'p1 요청 드립니다' }),
+    capConvReal({ uuid: captureUuidB, name: 'B', selfSent: true, body: 'p2 확인했습니다' }),
+  ] } } }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.coverage.detailOpened, 0, '실측 형태에서도 상세 개방 없이 판정한다');
+  assert.equal(result.data.coverage.capturedCount, 2);
+  assert.equal(result.data.candidates.length, 1);
+  assert.equal(result.data.candidates[0].name, 'A');
+  assert.equal(result.data.candidates[0].conversationUuid, captureUuidA);
+  assert.equal(result.data.coverage.answeredCount, 1);
+});
+
+test('캡처가 보이는 항목을 모두 해소하면 안정 라운드에서 조기 종료한다', t => {
+  // load-more 행으로 total > items.length인 상태(기존 안정 조건 불발)에서도 조기 종료해야 한다.
+  const f = captureSetup(t);
+  const view = { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 3 };
+  f.save({ evaluateQueue: [view, view, view, view], eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ uuid: captureUuidA, body: 'p1 요청 드립니다', firstName: 'A' }),
+    capMsg({ uuid: captureUuidB, slug: 'test-slug', id: OWNER_ID, body: 'p2 확인했습니다', firstName: 'B' }),
+  ] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.complete, true, '캡처 활성 시 행 개수 안정이면 순회 완료로 본다');
+  assert.equal(result.data.coverage.capturedCount, 2);
+  assert.equal(result.data.coverage.detailOpened, 0);
+  const wheels = f.records('operations').filter(op => op === 'wheel').length;
+  assert.ok(wheels <= 2, `조기 종료로 순회가 짧아진다: wheel ${wheels}회`);
+});
+
+test('scan 목록 스크립트는 수동 관측 계약을 소스 수준에서 따른다', t => {
+  // 전량 캡처 시나리오로 돌려 상세 개방 자식이 없게 한다 — 마지막으로 기록된 자식 스크립트가 scanList다.
+  const f = captureSetup(t);
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [
+    capMsg({ uuid: captureUuidA, body: 'p1 요청 드립니다', firstName: 'A' }),
+    capMsg({ uuid: captureUuidB, slug: 'test-slug', id: OWNER_ID, body: 'p2 확인했습니다', firstName: 'B' }),
+  ] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.coverage.detailOpened, 0);
+  const script = readFileSync(join(f.home, 'script'), 'utf8');
+  const enableAt = script.indexOf('Network.enable');
+  assert.ok(enableAt >= 0, 'Network.enable이 스크립트에 있다');
+  assert.ok(enableAt < script.indexOf('timeout: 45000'), 'Network.enable은 goto보다 앞선다');
+  assert.doesNotMatch(script, /page\.fetch\(|queryId/, '능동 재요청·queryId 고정은 없다');
+  assert.doesNotMatch(script, /\b[0-9a-f]{32}\b/, '해시 리터럴을 굳히지 않는다');
+  assert.match(script, /^\(/);
+  assert.match(script, /\.catch\(/);
 });
