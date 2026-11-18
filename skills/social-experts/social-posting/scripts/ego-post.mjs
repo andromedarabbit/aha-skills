@@ -19,9 +19,19 @@
 // Usage 상세는 docs/REFERENCE.md "ego 실행 계약".
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { materializeFetchedMedia } from './materialize-media.mjs';
+import * as xUI from './platforms/x.mjs';
+import * as linkedinUI from './platforms/linkedin.mjs';
+import * as facebookUI from './platforms/facebook.mjs';
+import * as blueskyUI from './platforms/bluesky.mjs';
+import * as threadsUI from './platforms/threads.mjs';
+
+const PLATFORM_UI = { x: xUI, linkedin: linkedinUI, facebook: facebookUI, bluesky: blueskyUI, threads: threadsUI };
+const { facebookIdentity, facebookPost } = facebookUI;
 
 const MAX_OUTPUT = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 125000;
@@ -42,7 +52,7 @@ export const POST_STEP_CODES = Object.freeze([
   'EGO_EVIDENCE_MISSING', 'EGO_IDENTITY_NOT_FOUND',
 ]);
 
-export const PLATFORMS = Object.freeze(['x', 'linkedin', 'facebook', 'bluesky']);
+export const PLATFORMS = Object.freeze(['x', 'linkedin', 'facebook', 'bluesky', 'threads']);
 export const TASK_SPACE_NAME = 'social-posting-skill';
 export const TRANSPORT = 'ego-post/1';
 
@@ -200,143 +210,35 @@ function stepFail(output) {
 // ── setup: 플랫폼별 신원 획득 고정 스크립트 ──────────────────────────
 // 실측 전 주석: 각 플랫폼 신원 추출 셀렉터는 첫 실환경 실행(측정) 전까지 보수적 추정이다.
 
-async function childAcquireIdentityX(spaceName) {
-  let task;
-  try { task = await taskSpace(spaceName); }
-  catch (error) {
-    const inUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
-    console.log(JSON.stringify({ status: inUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
-    return;
+
+
+
+async function ownProfileHref(page, platform) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const href = await page.evaluate(profile => {
+      const path = new RegExp(profile.path);
+      const selector = profile.selector;
+      const hrefs = new Set([...document.querySelectorAll(selector)]
+        .filter(link => link.getClientRects().length > 0)
+        .map(link => link.getAttribute('href')).filter(href => path.test(href ?? ''))
+        .map(href => href.replace(/\/+$/, '')));
+      return hrefs.size === 1 ? [...hrefs][0] : null;
+    }, { path: PLATFORM_UI[platform].ownProfilePath, selector: PLATFORM_UI[platform].ownProfileSelector });
+    if (href) return href;
+    await new Promise(r => setTimeout(r, 600));
   }
-  const stop = code => { throw Object.assign(new Error, { code }); };
-  try {
-    const pages = await task.pages();
-    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
-    await page.goto('https://x.com/home', { timeout: 45000 });
-    await new Promise(r => setTimeout(r, 2500));
-    const url = await page.url();
-    const u = new URL(url);
-    if (u.hostname !== 'x.com' && u.hostname !== 'twitter.com') stop('EGO_ORIGIN_MISMATCH');
-    // 프로필 탭(= 핸들 href)은 로그인 직후 렌더가 늦다 — 폴링으로 기다린다.
-    // 실측(2026-11-14): 폴백 스캔이 사이드바 "홈" 링크(/home)를 프로필로 오탐한 사례가 있어
-    // 예약 경로는 신원에서 제외한다.
-    const RESERVED = new Set(['home', 'explore', 'notifications', 'messages', 'i', 'search', 'settings', 'communities', 'grok', 'lists', 'bookmarks', 'profile', 'compose', 'intent', 'connect', 'hashtag']);
-    let profileHref = null;
-    const hrefDeadline = Date.now() + 10000;
-    while (Date.now() < hrefDeadline && !profileHref) {
-      const candidate = await page.evaluate(() => document.querySelector('a[data-testid="AppTabBar_Profile_Link"]')?.getAttribute('href') || null);
-      const match = candidate && /^\/([A-Za-z0-9_]{1,20})$/.exec(candidate);
-      if (match && !RESERVED.has(match[1].toLowerCase())) profileHref = candidate;
-      if (profileHref) break;
-      await new Promise(r => setTimeout(r, 600));
-    }
-    const probe = await page.evaluate(() => ({
-      hasLogin: !!document.querySelector('input[autocomplete="username"], input[name="session[username_or_email]"]'),
-      // 실측(2026-11-14): 로그아웃 상태의 x.com/home는 랜딩으로 리다이렉트되고 로그인 폼이
-      // 아니라 "Sign in" 링크가 있다 — 링크 기반 탐지까지 병행한다.
-      hasSignInLink: [...document.querySelectorAll('a, button')].some(e => /^(sign in|로그인)$/i.test((e.textContent || '').trim())),
-    }));
-    if (probe?.hasLogin || probe?.hasSignInLink) stop('EGO_NEEDS_LOGIN');
-    const m = profileHref && /^\/([A-Za-z0-9_]{1,20})$/.exec(profileHref);
-    if (!m || RESERVED.has(m[1].toLowerCase())) stop('EGO_IDENTITY_NOT_FOUND');
-    console.log(JSON.stringify({ status: 'IDENTITY_ACQUIRED', identity: m[1] }));
-  } catch (error) {
-    const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_IDENTITY_NOT_FOUND', 'EGO_EVAL_STOPPED'];
-    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
-  }
+  return null;
 }
 
-async function childAcquireIdentityLinkedin(spaceName) {
-  let task;
-  try { task = await taskSpace(spaceName); }
-  catch (error) {
-    const inUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
-    console.log(JSON.stringify({ status: inUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
-    return;
-  }
-  const stop = code => { throw Object.assign(new Error, { code }); };
-  try {
-    const pages = await task.pages();
-    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
-    await page.goto('https://www.linkedin.com/in/me/', { timeout: 45000 });
-    // /in/me는 SPA 리다이렉트로 slug 확정이 늦다(linkedin-followup G2 실측) — 리다이렉트 완료를 기다린다.
-    try { await page.waitForFunction(() => /^\/in\/(?!me\/?$)[^/]+/.test(location.pathname), undefined, { timeout: 20000 }); } catch {}
-    const url = await page.url();
-    const u = new URL(url);
-    if (u.origin !== 'https://www.linkedin.com') stop('EGO_ORIGIN_MISMATCH');
-    if (/^\/(login|authwall|checkpoint)/.test(u.pathname)) stop('EGO_NEEDS_LOGIN');
-    const slug = /^\/in\/([^/]+)/.exec(u.pathname)?.[1] ?? null;
-    if (!slug || slug === 'me') stop('EGO_IDENTITY_NOT_FOUND');
-    console.log(JSON.stringify({ status: 'IDENTITY_ACQUIRED', identity: slug }));
-  } catch (error) {
-    const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_IDENTITY_NOT_FOUND', 'EGO_EVAL_STOPPED'];
-    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
-  }
-}
 
-async function childAcquireIdentityFacebook(spaceName) {
-  let task;
-  try { task = await taskSpace(spaceName); }
-  catch (error) {
-    const inUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
-    console.log(JSON.stringify({ status: inUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
-    return;
-  }
-  const stop = code => { throw Object.assign(new Error, { code }); };
-  try {
-    const pages = await task.pages();
-    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
-    await page.goto('https://www.facebook.com/me/', { timeout: 45000 });
-    try { await page.waitForFunction(() => !/^\/me\/?$/.test(location.pathname), undefined, { timeout: 20000 }); } catch {}
-    const url = await page.url();
-    const u = new URL(url);
-    if (u.hostname !== 'www.facebook.com' && u.hostname !== 'facebook.com') stop('EGO_ORIGIN_MISMATCH');
-    if (/^\/(login|checkpoint)/.test(u.pathname)) stop('EGO_NEEDS_LOGIN');
-    const identity = facebookIdentity(u);
-    if (!identity) stop('EGO_IDENTITY_NOT_FOUND');
-    console.log(JSON.stringify({ status: 'IDENTITY_ACQUIRED', identity }));
-  } catch (error) {
-    const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_IDENTITY_NOT_FOUND', 'EGO_EVAL_STOPPED'];
-    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
-  }
-}
-
-async function childAcquireIdentityBluesky(spaceName) {
-  let task;
-  try { task = await taskSpace(spaceName); }
-  catch (error) {
-    const inUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
-    console.log(JSON.stringify({ status: inUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
-    return;
-  }
-  const stop = code => { throw Object.assign(new Error, { code }); };
-  try {
-    const pages = await task.pages();
-    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
-    await page.goto('https://bsky.app/', { timeout: 45000 });
-    await new Promise(r => setTimeout(r, 2500));
-    const url = await page.url();
-    const u = new URL(url);
-    if (u.origin !== 'https://bsky.app') stop('EGO_ORIGIN_MISMATCH');
-    if (/^\/login/.test(u.pathname)) stop('EGO_NEEDS_LOGIN');
-    const probe = await page.evaluate(() => {
-      const link = document.querySelector('a[href^="/profile/"][href*="did:plc:"], a[data-testid^="profile"], a[aria-label*="rofile" i][href^="/profile/"]');
-      return { href: link?.getAttribute('href') || null };
-    });
-    const m = probe?.href && /^\/profile\/([^/?#]+)/.exec(probe.href);
-    if (!m) stop('EGO_IDENTITY_NOT_FOUND');
-    console.log(JSON.stringify({ status: 'IDENTITY_ACQUIRED', identity: decodeURIComponent(m[1]) }));
-  } catch (error) {
-    const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_IDENTITY_NOT_FOUND', 'EGO_EVAL_STOPPED'];
-    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
-  }
-}
 
 const IDENTITY_SCRIPTS = Object.freeze({
-  x: childAcquireIdentityX,
-  linkedin: childAcquireIdentityLinkedin,
-  facebook: childAcquireIdentityFacebook,
-  bluesky: childAcquireIdentityBluesky,
+  x: xUI.childAcquireIdentityX,
+  linkedin: linkedinUI.childAcquireIdentityLinkedin,
+  facebook: facebookUI.childAcquireIdentityFacebook,
+  bluesky: blueskyUI.childAcquireIdentityBluesky,
+  threads: threadsUI.childAcquireIdentityThreads,
 });
 
 // ── bootstrap: 최근 게시물 verbatim 수집 (Stage 4 보이스 프로필 원본) ──
@@ -350,71 +252,186 @@ async function childBootstrap(spaceName, platform, spec) {
     return;
   }
   const stop = code => { throw Object.assign(new Error, { code }); };
-  const norm = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const collected = [];
+  let networkPage = null;
+  let deadline = Date.now() + 60000;
+  const beforeDeadline = async promise => {
+    let timer;
+    try {
+      return await Promise.race([promise, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Error('TIME_LIMIT')), Math.max(0, deadline - Date.now()));
+      })]);
+    } finally { clearTimeout(timer); }
+  };
+  const responseTimes = new Map();
   try {
     const pages = await task.pages();
     const page = pages.length ? task.page(pages[0].label) : await task.newPage();
-    const collected = [];
-    const seen = new Set();
-    const extractors = {
-      x: () => page.evaluate(() => [...document.querySelectorAll('article[data-testid="tweet"]')].map(a => {
-        const text = (a.querySelector('[data-testid="tweetText"]')?.innerText ?? '').trim();
-        const href = a.querySelector('a[href*="/status/"] time')?.closest('a')?.getAttribute('href') || null;
-        const time = a.querySelector('time')?.getAttribute('datetime') || null;
-        return { text, href, time };
-      }).filter(p => p.text)),
-      linkedin: () => page.evaluate(() => [...document.querySelectorAll('[data-urn*="ugcPost:"]')].map(a => ({
-        text: (a.querySelector('.update-components-text, [dir="ltr"] span')?.innerText ?? '').trim(),
-        href: a.querySelector('a[href*="ugcPost"]')?.getAttribute('href') || null,
-        time: a.querySelector('time')?.getAttribute('datetime') || null,
-      })).filter(p => p.text)),
-      facebook: () => page.evaluate(() => [...document.querySelectorAll('div[data-ad-comet-preview], div[role="article"]')].map(a => {
-        const story = a.querySelector('div[data-ad-preview="message"], div[dir="auto"] > span')?.closest('div[dir="auto"]');
-        const text = (story?.innerText ?? '').trim();
-        const href = a.querySelector('a[href*="/posts/"], a[href*="story_fbid"]')?.getAttribute('href') || null;
-        return { text, href, time: null };
-      }).filter(p => p.text)),
-      bluesky: () => page.evaluate(() => [...document.querySelectorAll('div[data-testid^="feedItem"]')].map(a => {
-        const record = a.querySelector('div[data-testid="postText"]')?.innerText ?? '';
-        const href = a.querySelector('a[href*="/post/"] time')?.closest('a')?.getAttribute('href') || null;
-        const time = a.querySelector('time')?.getAttribute('datetime') || null;
-        return { text: record.trim(), href, time };
-      }).filter(p => p.text)),
+    const seen = new Map();
+    const responses = new Map();
+    const completed = new Set();
+    let observing = false;
+    const ui = PLATFORM_UI[platform];
+    const observeResponses = async deadline => {
+      if (!observing || Date.now() >= deadline) return;
+      let events;
+      try { events = await beforeDeadline(page.events()); } catch { observing = false; return; }
+      if (!Array.isArray(events)) { observing = false; return; }
+      for (const event of events) {
+        const { method, params } = event ?? {};
+        if (!params || typeof params.requestId !== 'string') continue;
+        if (method === 'Network.responseReceived' && responses.size + completed.size < 100 && !completed.has(params.requestId)) {
+          try {
+            const url = new URL(params.response?.url);
+            if (!ui.acceptResponse(url, params.type)) continue;
+            responses.set(params.requestId, { document: params.type === 'Document', finished: false });
+          } catch {}
+        }
+        if (method === 'Network.loadingFinished' && responses.has(params.requestId)) responses.get(params.requestId).finished = true;
+        if (method === 'Network.loadingFailed') responses.delete(params.requestId);
+      }
+      for (const [requestId, response] of responses) {
+        if (!response.finished || Date.now() >= deadline) continue;
+        responses.delete(requestId);
+        completed.add(requestId);
+        try {
+          const received = await beforeDeadline(page.cdp('Network.getResponseBody', { requestId }));
+          if (typeof received?.body !== 'string' || received.body.length > 12 * 1024 * 1024) continue;
+          const body = received.base64Encoded ? Buffer.from(received.body, 'base64').toString('utf8') : received.body;
+          if (Buffer.byteLength(body, 'utf8') > 8 * 1024 * 1024) continue;
+          ui.rememberResponse(body, response.document, responseTimes);
+        } catch {}
+      }
+      for (const post of collected) {
+        const observed = responseTimes.get(post.url);
+        if (observed?.publishers.includes(post.publisher ?? facebookPost(post.url)?.publisher)) post.time = observed.time;
+      }
     };
-    const profileUrlFor = {
-      x: id => 'https://x.com/' + id,
-      linkedin: id => 'https://www.linkedin.com/in/' + id + '/recent-activity/all/',
-      facebook: id => 'https://www.facebook.com/' + id,
-      bluesky: id => 'https://bsky.app/profile/' + id,
-    };
-    if (!extractors[platform]) stop('EGO_SCHEMA_INVALID');
-    if (platform === 'facebook' && facebookIdentity(new URL(profileUrlFor.facebook(spec.identity))) !== spec.identity) stop('EGO_IDENTITY_NOT_FOUND');
-    await page.goto(profileUrlFor[platform](spec.identity), { timeout: 45000 });
+    if (!ui) stop('EGO_SCHEMA_INVALID');
+    if (platform === 'facebook' && facebookIdentity(new URL(PLATFORM_UI.facebook.profileUrl(spec.identity))) !== spec.identity) stop('EGO_IDENTITY_NOT_FOUND');
+    if (ui.rememberResponse && typeof page.cdp === 'function' && typeof page.events === 'function') {
+      networkPage = page;
+      try {
+        await page.cdp('Network.enable', { maxTotalBufferSize: 16 * 1024 * 1024, maxResourceBufferSize: 8 * 1024 * 1024 });
+        observing = true;
+      } catch {}
+    }
+    await page.goto(spec.postUrl ?? ui.profileUrl(spec.identity), { timeout: 45000 });
     try { await page.waitForFunction(() => (document.body?.innerText?.length ?? 0) > 200, undefined, { timeout: 20000 }); } catch {}
-    const deadline = Date.now() + 60000;
+    const baseUrl = await page.url();
+    const base = new URL(baseUrl);
+    if (base.origin !== new URL(ui.profileUrl(spec.identity)).origin) stop('EGO_ORIGIN_MISMATCH');
+    if (/^\/(login|authwall|checkpoint|accounts\/login)/.test(base.pathname)) stop('EGO_NEEDS_LOGIN');
+    // DOM 속성은 건드리지 않고 같은 페이지의 evaluate 호출 사이에서만 노드 신원을 유지한다.
+    await page.evaluate(() => {
+      const nodes = new WeakMap();
+      const session = crypto.randomUUID();
+      let next = 0;
+      globalThis[Symbol.for('aha-skills.social-posting.observation-id')] = node => {
+        if (!nodes.has(node)) nodes.set(node, `unidentified-${session}-${++next}`);
+        return nodes.get(node);
+      };
+    });
+    deadline = Date.now() + 60000;
+    let stopReason = 'TIME_LIMIT';
     let stableRounds = 0;
     let lastCount = -1;
     while (Date.now() < deadline && collected.length < spec.max) {
-      const found = await extractors[platform]();
+      await observeResponses(deadline);
+      if (Date.now() >= deadline) break;
+      const found = await ui.extractPosts(page);
       for (const item of found) {
-        const key = norm(item.text).slice(0, 80);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        collected.push({ text: item.text, url: item.href, time: item.time });
+        let url = null;
+        let publisher = null;
+        try {
+          const canonical = new URL(item.href, baseUrl);
+          if (!item.href || canonical.origin !== base.origin) throw Error('no permalink');
+          canonical.hash = '';
+          const story = canonical.searchParams.get('story_fbid');
+          const photo = canonical.searchParams.get('fbid');
+          const owner = canonical.searchParams.get('id');
+          canonical.search = '';
+          canonical.pathname = canonical.pathname.replace(/\/+$/, '');
+          if (story) canonical.searchParams.set('story_fbid', story);
+          if (photo) canonical.searchParams.set('fbid', photo);
+          if (owner && (story || photo)) canonical.searchParams.set('id', owner);
+          url = canonical.href;
+          publisher = ui.publisher(canonical, owner);
+          if (!publisher && item.publisherHref) publisher = facebookIdentity(new URL(item.publisherHref, baseUrl));
+        } catch {}
+        if (spec.postUrl && url !== spec.postUrl) continue;
+        let parentUrl = null;
+        try {
+          const parent = new URL(item.parentHref, baseUrl);
+          const parentPath = ui.parentPath ? new RegExp(ui.parentPath) : null;
+          if (item.parentHref && parent.origin === base.origin && !parent.username && !parent.password && parentPath?.test(parent.pathname)) {
+            parent.search = '';
+            parent.hash = '';
+            parent.pathname = parent.pathname.replace(/\/+$/, '');
+            if (parent.href !== url) parentUrl = parent.href;
+          }
+        } catch {}
+        const key = spec.scan ? (url || item.observationId) : String(item.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        const observed = responseTimes.get(url);
+        const time = observed?.publishers.includes(publisher) ? observed.time : item.time;
+        if (key && seen.has(key)) {
+          const previous = seen.get(key);
+          if (!previous.time && time) previous.time = time;
+          continue;
+        }
+        if (!spec.scan && !item.text) continue;
+        const post = { text: item.text, url, time, media: item.media ?? [],
+          ...(spec.scan ? { publisher, observationId: item.observationId, ...(parentUrl ? { parentUrl } : {}) } : {}) };
+        if (key) seen.set(key, post);
+        collected.push(post);
+        if (collected.length >= spec.max) break;
       }
+      if (collected.length >= spec.max) { stopReason = 'POST_LIMIT'; break; }
       if (collected.length === lastCount) {
         stableRounds += 1;
-        if (stableRounds >= 3) break;
+        if (stableRounds >= 3) { stopReason = 'SCROLL_STALLED'; break; }
       } else stableRounds = 0;
       lastCount = collected.length;
       await page.mouse.move(200, 300);
       await page.mouse.wheel(0, 1200);
       await new Promise(r => setTimeout(r, 500));
     }
-    console.log(JSON.stringify({ status: 'BOOTSTRAP_OBSERVED', posts: collected.slice(0, spec.max) }));
+    await observeResponses(deadline);
+    if (platform === 'threads' && !collected.length && stopReason === 'SCROLL_STALLED') stopReason = 'EGO_EVIDENCE_MISSING';
+    console.log(JSON.stringify({ status: 'BOOTSTRAP_OBSERVED', posts: collected.slice(0, spec.max), ...(spec.scan ? { stopReason } : {}) }));
   } catch (error) {
     const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED'];
-    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED' }));
+    const reason = codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED';
+    console.log(JSON.stringify(spec.scan ? { status: 'BOOTSTRAP_OBSERVED', posts: collected, stopReason: reason } : { status: reason }));
+  } finally {
+    if (networkPage) {
+      try { await beforeDeadline(networkPage.cdp('Network.disable')); } catch {}
+      try { await beforeDeadline(networkPage.events()); } catch {}
+    }
+    responseTimes.clear();
+  }
+}
+
+async function childFetchScanMedia(spaceName, sourceUrl, destination) {
+  let task;
+  try { task = await taskSpace(spaceName); }
+  catch (error) {
+    const inUse = error?.error_code === 'EGO_TASK_SPACE_NAME_IN_USE';
+    console.log(JSON.stringify({ status: inUse ? 'EGO_SPACE_NAME_IN_USE' : 'EGO_SPACE_FAILED' }));
+    return;
+  }
+  const stop = code => { throw Object.assign(new Error, { code }); };
+  try {
+    const pages = await task.pages();
+    const page = pages.length ? task.page(pages[0].label) : await task.newPage();
+    const response = await page.fetch(sourceUrl, { saveAs: destination, timeout: 45000, redirect: 'error', credentials: 'same-origin' });
+    const contentType = String(response?.headers?.['content-type'] ?? '').split(';', 1)[0].toLowerCase();
+    if (!response?.ok || !['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(contentType) ||
+        typeof response?.url !== 'string' || !/^https?:\/\//.test(response.url)) stop('EGO_MEDIA_FAILED');
+    console.log(JSON.stringify({ status: 'MEDIA_FETCHED', path: destination, sourceUrl, finalUrl: response.url, contentType }));
+  } catch (error) {
+    const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_SPACE_FAILED', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_MEDIA_FAILED'];
+    console.log(JSON.stringify({ status: codes.includes(error?.code) ? error.code : 'EGO_MEDIA_FAILED' }));
   }
 }
 
@@ -451,169 +468,8 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
     const pages = await task.pages();
     const page = pages.length ? task.page(pages[0].label) : await task.newPage();
 
-    // ── 플랫폼 프로파일 (데이터 — 셀렉터는 여기 한 곳에 모은다) ──
-    const P = {
-      x: {
-        origin: 'https://x.com',
-        composerUrl: 'https://x.com/compose/post',
-        composerSelector: '[data-testid="tweetTextarea_0"]',
-        fileInput: 'input[type="file"]',
-        attachButton: '[data-testid="addMedia"]',
-        mediaPreview: '[data-testid="attachments"]',
-        postButton: '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]',
-        evidence: async () => {
-          const gone = await page.evaluate(() => !document.querySelector('[data-testid="tweetTextarea_0"]'));
-          return gone;
-        },
-        profileUrl: id => 'https://x.com/' + id,
-        findPermalink: async text => page.evaluate(want => {
-          const matches = [];
-          for (const a of document.querySelectorAll('article[data-testid="tweet"]')) {
-            const t = norm((a.querySelector('[data-testid="tweetText"]')?.innerText ?? ''));
-            if (t === want) {
-              const href = a.querySelector('a[href*="/status/"] time')?.closest('a')?.getAttribute('href');
-              matches.push(href ?? null);
-            }
-          }
-          return matches.length === 1 ? matches[0] : null;
-          function norm(v) { return String(v ?? '').replace(/\s+/g, ' ').trim(); }
-        }, norm(text)),
-        replyOpen: async permalink => {
-          await page.goto(permalink, { timeout: 45000 });
-          try { await page.waitForFunction(() => !!document.querySelector('[data-testid="tweetTextarea_0"], [data-testid="reply"]'), undefined, { timeout: 20000 }); } catch {}
-          const clicked = await page.evaluate(() => {
-            const b = document.querySelector('[data-testid="reply"]');
-            if (!b) return false;
-            b.click();
-            return true;
-          });
-          if (!clicked) return false;
-          await sleep(1200);
-          return true;
-        },
-      },
-      bluesky: {
-        origin: 'https://bsky.app',
-        composerOpen: async () => {
-          const clicked = await page.evaluate(() => {
-            const b = document.querySelector('button[aria-label*="포스트" i], button[aria-label*="ost" i][aria-label*="ew" i], a[aria-label*="포스트" i][href="/"], button[aria-label="New Post"]');
-            if (!b) return false;
-            b.click();
-            return true;
-          });
-          if (!clicked) return false;
-          await sleep(1200);
-          return true;
-        },
-        composerSelector: 'div[contenteditable="true"][role="textbox"]',
-        attachButton: 'button[aria-label*="이미지" i], button[aria-label*="mage" i]',
-        mediaPreview: 'img[src^="blob:"], img[alt]',
-        postButton: 'button[type="submit"]',
-        evidence: async () => {
-          const gone = await page.evaluate(() => !document.querySelector('div[contenteditable="true"][role="textbox"]'));
-          return gone;
-        },
-        profileUrl: id => 'https://bsky.app/profile/' + id,
-        findPermalink: async text => page.evaluate(want => {
-          const matches = [];
-          for (const item of document.querySelectorAll('div[data-testid^="feedItem"]')) {
-            const t = norm(item.querySelector('div[data-testid="postText"]')?.innerText ?? '');
-            if (t === want) {
-              const href = item.querySelector('a[href*="/post/"] time')?.closest('a')?.getAttribute('href');
-              matches.push(href ?? null);
-            }
-          }
-          return matches.length === 1 ? matches[0] : null;
-          function norm(v) { return String(v ?? '').replace(/\s+/g, ' ').trim(); }
-        }, norm(text)),
-        replyOpen: async permalink => {
-          await page.goto(permalink, { timeout: 45000 });
-          try { await page.waitForFunction(() => !!document.querySelector('button[aria-label*="답글" i], button[aria-label*="eply" i]'), undefined, { timeout: 20000 }); } catch {}
-          const clicked = await page.evaluate(() => {
-            const b = document.querySelector('button[aria-label*="답글" i], button[aria-label*="eply" i]');
-            if (!b) return false;
-            b.click();
-            return true;
-          });
-          if (!clicked) return false;
-          await sleep(1200);
-          return true;
-        },
-      },
-      linkedin: {
-        origin: 'https://www.linkedin.com',
-        composerOpen: async () => {
-          const clicked = await page.evaluate(() => {
-            const b = document.querySelector('button[data-test-id="share-box-trigger"], button[class*="share-box"]') ||
-              [...document.querySelectorAll('button')].find(b => /start a post|게시물 작성|무엇을/i.test(b.innerText || ''));
-            if (!b) return false;
-            b.click();
-            return true;
-          });
-          if (!clicked) return false;
-          await sleep(1500);
-          return true;
-        },
-        composerSelector: '.ql-editor[contenteditable="true"], div[role="textbox"][contenteditable="true"]',
-        attachButton: 'button[data-test-id="media-add-media"], button[aria-label*="미디어" i], button[aria-label*="Add media" i]',
-        mediaPreview: '.share-confirmation, img.preview-image, div[class*="feed-image"]',
-        postButton: 'button[class*="share-actions__primary-action"], button.artdeco-button--primary',
-        evidence: async () => {
-          const gone = await page.evaluate(() => !document.querySelector('.ql-editor[contenteditable="true"], div[role="textbox"][contenteditable="true"]'));
-          return gone;
-        },
-        profileUrl: id => 'https://www.linkedin.com/in/' + id + '/recent-activity/all/',
-        findPermalink: async text => page.evaluate(want => {
-          const matches = [];
-          for (const a of document.querySelectorAll('[data-urn*="ugcPost:"]')) {
-            const t = norm(a.querySelector('.update-components-text')?.innerText ?? (a.querySelector('[dir="ltr"]')?.innerText ?? ''));
-            if (t === want) {
-              const href = a.querySelector('a[href*="ugcPost"]')?.getAttribute('href');
-              matches.push(href ?? null);
-            }
-          }
-          return matches.length === 1 ? matches[0] : null;
-          function norm(v) { return String(v ?? '').replace(/\s+/g, ' ').trim(); }
-        }, norm(text)),
-      },
-      facebook: {
-        origin: 'https://www.facebook.com',
-        composerOpen: async () => {
-          const clicked = await page.evaluate(() => {
-            const b = [...document.querySelectorAll('div[role="button"], button')].find(b => /생각|your mind|하고 있는지/i.test(b.innerText || b.getAttribute('aria-label') || ''));
-            if (!b) return false;
-            b.click();
-            return true;
-          });
-          if (!clicked) return false;
-          await sleep(1500);
-          return true;
-        },
-        composerSelector: 'div[role="dialog"] div[role="textbox"][contenteditable="true"]',
-        attachButton: 'div[aria-label*="사진" i][role="button"], div[aria-label*="hoto" i][role="button"]',
-        mediaPreview: 'img[src^="blob:"], img[alt]',
-        postButton: 'div[aria-label="게시"][role="button"], div[aria-label="Post"][role="button"], button[type="submit"]',
-        evidence: async () => {
-          const gone = await page.evaluate(() => !document.querySelector('div[role="dialog"] div[role="textbox"][contenteditable="true"]'));
-          return gone;
-        },
-        profileUrl: id => 'https://www.facebook.com/' + id,
-        findPermalink: async text => page.evaluate(want => {
-          const matches = [];
-          for (const a of document.querySelectorAll('div[role="article"]')) {
-            const story = a.querySelector('div[data-ad-preview="message"], div[dir="auto"] > span')?.closest('div[dir="auto"]');
-            const t = norm(story?.innerText ?? '');
-            if (t === want) {
-              const href = a.querySelector('a[href*="/posts/"], a[href*="story_fbid"]')?.getAttribute('href');
-              matches.push(href ?? null);
-            }
-          }
-          return matches.length === 1 ? matches[0] : null;
-          function norm(v) { return String(v ?? '').replace(/\s+/g, ' ').trim(); }
-        }, norm(text)),
-      },
-    };
-    const cfg = P[platform];
+    const ui = PLATFORM_UI[platform];
+    const cfg = ui?.postProfile(page, norm, sleep);
     if (!cfg) stop('EGO_SCHEMA_INVALID');
 
     // ── 라이브 신원 확인 (binding과 불일치면 게시 전 차단 — 계정 재타깃 방지) ──
@@ -622,61 +478,8 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
       if (u.origin !== cfg.origin) stop('EGO_ORIGIN_MISMATCH');
       if (/\/(login|authwall|checkpoint)/.test(u.pathname)) stop('EGO_NEEDS_LOGIN');
     };
-    if (platform === 'linkedin') {
-      await page.goto('https://www.linkedin.com/in/me/', { timeout: 45000 });
-      try { await page.waitForFunction(() => /^\/in\/(?!me\/?$)[^/]+/.test(location.pathname), undefined, { timeout: 20000 }); } catch {}
-      const slug = /^\/in\/([^/]+)/.exec(new URL(await page.url()).pathname)?.[1];
-      if (!slug || slug === 'me') stop('EGO_NEEDS_LOGIN');
-      if (slug !== expectedIdentity) stop('EGO_ACCOUNT_MISMATCH');
-    } else if (platform === 'facebook') {
-      await page.goto('https://www.facebook.com/me/', { timeout: 45000 });
-      try { await page.waitForFunction(() => !/^\/me\/?$/.test(location.pathname), undefined, { timeout: 20000 }); } catch {}
-      await loginCheck();
-      const identity = facebookIdentity(new URL(await page.url()));
-      if (!identity) stop('EGO_IDENTITY_NOT_FOUND');
-      if (identity !== expectedIdentity) stop('EGO_ACCOUNT_MISMATCH');
-    } else if (platform === 'x') {
-      await page.goto('https://x.com/home', { timeout: 45000 });
-      await sleep(2000);
-      await loginCheck();
-      const href = await page.evaluate(() => document.querySelector('a[data-testid="AppTabBar_Profile_Link"]')?.getAttribute('href') || null);
-      const m = href && /^\/([A-Za-z0-9_]{1,20})$/.exec(href);
-      if (!m) stop('EGO_NEEDS_LOGIN');
-      if (m[1] !== expectedIdentity) stop('EGO_ACCOUNT_MISMATCH');
-    } else {
-      await page.goto('https://bsky.app/', { timeout: 45000 });
-      await sleep(2000);
-      await loginCheck();
-      const href = await page.evaluate(() => document.querySelector('a[href^="/profile/"][href*="did:plc:"], a[aria-label*="rofile" i][href^="/profile/"]')?.getAttribute('href') || null);
-      const m = href && /^\/profile\/([^/?#]+)/.exec(href);
-      if (!m) stop('EGO_NEEDS_LOGIN');
-      if (decodeURIComponent(m[1]) !== expectedIdentity) stop('EGO_ACCOUNT_MISMATCH');
-    }
+    await ui.verifyPostIdentity(page, expectedIdentity, stop, loginCheck, sleep);
 
-    // ── Facebook 공개 범위 (입력 전에 설정한다 — 본문 입력 후 메뉴가 닫히는 사례 방지) ──
-    const setVisibility = async () => {
-      if (platform !== 'facebook' || visibility === 'keep') return;
-      const opened = await page.evaluate(() => {
-        const dialog = document.querySelector('div[role="dialog"]');
-        if (!dialog) return false;
-        const b = dialog.querySelector('div[role="button"][aria-label*="공개" i], div[role="button"][aria-label*="친구" i], div[role="button"][aria-haspopup]');
-        if (!b) return false;
-        b.click();
-        return true;
-      });
-      if (!opened) stop('EGO_VISIBILITY_FAILED');
-      await sleep(800);
-      const picked = await page.evaluate(wantSource => {
-        const re = new RegExp(wantSource, 'i');
-        const items = [...document.querySelectorAll('div[role="menuitemradio"], span[dir="auto"]')];
-        const item = items.find(el => re.test(el.innerText || el.textContent || ''));
-        if (!item) return false;
-        (item.closest('div[role="menuitemradio"]') ?? item).click();
-        return true;
-      }, visibility === 'public' ? '공개|Public' : '친구|Friends');
-      if (!picked) stop('EGO_VISIBILITY_FAILED');
-      await sleep(600);
-    };
 
     // ── 미디어 첨부 (게시 클릭 전 fail-closed: 첨부 프리뷰가 보여야 진행) ──
     const attachMedia = async () => {
@@ -701,25 +504,7 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
         await sleep(500);
       }
       if (!preview) stop('EGO_MEDIA_FAILED');
-      // shortcut: 네 플랫폼 alt UI는 미실측 고정 셀렉터다. 실측 후 교정하며 불일치는 게시 전 차단한다.
-      const altUI = {
-        x: { open: '[data-testid="attachments"] [data-testid="altTextButton"]', input: 'div[role="dialog"] [data-testid="altTextInput"]', save: 'div[role="dialog"] [data-testid="altTextSave"]' },
-        bluesky: { open: 'div[role="dialog"] [data-testid="altTextButton"]', input: 'div[role="dialog"] [data-testid="altTextInput"]', save: 'div[role="dialog"] [data-testid="altTextSave"]' },
-        linkedin: {
-          open: 'div[role="dialog"] button[aria-label="Edit photo"]',
-          edit: 'div[role="dialog"][aria-label="Photo editor"] button[aria-label="Alternative text"]',
-          input: 'div[role="dialog"] textarea[aria-label="Alternative text"]',
-          save: 'div[role="dialog"]:has(textarea[aria-label="Alternative text"]) button[aria-label="Save"]',
-          done: 'div[role="dialog"][aria-label="Photo editor"] button[aria-label="Done"]',
-        },
-        facebook: {
-          open: 'div[role="dialog"] div[role="button"][aria-label="Edit photo"]',
-          edit: 'div[role="dialog"][aria-label="Edit photo"] div[role="button"][aria-label="Alternative text"]',
-          input: 'div[role="dialog"] textarea[aria-label="Alternative text"]',
-          save: 'div[role="dialog"]:has(textarea[aria-label="Alternative text"]) div[role="button"][aria-label="Save"]',
-          done: 'div[role="dialog"][aria-label="Edit photo"] div[role="button"][aria-label="Done"]',
-        },
-      }[platform];
+      const altUI = cfg.altUI;
       const clickAltControl = async selector => {
         const clicked = await page.evaluate(selector => {
           const buttons = [...document.querySelectorAll(selector)];
@@ -788,7 +573,7 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
         await sleep(400);
       }
       if (!composerReady) stop('EGO_COMPOSER_NOT_FOUND');
-      if (i === 0) await setVisibility();
+      if (i === 0 && ui.setVisibility) await ui.setVisibility(page, visibility, stop, sleep);
       // 본문 삽입 — execCommand insertText(에디터 모델 반영 검증 방식)
       const fill = await page.evaluate(({ selector, text }) => {
         const box = document.querySelector(selector);
@@ -886,16 +671,9 @@ async function childReadback(spaceName, urls, bodies) {
       const want = norm(bodies[i]);
       await page.goto(url, { timeout: 45000 });
       await new Promise(r => setTimeout(r, 2000));
-      const text = await page.evaluate(target => {
+      const config = Object.values(PLATFORM_UI).find(ui => ui.readbackHosts.includes(new URL(url).hostname))?.readbackSelectors;
+      const text = await page.evaluate(({ target, config }) => {
         const url = new URL(target);
-        const config = {
-          'x.com': ['article[data-testid="tweet"]', '[data-testid="tweetText"]'],
-          'twitter.com': ['article[data-testid="tweet"]', '[data-testid="tweetText"]'],
-          'bsky.app': ['div[data-testid^="feedItem"]', 'div[data-testid="postText"]'],
-          'www.linkedin.com': ['[data-urn*="ugcPost:"], [data-urn*="activity:"]', '.update-components-text'],
-          'www.facebook.com': ['div[role="article"]', 'div[data-ad-preview="message"]'],
-          'facebook.com': ['div[role="article"]', 'div[data-ad-preview="message"]'],
-        }[url.hostname];
         if (!config) return null;
         const key = value => {
           const u = new URL(value, url.origin);
@@ -910,7 +688,7 @@ async function childReadback(spaceName, urls, bodies) {
           }));
         if (posts.length !== 1) return null;
         return posts[0].querySelector(config[1])?.innerText ?? null;
-      }, url);
+      }, { target: url, config });
       results.push({ url, matched: want.length > 0 && typeof text === 'string' && norm(text) === want });
     }
     console.log(JSON.stringify({ status: 'READBACK_DONE', results, matched: results.every(r => r.matched) }));
@@ -921,19 +699,13 @@ async function childReadback(spaceName, urls, bodies) {
 
 // ── 부모 측 서브커맨드 ────────────────────────────────────────────────
 
-function facebookIdentity(url) {
-  if (!['www.facebook.com', 'facebook.com'].includes(url.hostname) || url.protocol !== 'https:') return null;
-  const path = url.pathname.replace(/\/+$/, '');
-  if (path === '/profile.php') {
-    const ids = url.searchParams.getAll('id');
-    return ids.length === 1 && /^\d+$/.test(ids[0]) ? `profile.php?id=${ids[0]}` : null;
-  }
-  if (!/^\/[A-Za-z0-9.]+$/.test(path) || /^\/(me|login|checkpoint)$/i.test(path)) return null;
-  return path.slice(1);
-}
 
 function scriptOf(fn, ...args) {
-  return `const facebookIdentity = ${facebookIdentity.toString()};\n(${fn.toString()})(${args.map(a => JSON.stringify(a)).join(', ')}).catch(() => { console.log(JSON.stringify({ status: 'EGO_ATTACH_FAILED' })); });`;
+  const platforms = Object.entries(PLATFORM_UI).map(([platform, ui]) => {
+    const functions = Object.entries(ui).map(([name, value]) => `${JSON.stringify(name)}: ${typeof value === 'function' ? value.toString() : JSON.stringify(value)}`);
+    return `${JSON.stringify(platform)}: {${functions.join(',\n')}}`;
+  });
+  return `const PLATFORM_UI = {${platforms.join(',\n')}};\nconst facebookIdentity = PLATFORM_UI.facebook.facebookIdentity;\nconst facebookPost = PLATFORM_UI.facebook.facebookPost;\nconst ownProfileHref = ${ownProfileHref.toString()};\n(${fn.toString()})(${args.map(a => JSON.stringify(a)).join(', ')}).catch(() => { console.log(JSON.stringify({ status: 'EGO_ATTACH_FAILED' })); });`;
 }
 
 export async function setup(platform, env = process.env, force = false) {
@@ -976,13 +748,80 @@ function scanDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function observationPostUrl(platform, value) {
+  if (!httpUrl(value)) throw fail('INVALID_PAYLOAD');
+  const url = new URL(value);
+  const origins = { x: 'https://x.com', facebook: 'https://www.facebook.com', bluesky: 'https://bsky.app', threads: 'https://www.threads.com' };
+  if (url.origin !== origins[platform] || url.username || url.password || url.hash) throw fail('INVALID_PAYLOAD');
+  const paths = {
+    x: /^\/[^/]+\/status\/\d+\/?$/,
+    facebook: /^\/(?:[^/]+\/posts\/[^/]+|(?:permalink|story|photo)\.php|photo)\/?$/,
+    bluesky: /^\/profile\/[^/]+\/post\/[^/]+\/?$/,
+    threads: /^\/@[^/]+\/post\/[^/]+\/?$/,
+  };
+  if (!paths[platform]?.test(url.pathname)) throw fail('INVALID_PAYLOAD');
+  if (platform === 'facebook' && !url.pathname.includes('/posts/') && !url.searchParams.has('story_fbid') && !url.searchParams.has('fbid')) throw fail('INVALID_PAYLOAD');
+  const retained = ['story_fbid', 'fbid', 'id'].filter(key => url.searchParams.has(key)).map(key => [key, url.searchParams.get(key)]);
+  url.search = '';
+  url.pathname = url.pathname.replace(/\/+$/, '');
+  if (platform === 'facebook') for (const [key, entry] of retained) url.searchParams.set(key, entry);
+  return url.href;
+}
+
 export function validateScanPayload(payload) {
-  if (!exactKeys(payload, ['platform', 'since', 'until', 'cursor'])) throw fail('INVALID_PAYLOAD');
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw fail('INVALID_PAYLOAD');
+  const keys = Object.keys(payload);
+  if (!['platform', 'cursor'].every(key => keys.includes(key)) || !keys.every(key => ['platform', 'cursor', 'since', 'until', 'jobDir', 'postUrl'].includes(key))) throw fail('INVALID_PAYLOAD');
   if (!PLATFORMS.includes(payload.platform) || payload.cursor !== null) throw fail('INVALID_PAYLOAD');
+  if (payload.postUrl !== undefined) payload = { ...payload, postUrl: observationPostUrl(payload.platform, payload.postUrl) };
+  if (payload.jobDir !== undefined && (typeof payload.jobDir !== 'string' || !isAbsolute(payload.jobDir) || resolve(payload.jobDir) !== payload.jobDir)) throw fail('INVALID_PAYLOAD');
+  if (payload.since === undefined && payload.until === undefined) {
+    const reference = new Date();
+    return { ...payload, since: new Date(reference.getTime() - 86400000).toISOString(), until: reference.toISOString() };
+  }
   const since = scanDate(payload.since);
   const until = scanDate(payload.until);
   if (!since || !until || since >= until) throw fail('INVALID_PAYLOAD');
   return payload;
+}
+
+function scanManifestDigest(serialized) {
+  return createHash('sha256').update(serialized).digest('hex');
+}
+
+function scanReceiptPath(jobDir, env) {
+  return join(stateDir(env), 'scan-manifests', `${scanManifestDigest(jobDir)}.json`);
+}
+
+function writeScanManifest(jobDir, manifest, env) {
+  mkdirSync(jobDir, { recursive: true });
+  const path = join(jobDir, 'scan-manifest.json');
+  const temporary = `${path}.${process.pid}.tmp`;
+  const serialized = JSON.stringify(manifest, null, 2) + '\n';
+  try {
+    writeFileSync(temporary, serialized, { flag: 'wx' });
+    renameSync(temporary, path);
+  } finally {
+    try { unlinkSync(temporary); } catch {}
+  }
+  const receipt = scanReceiptPath(jobDir, env);
+  mkdirSync(dirname(receipt), { recursive: true, mode: 0o700 });
+  const manifestDigest = scanManifestDigest(serialized);
+  writeFileSync(receipt, JSON.stringify({ jobDir, manifestDigest }) + '\n', { mode: 0o600 });
+  return { manifestPath: path, manifestDigest };
+}
+
+function readScanManifest(jobDir, env) {
+  try {
+    const serialized = readFileSync(join(jobDir, 'scan-manifest.json'), 'utf8');
+    const receipt = JSON.parse(readFileSync(scanReceiptPath(jobDir, env), 'utf8'));
+    if (!exactKeys(receipt, ['jobDir', 'manifestDigest']) || receipt.jobDir !== jobDir ||
+        receipt.manifestDigest !== scanManifestDigest(serialized)) return null;
+    const manifest = JSON.parse(serialized);
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) ||
+        !PLATFORMS.includes(manifest.platform) || !validString(manifest.identity, 256) || !Array.isArray(manifest.candidates)) return null;
+    return manifest;
+  } catch { return null; }
 }
 
 function normalizeText(value) {
@@ -999,41 +838,158 @@ function similarity(left, right) {
 }
 
 function validCandidate(value) {
-  return exactKeys(value, ['id', 'url', 'text']) && validString(value.id, 512) && validString(value.url, 2048) && typeof value.text === 'string';
+  return value && typeof value === 'object' && !Array.isArray(value) && validString(value.id, 512) &&
+    typeof value.url === 'string' && (value.url === '' || httpUrl(value.url)) && typeof value.text === 'string' &&
+    (value.parentUrl === undefined || httpUrl(value.parentUrl));
 }
 
 export function compareCandidates(payload) {
-  if (!exactKeys(payload, ['candidate', 'existing']) || !validCandidate(payload.candidate) || !Array.isArray(payload.existing) || payload.existing.some(item => !validCandidate(item))) throw fail('INVALID_PAYLOAD');
-  const exact = payload.existing.filter(item => item.url === payload.candidate.url || normalizeText(item.text) === normalizeText(payload.candidate.text));
-  if (exact.length) return { status: 'COMPARISON_DONE', decision: 'duplicate', evidence: exact.map(item => item.id) };
+  if (!payload || typeof payload !== 'object' || !Object.keys(payload).every(key => ['candidate', 'existing', 'targetPlatform', 'coverage', 'postLog'].includes(key)) ||
+      !validCandidate(payload.candidate) || !Array.isArray(payload.existing) || payload.existing.some(item => !validCandidate(item)) ||
+      (payload.targetPlatform !== undefined && !PLATFORMS.includes(payload.targetPlatform)) ||
+      (payload.coverage !== undefined && (!payload.coverage || typeof payload.coverage !== 'object' || typeof payload.coverage.complete !== 'boolean')) ||
+      (payload.postLog !== undefined && (!payload.targetPlatform || !Array.isArray(payload.postLog) || payload.postLog.some(item =>
+        !item || !httpUrl(item.sourceUrl) || !PLATFORMS.includes(item.platform) ||
+        !['POSTED', 'PARTIAL_POSTED', 'POST_UNKNOWN', 'POST_FAILED'].includes(item.status) ||
+        !Array.isArray(item.urls) || item.urls.some(url => !httpUrl(url)))))) throw fail('INVALID_PAYLOAD');
+  const normalized = normalizeText(payload.candidate.text);
+  const exact = payload.existing.filter(item => (payload.candidate.url && item.url === payload.candidate.url) ||
+    (normalized && normalizeText(item.text) === normalized));
+  const details = exact.map(item => ({ kind: item.url === payload.candidate.url ? 'url' : 'normalized_text', ids: [item.id], urls: [item.url] }));
   const similar = payload.existing.filter(item => similarity(item.text, payload.candidate.text) >= 0.6);
-  return { status: 'COMPARISON_DONE', decision: similar.length ? 'needs_review' : 'new', evidence: similar.map(item => item.id) };
+  for (const item of similar) details.push({ kind: 'token_similarity', ids: [item.id], urls: [item.url] });
+  const byUrl = new Map(payload.existing.filter(item => item.url).map(item => [item.url, item]));
+  for (const root of payload.existing) {
+    if (!root.url || byUrl.has(root.parentUrl)) continue;
+    const chain = [root];
+    const seen = new Set([root.url]);
+    while (true) {
+      const children = payload.existing.filter(item => item.parentUrl === chain.at(-1).url && !seen.has(item.url));
+      if (children.length !== 1) break; // 분기된 대화를 임의 순서로 합치지 않는다.
+      chain.push(children[0]);
+      seen.add(children[0].url);
+    }
+    const text = chain.map(item => item.text).join(' ');
+    if (chain.length > 1 && normalized && (normalizeText(text) === normalized || similarity(text, payload.candidate.text) >= 0.6)) {
+      details.push({ kind: 'reply_chain', ids: chain.map(item => item.id), urls: chain.map(item => item.url) });
+    }
+  }
+  const records = (payload.postLog ?? []).filter(item => item.sourceUrl === payload.candidate.url && item.platform === payload.targetPlatform);
+  for (const record of records) {
+    if (record.status === 'POSTED' && record.urls.length) details.push({ kind: 'posted_record', ids: [], urls: record.urls });
+    if (['PARTIAL_POSTED', 'POST_UNKNOWN'].includes(record.status)) details.push({ kind: 'uncertain_posted_record', status: record.status, ids: [], urls: record.urls });
+  }
+  const duplicate = exact.length > 0 || details.some(item => item.kind === 'posted_record');
+  return {
+    status: 'COMPARISON_DONE', decision: duplicate ? 'duplicate' : details.length ? 'needs_review' : 'new',
+    evidence: [...new Set(details.flatMap(item => item.ids))], details,
+    targetPlatform: payload.targetPlatform ?? null, coverage: payload.coverage ?? null,
+    absenceMeaning: 'NOT_FOUND_IN_OBSERVED_SCOPE',
+  };
 }
 
 export async function scan(payload, env = process.env) {
-  validateScanPayload(payload);
+  const referenceTime = new Date().toISOString();
+  payload = validateScanPayload(payload);
   const binding = readBinding(env);
   const identity = binding?.identity?.[payload.platform];
   if (!binding || !identity) throw fail('EGO_NOT_BOUND');
-  const observed = await bootstrap(payload.platform, env, 50);
+  let observed;
+  try {
+    observed = await execute(binding.executable, scriptOf(childBootstrap, TASK_SPACE_NAME, payload.platform, { max: payload.postUrl ? 1 : 50, identity, scan: true, ...(payload.postUrl ? { postUrl: payload.postUrl } : {}) }), MAX_TIMEOUT_MS);
+    stepFail(observed);
+    if (!exactKeys(observed, ['status', 'posts', 'stopReason']) || observed.status !== 'BOOTSTRAP_OBSERVED' || !Array.isArray(observed.posts) ||
+        !['POST_LIMIT', 'SCROLL_STALLED', 'TIME_LIMIT', ...POST_STEP_CODES].includes(observed.stopReason) || observed.posts.some(post =>
+          !post || typeof post.text !== 'string' || (post.url !== null && !httpUrl(post.url)) ||
+          (post.observationId !== undefined && !validString(post.observationId, 512)) ||
+          (post.parentUrl !== undefined && !httpUrl(post.parentUrl)) ||
+          (post.publisher !== null && !validString(post.publisher, 256)) || !Array.isArray(post.media))) throw fail('EGO_SCHEMA_INVALID');
+  } catch (error) {
+    observed = { posts: [], stopReason: error.reason ?? error.code ?? 'EGO_PROCESS_FAILED' };
+  }
   const since = new Date(payload.since).getTime();
   const until = new Date(payload.until).getTime();
-  const timed = observed.posts.filter(post => scanDate(post.time));
-  const candidates = timed.filter(post => {
-    const time = new Date(post.time).getTime();
-    return time >= since && time < until;
-  }).map(post => ({ id: post.url || `${post.time}:${normalizeText(post.text).slice(0, 160)}`, url: post.url || '', text: post.text, publishedAt: post.time, media: [] }));
-  const times = timed.map(post => new Date(post.time).getTime());
-  return {
-    status: 'SCAN_DONE', platform: payload.platform, identity, candidates,
+  const candidates = [];
+  const review = [];
+  const times = [];
+  const seen = new Set();
+  for (const post of observed.posts) {
+    const id = post.id || post.url || post.observationId || `unidentified-${randomUUID()}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const time = scanDate(post.time);
+    if (time) times.push(time.getTime());
+    const candidate = {
+      id, url: post.url || '', text: post.text, publishedAt: time?.toISOString() ?? null, publisher: post.publisher ?? null,
+      media: post.media.map((media, index) => ({ id: String(index + 1), sourceUrl: media?.sourceUrl, alt: media?.alt ?? null })),
+      ...(post.observationId ? { observationId: post.observationId } : {}),
+      ...(httpUrl(post.parentUrl) ? { parentUrl: post.parentUrl } : {}),
+    };
+    if (!time) { review.push({ ...candidate, reason: 'UNKNOWN_TIME' }); continue; }
+    if (time.getTime() < since || time.getTime() >= until) continue;
+    candidates.push(candidate);
+  }
+  const result = {
+    status: 'SCAN_DONE', platform: payload.platform, identity, candidates, review,
     coverage: {
-      requestedSince: payload.since, requestedUntil: payload.until,
+      requestedSince: payload.since, requestedUntil: payload.until, referenceTime, timezone: 'UTC',
       observedOldest: times.length ? new Date(Math.min(...times)).toISOString() : null,
       observedNewest: times.length ? new Date(Math.max(...times)).toISOString() : null,
-      complete: false, stopReason: 'PROFILE_SCROLL_LIMIT',
+      complete: false, stopReason: observed.stopReason, observedCount: seen.size, unknownTimeCount: review.length,
+      limitations: [['facebook', 'bluesky'].includes(payload.platform) ? 'DOM_WITH_PASSIVE_RESPONSE_TIME_WHEN_AVAILABLE' : 'PROFILE_DOM_ONLY', 'PINNED_OR_UNORDERED_POSTS', 'NO_VERIFIED_HISTORY_END'],
     },
     nextCursor: null,
+    ...(payload.jobDir ? { jobDir: join(payload.jobDir, 'scans', randomUUID(), payload.platform) } : {}),
   };
+  if (payload.jobDir) return { ...result, ...writeScanManifest(result.jobDir, result, env) };
+  return result;
+}
+
+function httpUrl(value) {
+  if (!validString(value, 2048)) return false;
+  try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; }
+}
+
+export async function fetchScannedMedia(payload, env = process.env) {
+  const keys = ['jobDir', 'platform', 'candidateId', 'sourceUrl'];
+  if (!(exactKeys(payload, keys) || exactKeys(payload, [...keys, 'altOverride'])) || !isAbsolute(payload.jobDir) ||
+      !PLATFORMS.includes(payload.platform) || !validString(payload.candidateId, 512) || !httpUrl(payload.sourceUrl)) throw fail('INVALID_MEDIA');
+  const sourceAddress = new URL(payload.sourceUrl);
+  if (sourceAddress.protocol !== 'https:' || sourceAddress.username || sourceAddress.password) throw fail('INVALID_MEDIA');
+  const binding = readBinding(env);
+  const manifest = readScanManifest(payload.jobDir, env);
+  if (!binding || !manifest || manifest.platform !== payload.platform || manifest.identity !== binding.identity[payload.platform]) throw fail('INVALID_MEDIA');
+  const candidate = [...manifest.candidates, ...(manifest.review ?? [])].find(item => item?.id === payload.candidateId);
+  const override = payload.altOverride;
+  const sources = candidate?.media?.filter(item => item?.sourceUrl === payload.sourceUrl) ?? [];
+  if (override === undefined && sources.length > 1) throw fail('INVALID_MEDIA');
+  const source = sources.find(item => override === undefined || item.id === override?.mediaId);
+  if (override !== undefined && (!exactKeys(override, ['manifestDigest', 'mediaId', 'alt']) ||
+      override.manifestDigest !== scanManifestDigest(readFileSync(join(payload.jobDir, 'scan-manifest.json'), 'utf8')) ||
+      override.mediaId !== source?.id || !validString(override.alt, 4096))) throw fail('INVALID_MEDIA');
+  const alt = override?.alt ?? source?.alt;
+  if (!candidate || !source || !httpUrl(candidate.url) || !validString(candidate.publisher, 256) || !validString(alt, 4096)) throw fail('INVALID_MEDIA');
+  const postingJobDir = resolve(payload.jobDir, '../../..');
+  if (dirname(dirname(payload.jobDir)) !== join(postingJobDir, 'scans') || !payload.jobDir.endsWith(`/${payload.platform}`)) throw fail('INVALID_MEDIA');
+  const mediaDir = join(postingJobDir, 'media');
+  mkdirSync(mediaDir, { recursive: true });
+  const destination = join(mediaDir, `.fetch-${randomUUID()}`);
+  try {
+    const output = await execute(binding.executable, scriptOf(childFetchScanMedia, TASK_SPACE_NAME, payload.sourceUrl, destination), MAX_TIMEOUT_MS);
+    stepFail(output);
+    if (!exactKeys(output, ['status', 'path', 'sourceUrl', 'finalUrl', 'contentType']) || output.status !== 'MEDIA_FETCHED' ||
+        output.path !== destination || output.sourceUrl !== payload.sourceUrl || !httpUrl(output.finalUrl) ||
+        new URL(output.finalUrl).origin !== sourceAddress.origin || !validString(output.contentType, 128)) throw fail('EGO_SCHEMA_INVALID');
+    const file = statSync(destination);
+    if (!file.isFile()) throw fail('INVALID_MEDIA');
+    return await materializeFetchedMedia({ jobDir: postingJobDir, media: [{
+      sourcePath: destination, sourceUrl: payload.sourceUrl, finalUrl: output.finalUrl,
+      sourcePostUrl: candidate.url, publisher: candidate.publisher, observedAt: manifest.coverage.referenceTime,
+      alt, contentType: output.contentType, bytes: file.size,
+    }] });
+  } finally {
+    try { unlinkSync(destination); } catch {}
+  }
 }
 
 export function validatePostPayload(payload) {
@@ -1059,6 +1015,7 @@ export function postTimeoutMs(segmentCount) {
 
 export async function post(payload, env = process.env) {
   const segments = validatePostPayload(payload);
+  if (payload.platform === 'threads') throw fail('THREADS_UNVERIFIED');
   const binding = readBinding(env);
   if (!binding) throw fail('EGO_NOT_BOUND');
   if (binding.identity[payload.platform] !== payload.identity) throw fail('EGO_ACCOUNT_MISMATCH');
@@ -1137,6 +1094,10 @@ async function main() {
     }
     if (command === 'compare') {
       emit(compareCandidates(JSON.parse(await readStdin())));
+      return;
+    }
+    if (command === 'fetch-media') {
+      emit(await fetchScannedMedia(JSON.parse(await readStdin()), process.env));
       return;
     }
     if (command === 'post') {

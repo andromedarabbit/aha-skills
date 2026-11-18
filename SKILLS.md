@@ -30,6 +30,33 @@ Cloudflare Email Routing + Gmail 조합의 운영 계층 — 라우팅 설정 �
 
 ## social-experts
 
+### [bluesky-expert](skills/social-experts/bluesky-expert)
+
+**버전**: 1.0.0
+
+Bluesky 전용 최근 글·지정 permalink 조회, bootstrap, 단일 글·답글 체인·사진 게시, read-back. 게시물당 300 grapheme, 사진 4장 이하·alt 필수, 게시물별 해시태그 0~1개. /bluesky-expert, "Bluesky 글 준비해줘", "Bluesky 초안만 써줘" 요청 시 사용. "Bluesky 최근 글 확인해줘"도 처리한다. 여러 플랫폼의 묶음 작업은 social-posting이 담당한다. 무인 실행은 읽기·비교·보고만 한다.
+
+- [문서](skills/social-experts/bluesky-expert/README.md)
+- [구현 가이드](skills/social-experts/bluesky-expert/docs/GUIDELINES.md)
+
+### [facebook-expert](skills/social-experts/facebook-expert)
+
+**버전**: 1.0.0
+
+Facebook 전용 최근 글·지정 permalink 조회, bootstrap, 단일 글·사진 게시·공개 범위, read-back. 본문 63206 codepoint 이하, format: single만 지원하며 사진 수의 하드 상한은 없다. /facebook-expert, "Facebook 글 준비해줘", "Facebook 초안만 써줘" 요청 시 사용. "Facebook 최근 글 확인해줘"도 처리한다. 여러 플랫폼의 묶음 작업은 social-posting이 담당한다. 무인 실행은 읽기·비교·보고만 한다.
+
+- [문서](skills/social-experts/facebook-expert/README.md)
+- [구현 가이드](skills/social-experts/facebook-expert/docs/GUIDELINES.md)
+
+### [linkedin-expert](skills/social-experts/linkedin-expert)
+
+**버전**: 1.0.0
+
+LinkedIn 전용 기존 bootstrap, 단일 글·기존 사진 게시, read-back만 지원한다. 본문 3000 codepoint 이하, 사진 9장 이하, format: single만 지원한다. /linkedin-expert, "LinkedIn 글 준비해줘", "LinkedIn 초안만 써줘" 요청 시 사용. 여러 플랫폼의 묶음 작업은 social-posting이 담당한다. 무인 실행은 읽기·비교·보고만 한다.
+
+- [문서](skills/social-experts/linkedin-expert/README.md)
+- [구현 가이드](skills/social-experts/linkedin-expert/docs/GUIDELINES.md)
+
 ### [linkedin-followup](skills/social-experts/linkedin-followup)
 
 **버전**: 1.12.0
@@ -41,13 +68,31 @@ LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬
 
 ### [social-posting](skills/social-experts/social-posting)
 
-**버전**: 0.9.2
+**버전**: 0.12.0
 
-소셜미디어 포스팅 자동화. X·LinkedIn·Facebook·Bluesky에 올릴 문안을 사용자의 목소리로 쓰고 하드 제약(문자 수·alt text·스레드 규칙)을 기계 검증한 뒤 승인을 받아 ego lite(ego-browser 고정 스크립트) 실행 계층으로 실제 계정에 게시한다. 스레드(X·Bluesky 답글 체인)도 지원한다. `/social-posting` 단독 호출이나 "소셜 포스팅 만들어줘", "블로그 글 X·링크드인에 올릴 문안 만들어줘", "블루스카이 초안 뽑아줘", "이 글 스레드로 변환해줘", "스레드로 뽑아줘" 요청 시 사용. 무엇을 포스팅할지 되묻지 않고 즉시 환경 점검 후 요구사항을 묻는다. 게시 API를 직접 호출하지 않고 ego-post 실행 계층으로만 게시한다. 일반 브라우저 자동화·웹 조사는 aside-browser·ego-browser 스킬 소관이다.
+선택한 소셜미디어 그룹의 조회·교차 비교·초안·승인·게시를 조정한다. "Facebook 글을 X와 Bluesky에 맞춰줘", "선택한 플랫폼만 준비해줘", "최근 글 확인해서 다른 곳에도 올려줘", "/social-posting" 요청할 때 사용한다. 단일 플랫폼 작업도 호환하며 전용 x-expert·facebook-expert·bluesky-expert·threads-expert·linkedin-expert로 직접 요청할 수 있다. 요청한 동작만 수행하고 기존 초안 게시에 재작성을 강제하지 않는다. 최근 글은 Facebook·Threads·X·Bluesky의 기본 최근 24시간(기간 변경 가능), LinkedIn scan은 비지원이다. X·Bluesky 답글 체인·사진을 지원하고 Threads는 수집·초안만 가능하다. 유사 후보 확인과 최종 게시 승인은 별도이며 표시한 대상만 승인한다. 무인 실행은 수집·비교·보고만 한다.
 
 - [문서](skills/social-experts/social-posting/README.md)
 - [구현 가이드](skills/social-experts/social-posting/docs/GUIDELINES.md)
 - [레퍼런스](skills/social-experts/social-posting/docs/REFERENCE.md)
+
+### [threads-expert](skills/social-experts/threads-expert)
+
+**버전**: 1.0.0
+
+Threads 전용 최근 글·지정 permalink 조회, bootstrap, 초안 준비만 지원한다. 길이는 참고 codepoint와 lengthVerified:false로 보고한다. 게시·게시 승인·read-back 검증으로 진행하지 않는다. /threads-expert, "Threads 글 준비해줘", "Threads 초안만 써줘" 요청 시 사용. "Threads 최근 글 확인해줘"도 처리한다. 여러 플랫폼의 묶음 작업은 social-posting이 담당한다. 무인 실행은 읽기·비교·보고만 한다.
+
+- [문서](skills/social-experts/threads-expert/README.md)
+- [구현 가이드](skills/social-experts/threads-expert/docs/GUIDELINES.md)
+
+### [x-expert](skills/social-experts/x-expert)
+
+**버전**: 1.0.0
+
+X 전용 최근 글·지정 permalink 조회, bootstrap, 단일 글·답글 체인·사진 게시, read-back. 게시물당 280 weighted, 사진 4장 이하, 체인 게시물 2~25개. /x-expert, "X 글 준비해줘", "X 초안만 써줘" 요청 시 사용. "X 최근 글 확인해줘"도 처리한다. 여러 플랫폼의 묶음 작업은 social-posting이 담당한다. 무인 실행은 읽기·비교·보고만 한다.
+
+- [문서](skills/social-experts/x-expert/README.md)
+- [구현 가이드](skills/social-experts/x-expert/docs/GUIDELINES.md)
 
 
 ## writing-experts

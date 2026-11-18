@@ -27,8 +27,12 @@ echo "  경로 독립성 통과"
 suites_run=$((suites_run + 1))
 
 # --- 게이트 판정식 동일 문구 검사: 세 문서가 같은 문구를 써야 게이트 판정이 안 갈린다 ---
+# 백틱은 명령 치환이 아니라 Markdown 판정식의 일부다.
+# shellcheck disable=SC2016
 GATE_PHRASE='`approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치'
-for rel in SKILL.md assets/state-schema.md docs/REFERENCE.md; do
+for rel in SKILL.md assets/state-schema.md docs/REFERENCE.md \
+  ../x-expert/SKILL.md ../facebook-expert/SKILL.md \
+  ../bluesky-expert/SKILL.md ../linkedin-expert/SKILL.md; do
   target="$SKILL_DIR/$rel"
   if [ ! -f "$target" ]; then
     echo "❌ 오류: 게이트 판정식 검사 대상 파일이 없습니다 — $target" >&2
@@ -48,6 +52,23 @@ if ! grep -Fq '게시 승인' "$SKILL_DIR/SKILL.md"; then
   exit 1
 fi
 echo "  훅 계약 header 문구 통과"
+suites_run=$((suites_run + 1))
+
+# 문서 검사는 절차의 드리프트만 잡는다. 실제 사용자 질문 호출은 행동 평가 대상이다.
+for rel in SKILL.md README.md assets/orca-scan-prompt.md ../threads-expert/docs/playbook.md docs/REFERENCE.md; do
+  grep -Fq 'THREADS_UNVERIFIED' "$SKILL_DIR/$rel" || {
+    printf '❌ 오류: %s에 Threads 게시 차단 계약이 없습니다\n' "$rel" >&2
+    exit 1
+  }
+done
+for phrase in '최근 24시간' '시간 미상' '관찰 범위' '중복 실행 방지'; do
+  for rel in SKILL.md assets/orca-scan-prompt.md; do
+    grep -Fq "$phrase" "$SKILL_DIR/$rel" || {
+      printf '❌ 오류: %s에 읽기 전용 전달 계약(%s)이 없습니다\n' "$rel" "$phrase" >&2
+      exit 1
+    }
+  done
+done
 suites_run=$((suites_run + 1))
 
 # --- Shell integration tests ---

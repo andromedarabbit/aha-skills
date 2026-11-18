@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.11"
 # dependencies = ["grapheme", "pyyaml"]
 # ///
 """check-drafts.py — 소셜 초안 하드 제약 검사기 (기계 판정) + 게시 페이로드 추출.
@@ -8,6 +8,7 @@
 Usage:
     ./check-drafts.py <job-dir>                # 하드 제약 검사
     ./check-drafts.py <job-dir> --platform <p> # 게시 페이로드 JSON
+    # publish 내부: --freeze-media <전용 임시디렉터리>로 scan 사진·출처 사본을 검증
 
 하드 제약(Hard constraint)만 차단한다 — 위반 시 exit 1. 플랫폼 간 문형 중복은 warnings
 배열로 알릴 뿐 게시를 차단하지 않는다(convention 등급 — ok·exit code에 영향 없음).
@@ -24,9 +25,12 @@ media(작업 디렉토리 기준 절대경로)·link·format을 JSON으로 출�
 uv·의존성 부재 시 검사 불능으로 exit 1 (fail-closed — 게시 차단이 안전한 방향).
 """
 
+import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 import sys
 
 try:
@@ -50,8 +54,10 @@ LIMITS = {
     "bluesky": {"unit": "grapheme", "max": 300, "media_max": 4},
     "linkedin": {"unit": "codepoint", "max": 3000, "media_max": 9},
     "facebook": {"unit": "codepoint", "max": 63206, "media_max": None},
+    # 웹 UI 카운터 실측 전에는 참고 codepoint만 제공한다. 실제 post는 별도로 차단한다.
+    "threads": {"unit": "codepoint", "max": None, "media_max": None},
 }
-THREAD_SUPPORTED = {"x", "bluesky"}  # 답글 체인이 네이티브인 플랫폼만 스레드 지원
+THREAD_SUPPORTED = {"x", "bluesky", "threads"}  # 답글 체인이 네이티브인 플랫폼만 스레드 지원
 THREAD_MAX = {"x": 25}  # X 스레드 게시물 상한. bluesky는 근거 없는 상한을 두지 않는다
 ALT_REQUIRED = {"bluesky"}  # 이미지 alt text 필수 플랫폼
 HASHTAG_MAX = {"bluesky": 1}
@@ -149,6 +155,59 @@ def _media_items(meta: dict):
     return items
 
 
+def _resolve_job_path(job: str, path: object) -> str:
+    if not isinstance(path, str) or not path:
+        raise DraftFormatError("scan media 경로가 없습니다")
+    return path if os.path.isabs(path) else os.path.normpath(os.path.join(job, path))
+
+
+def _scan_media_violations(job: str, media: list[dict]) -> list[str]:
+    """scan에서 가져온 media는 hash·provenance가 현재 파일과 일치해야 한다."""
+    violations = []
+    media_dir = os.path.realpath(os.path.join(job, "media"))
+    for item in media:
+        source = item.get("source")
+        if source is None:
+            continue  # 기존 path+alt 초안 호환
+        if source != "scan":
+            violations.append(f"미디어 source({source!r})는 scan만 지원합니다")
+            continue
+        digest = item.get("sha256")
+        if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+            violations.append("scan 미디어 sha256이 없습니다")
+            continue
+        try:
+            path = _resolve_job_path(job, item.get("path"))
+            provenance_path = _resolve_job_path(job, item.get("provenance"))
+            if os.path.commonpath([media_dir, os.path.realpath(path)]) != media_dir:
+                raise DraftFormatError("scan media는 작업 media/ 아래에 있어야 합니다")
+            if os.path.commonpath([media_dir, os.path.realpath(provenance_path)]) != media_dir:
+                raise DraftFormatError("scan media provenance는 작업 media/ 아래에 있어야 합니다")
+            for candidate in (path, provenance_path):
+                info = os.lstat(candidate)
+                if os.path.islink(candidate) or not os.path.isfile(candidate) or info.st_size < 1:
+                    raise DraftFormatError("scan media 또는 provenance가 일반 파일이 아닙니다")
+            with open(path, "rb") as f:
+                actual = hashlib.file_digest(f, "sha256").hexdigest()
+            if actual != digest:
+                raise DraftFormatError("scan media sha256이 현재 파일과 다릅니다")
+            provenance_digest = item.get("provenance_sha256")
+            if not isinstance(provenance_digest, str) or not re.fullmatch(r"[a-f0-9]{64}", provenance_digest):
+                raise DraftFormatError("scan media provenance_sha256이 없습니다 — 출처를 다시 준비하고 승인받으세요")
+            with open(provenance_path, "rb") as f:
+                if hashlib.file_digest(f, "sha256").hexdigest() != provenance_digest:
+                    raise DraftFormatError("scan media provenance가 승인 대상에서 변경됐습니다")
+            with open(provenance_path, encoding="utf-8") as f:
+                provenance = json.load(f)
+            if not isinstance(provenance, dict) or provenance.get("sha256") != digest or \
+                    provenance.get("alt") != item.get("alt") or provenance.get("bytes") != os.path.getsize(path) or \
+                    not all(isinstance(provenance.get(key), str) and provenance[key] for key in ("sourceUrl", "finalUrl", "sourcePostUrl", "publisher", "observedAt", "contentType")):
+                raise DraftFormatError("scan media provenance가 파일·alt·출처와 일치하지 않습니다")
+        except (DraftFormatError, OSError, ValueError, json.JSONDecodeError) as exc:
+            violations.append(f"scan 미디어 검증 실패: {exc}")
+    return violations
+
+
 def _normalized_body(posts) -> str:
     """게시물 본문 → 중복 비교용 정규화 문자열 (URL·공백·문장부호 제거, 한글·숫자 유지)."""
     text = URL_RE.sub("", "\n".join(posts))
@@ -216,13 +275,16 @@ def check_platform(platform: str, draft_path: str) -> dict:
 
     limits = LIMITS[platform]
     result["unit"] = limits["unit"]
+    if platform == "threads":
+        result["lengthVerified"] = False
+        result["warnings"] = ["Threads 웹 UI 길이 단위 미검증 — codepoint는 참고값이며 실제 게시는 차단됩니다"]
 
     link = str(meta.get("link") or "")
     for i, post in enumerate(posts, 1):
         published_body = post.strip() + ("\n" + link if i == 1 and link else "")
         n = measure(published_body, limits["unit"])
         result["counts"].append(n)
-        if n > limits["max"]:
+        if limits["max"] is not None and n > limits["max"]:
             result["violations"].append(
                 f"게시물 {i}: {n} {limits['unit']} (상한 {limits['max']})"
             )
@@ -232,6 +294,8 @@ def check_platform(platform: str, draft_path: str) -> dict:
                 result["violations"].append(
                     f"게시물 {i}: 해시태그 {tags}개 (상한 {HASHTAG_MAX[platform]})"
                 )
+
+    result["violations"].extend(_scan_media_violations(os.path.dirname(os.path.dirname(draft_path)), media))
 
     media_max = limits["media_max"]
     if media_max is not None and len(media) > media_max:
@@ -246,12 +310,46 @@ def check_platform(platform: str, draft_path: str) -> dict:
     return result
 
 
-def payload_for(platform: str, job: str) -> dict:
-    """게시 페이로드 — 본문(frontmatter 제거) + 절대경로 media + link + format."""
+def _freeze_scan_media(job: str, media: list[dict], snapshot: str) -> list[dict]:
+    """승인된 사진·출처를 전용 사본으로 묶고 원본 대신 사본 bytes를 검증한다."""
+    violations = _scan_media_violations(job, media)
+    if violations:
+        raise DraftFormatError("; ".join(violations))
+    frozen = []
+    media_dir = os.path.join(os.path.abspath(snapshot), "media")
+    os.mkdir(media_dir, 0o700)
+    for index, item in enumerate(media):
+        if item.get("source") != "scan":
+            frozen.append(item)
+            continue
+        copied = dict(item)
+        for key, suffix in (("path", os.path.splitext(item["path"])[1]), ("provenance", ".provenance.json")):
+            source = _resolve_job_path(job, item[key])
+            destination = os.path.join(media_dir, f"{index}{suffix}")
+            # lstat 이후 교체도 막고, FIFO로 교체돼도 파일 열기에서 멈추지 않는다.
+            with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as src:
+                info = os.fstat(src.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size < 1:
+                    raise DraftFormatError("scan media 또는 provenance가 일반 파일이 아닙니다")
+                with open(destination, "xb") as dst:
+                    shutil.copyfileobj(src, dst)
+            os.chmod(destination, 0o400)
+            copied[key] = destination
+        frozen.append(copied)
+    violations = _scan_media_violations(snapshot, frozen)
+    if violations:
+        raise DraftFormatError("; ".join(violations))
+    return frozen
+
+
+def payload_for(platform: str, job: str, freeze_media: str | None = None) -> dict:
+    """게시 페이로드 — scan은 요청 시 승인 bytes 사본, 기존 local은 원본 절대경로."""
     draft = os.path.join(job, "drafts", f"{platform}.md")
     with open(draft, encoding="utf-8-sig") as f:
         meta, body = _split_raw(f.read())
     media = _media_items(meta)
+    if freeze_media is not None:
+        media = _freeze_scan_media(job, media, freeze_media)
     resolved = []
     for item in media:
         p = str(item.get("path", ""))
@@ -281,9 +379,14 @@ def main() -> int:
             print(f"알 수 없는 플랫폼: {platform}", file=sys.stderr)
             return 1
         try:
-            print(json.dumps(payload_for(platform, job), ensure_ascii=False))
+            result = check_platform(platform, os.path.join(job, "drafts", f"{platform}.md"))
+            if not result["ok"]:
+                print(json.dumps(result, ensure_ascii=False), file=sys.stderr)
+                return 1
+            freeze_media = args[args.index("--freeze-media") + 1] if "--freeze-media" in args else None
+            print(json.dumps(payload_for(platform, job, freeze_media), ensure_ascii=False))
             return 0
-        except DraftFormatError as e:
+        except (DraftFormatError, OSError) as e:
             print(f"초안 형식 오류(fail-closed): {e}", file=sys.stderr)
             return 1
 

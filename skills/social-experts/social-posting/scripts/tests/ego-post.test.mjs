@@ -4,14 +4,17 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ego-post.mjs');
-const source = readFileSync(SCRIPT, 'utf8');
+const platformDir = join(dirname(SCRIPT), 'platforms');
+const source = [SCRIPT, ...readdirSync(platformDir).filter(name => name.endsWith('.mjs')).map(name => join(platformDir, name))]
+  .map(path => readFileSync(path, 'utf8')).join('\n');
 const mod = await import(SCRIPT);
 
 // --- fixtures ---------------------------------------------------------------
@@ -136,6 +139,11 @@ test('validatePostPayload: 정상 single/thread', () => {
   assert.equal(mod.validatePostPayload({ ...basePayload, format: 'thread', body: 'a\n\n=== POST ===\n\nb' }).length, 2);
 });
 
+test('validatePostPayload: Threads 단일·스레드 페이로드를 허용한다', () => {
+  assert.equal(mod.validatePostPayload({ ...basePayload, platform: 'threads' }).length, 1);
+  assert.equal(mod.validatePostPayload({ ...basePayload, platform: 'threads', format: 'thread', body: 'a\n=== POST ===\nb' }).length, 2);
+});
+
 test('validatePostPayload: 거부 사례', () => {
   assert.throws(() => mod.validatePostPayload({ ...basePayload, platform: 'instagram' }), /INVALID_PAYLOAD/);
   assert.throws(() => mod.validatePostPayload({ ...basePayload, format: 'single', body: 'a\n\n=== POST ===\n\nb' }), /INVALID_PAYLOAD/);
@@ -156,6 +164,13 @@ test('validateScanPayload: timezone 범위와 cursor를 엄격히 검증한다',
   assert.deepEqual(mod.validateScanPayload(payload), payload);
   assert.throws(() => mod.validateScanPayload({ ...payload, since: '2026-11-15T00:00:00Z', until: '2026-11-14T00:00:00Z' }), /INVALID_PAYLOAD/);
   assert.throws(() => mod.validateScanPayload({ ...payload, since: '2026-11-14' }), /INVALID_PAYLOAD/);
+  assert.throws(() => mod.validateScanPayload({ ...payload, until: payload.since }), /INVALID_PAYLOAD/);
+  assert.throws(() => mod.validateScanPayload({ ...payload, cursor: 'unverified-resume' }), /INVALID_PAYLOAD/);
+  assert.throws(() => mod.validateScanPayload({ platform: 'x', since: payload.since, cursor: null }), /INVALID_PAYLOAD/);
+  for (const postUrl of ['https://attacker.test/me/status/1', 'https://x.com/home', 'https://me:secret@x.com/me/status/1', 'http://x.com/me/status/1']) {
+    assert.throws(() => mod.validateScanPayload({ ...payload, postUrl }), /INVALID_PAYLOAD/);
+  }
+  assert.equal(mod.validateScanPayload({ ...payload, postUrl: 'https://x.com/author/status/42?tracking=1' }).postUrl, 'https://x.com/author/status/42');
 });
 
 test('compareCandidates: URL/정규화 본문 일치는 duplicate, 유사 본문은 needs_review다', () => {
@@ -165,8 +180,46 @@ test('compareCandidates: URL/정규화 본문 일치는 duplicate, 유사 본문
   assert.equal(mod.compareCandidates({ candidate, existing: [{ id: 'other', url: 'https://bsky.app/b', text: '전혀 다른 소식' }] }).decision, 'new');
 });
 
+test('compareCandidates: 빈 정규화 본문은 다른 URL의 사진 글을 합치지 않는다', () => {
+  for (const text of ['', '   ', '!!!']) {
+    const candidate = { id: 'photo1', url: 'https://x.com/me/status/1', text };
+    const existing = [{ id: 'photo2', url: 'https://bsky.app/profile/me/post/2', text }];
+    assert.equal(mod.compareCandidates({ candidate, existing }).decision, 'new');
+    assert.equal(mod.compareCandidates({ candidate, existing: [{ ...existing[0], url: candidate.url }] }).decision, 'duplicate');
+  }
+});
+
+test('compareCandidates: scan 후보·확인된 parent 묶음·게시 기록과 coverage를 연결한다', () => {
+  const candidate = { id: 'source', url: 'https://x.com/me/status/1', text: '첫 이야기 둘째 이야기 마지막 이야기', media: [], publishedAt: null, publisher: 'me' };
+  const existing = [
+    { id: 'b1', url: 'https://bsky.app/profile/me/post/1', text: '첫 이야기' },
+    { id: 'b2', url: 'https://bsky.app/profile/me/post/2', text: '둘째 이야기', parentUrl: 'https://bsky.app/profile/me/post/1' },
+    { id: 'b3', url: 'https://bsky.app/profile/me/post/3', text: '마지막 이야기', parentUrl: 'https://bsky.app/profile/me/post/2' },
+  ];
+  const coverage = { complete: false, stopReason: 'SCROLL_STALLED', unknownTimeCount: 1 };
+  const payload = { candidate, existing, targetPlatform: 'bluesky', coverage };
+  const result = mod.compareCandidates(payload);
+  assert.equal(result.decision, 'needs_review');
+  assert.deepEqual(result.coverage, coverage);
+  assert.equal(result.absenceMeaning, 'NOT_FOUND_IN_OBSERVED_SCOPE');
+  assert.ok(result.details.some(item => item.kind === 'reply_chain' && item.ids.join(',') === 'b1,b2,b3'));
+  const logged = mod.compareCandidates({ ...payload, postLog: [{ sourceUrl: candidate.url, platform: 'bluesky', status: 'POSTED', urls: existing.map(item => item.url) }] });
+  assert.equal(logged.decision, 'duplicate');
+  assert.ok(logged.details.some(item => item.kind === 'posted_record'));
+  for (const status of ['POST_UNKNOWN', 'PARTIAL_POSTED']) {
+    const uncertain = mod.compareCandidates({ ...payload, existing: [], postLog: [{ sourceUrl: candidate.url, platform: 'bluesky', status, urls: [existing[0].url] }] });
+    assert.equal(uncertain.decision, 'needs_review');
+  }
+  const unrelated = mod.compareCandidates({ ...payload, existing: existing.map(({ parentUrl, ...item }) => item) });
+  assert.ok(!unrelated.details.some(item => item.kind === 'reply_chain'));
+});
+
+test('post: Threads는 바인딩 확인과 실행보다 먼저 명시적으로 차단한다', async () => {
+  await assert.rejects(() => mod.post({ ...basePayload, platform: 'threads' }, { SOCIAL_EGO_STATE_DIR: join(work, 'unbound-threads') }), /THREADS_UNVERIFIED/);
+});
+
 test('CLI scan: bound identity와 관찰 범위를 보존하고 완료를 가장하지 않는다', () => {
-  writeBinding(bindingFor(fakeEgo('scan', '{"status":"BOOTSTRAP_OBSERVED","posts":[{"text":"최근 글","url":"https://x.com/me/1","time":"2026-11-14T12:00:00Z"}]}')));
+  writeBinding(bindingFor(fakeEgo('scan', '{"status":"BOOTSTRAP_OBSERVED","stopReason":"SCROLL_STALLED","posts":[{"text":"최근 글","url":"https://x.com/me/status/1","publisher":"me","media":[],"time":"2026-11-14T12:00:00Z"}]}')));
   const r = runCli(['scan'], JSON.stringify({ platform: 'x', since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', cursor: null }));
   assert.equal(r.status, 0, r.stderr);
   const out = cliJson(r);
@@ -174,6 +227,211 @@ test('CLI scan: bound identity와 관찰 범위를 보존하고 완료를 가장
   assert.equal(out.identity, 'me');
   assert.equal(out.candidates.length, 1);
   assert.equal(out.coverage.complete, false);
+});
+
+test('scan: 관찰한 이미지 URL·alt를 job manifest에만 보관한다', () => {
+  const jobDir = join(work, 'scan-manifest');
+  writeBinding(bindingFor(fakeEgo('scan-media', JSON.stringify({
+    status: 'BOOTSTRAP_OBSERVED', stopReason: 'SCROLL_STALLED', posts: [{
+      text: '사진 글', url: 'https://x.com/me/2', publisher: 'me', time: '2026-11-14T12:00:00Z',
+      media: [{ sourceUrl: 'https://cdn.example.test/photo.png', alt: '사진 설명' }],
+    }],
+  }))));
+  const r = runCli(['scan'], JSON.stringify({
+    platform: 'x', since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', cursor: null, jobDir,
+  }));
+  assert.equal(r.status, 0, r.stderr);
+  const result = cliJson(r);
+  assert.deepEqual(result.candidates[0].media, [{ id: '1', sourceUrl: 'https://cdn.example.test/photo.png', alt: '사진 설명' }]);
+  const serialized = readFileSync(result.manifestPath, 'utf8');
+  assert.equal(JSON.parse(serialized).candidates[0].publisher, 'me');
+  assert.equal(result.manifestDigest, createHash('sha256').update(serialized).digest('hex'));
+  assert.equal(result.manifestPath, join(result.jobDir, 'scan-manifest.json'));
+});
+
+test('fetchScannedMedia: scan 영수증에 바인딩한 사진만 로그인 브라우저로 내려받아 보관한다', async () => {
+  const rootJobDir = join(work, 'media-fetch');
+  const downloaded = join(work, 'fetched-image');
+  const sourceUrl = 'https://cdn.example.test/photo.png';
+  const env = { SOCIAL_EGO_STATE_DIR: stateDir, HOME: work };
+  writeFileSync(downloaded, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jM1sAAAAASUVORK5CYII=', 'base64'));
+  const scanner = fakeEgo('scan-media-fetch', JSON.stringify({
+    status: 'BOOTSTRAP_OBSERVED', stopReason: 'SCROLL_STALLED', posts: [{
+      text: '사진 글', url: 'https://x.com/me/status/1', publisher: 'me', time: '2026-11-14T12:00:00Z',
+      media: [{ sourceUrl, alt: null }],
+    }],
+  }));
+  writeBinding(bindingFor(scanner));
+  const { jobDir } = await mod.scan({
+    platform: 'x', since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', cursor: null, jobDir: rootJobDir,
+  }, env);
+  const fetcher = fakeEgo('fetch-media', `#!/bin/sh
+script=$(cat)
+printf '%s' "$script" | grep -q "redirect: 'error'" || exit 1
+printf '%s' "$script" | grep -q "credentials: 'same-origin'" || exit 1
+path=$(printf '%s' "$script" | sed -n 's/.*,[ ]*"\\([^" ]*\\/media\\/\\.fetch-[^" ]*\\)".*/\\1/p')
+cp ${JSON.stringify(downloaded)} "$path"
+printf '%s\\n' '{"status":"MEDIA_FETCHED","path":"'"$path"'","sourceUrl":"${sourceUrl}","finalUrl":"${sourceUrl}","contentType":"image/png"}'
+`);
+  writeBinding(bindingFor(fetcher));
+  const original = readFileSync(join(jobDir, 'scan-manifest.json'), 'utf8');
+  const manifestDigest = createHash('sha256').update(original).digest('hex');
+  await assert.rejects(() => mod.fetchScannedMedia({ jobDir, platform: 'x', candidateId: 'https://x.com/me/status/1', sourceUrl }, env), /INVALID_MEDIA/);
+  const [media] = await mod.fetchScannedMedia({ jobDir, platform: 'x', candidateId: 'https://x.com/me/status/1', sourceUrl,
+    altOverride: { manifestDigest, mediaId: '1', alt: '설명' } }, env);
+  assert.equal(media.provenance.sourcePostUrl, 'https://x.com/me/status/1');
+  assert.equal(dirname(media.path), join(rootJobDir, 'media'));
+  assert.equal(media.provenanceSha256, createHash('sha256').update(readFileSync(media.provenancePath)).digest('hex'));
+  mkdirSync(join(rootJobDir, 'drafts'));
+  writeFileSync(join(rootJobDir, 'drafts/x.md'), `---\nplatform: x\nformat: single\nmedia:\n  - path: ${JSON.stringify(media.path)}\n    alt: 설명\n    source: scan\n    sha256: ${media.sha256}\n    provenance: ${JSON.stringify(media.provenancePath)}\n    provenance_sha256: ${media.provenanceSha256}\n---\n원본 사진을 준비한 초안\n`);
+  const checked = spawnSync('uv', ['run', '--script', join(dirname(SCRIPT), 'check-drafts.py'), rootJobDir, '--platform', 'x'], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(JSON.parse(checked.stdout).media[0].path, media.path);
+  const [described] = await mod.fetchScannedMedia({ jobDir, platform: 'x', candidateId: 'https://x.com/me/status/1', sourceUrl,
+    altOverride: { manifestDigest, mediaId: '1', alt: '보완한 설명' } }, env);
+  assert.equal(described.alt, '보완한 설명');
+  assert.equal(readFileSync(join(jobDir, 'scan-manifest.json'), 'utf8'), original);
+  for (const override of [{ manifestDigest: '0'.repeat(64), mediaId: '1', alt: '설명' }, { manifestDigest, mediaId: '2', alt: '다른 사진 설명' }]) {
+    await assert.rejects(() => mod.fetchScannedMedia({ jobDir, platform: 'x', candidateId: 'https://x.com/me/status/1', sourceUrl, altOverride: override }, env), /INVALID_MEDIA/);
+  }
+  const redirected = fakeEgo('fetch-redirected', readFileSync(fetcher, 'utf8').replace(`"finalUrl":"${sourceUrl}"`, '"finalUrl":"https://other.example.test/photo.png"'));
+  const selected = { jobDir, platform: 'x', candidateId: 'https://x.com/me/status/1', sourceUrl, altOverride: { manifestDigest, mediaId: '1', alt: '설명' } };
+  writeBinding(bindingFor(redirected));
+  await assert.rejects(() => mod.fetchScannedMedia(selected, env), /EGO_SCHEMA_INVALID/);
+  writeBinding(bindingFor(fakeEgo('expired-media', '{"status":"EGO_MEDIA_FAILED"}')));
+  await assert.rejects(() => mod.fetchScannedMedia(selected, env), /EGO_MEDIA_FAILED/);
+  writeBinding(bindingFor(fetcher));
+  writeFileSync(join(jobDir, 'scan-manifest.json'), JSON.stringify({
+    platform: 'x', identity: 'me', candidates: [{
+      id: 'attacker', url: 'https://x.com/me/status/2', publisher: 'me',
+      media: [{ sourceUrl: 'http://127.0.0.1/private.png', alt: '설명' }],
+    }],
+  }));
+  await assert.rejects(() => mod.fetchScannedMedia({
+    jobDir, platform: 'x', candidateId: 'attacker', sourceUrl: 'http://127.0.0.1/private.png',
+  }, env), /INVALID_MEDIA/);
+});
+
+test('fetchScannedMedia: 같은 URL의 두 번째 사진 ID를 선택하고 없는 ID·다른 URL·digest 변조는 거부한다', async () => {
+  const sourceUrl = 'https://cdn.test/shared.png';
+  const candidateId = 'https://x.com/author/status/1';
+  const env = { SOCIAL_EGO_STATE_DIR: stateDir };
+  writeBinding(bindingFor(fakeEgo('scan-shared-media', JSON.stringify({
+    status: 'BOOTSTRAP_OBSERVED', stopReason: 'SCROLL_STALLED', posts: [{
+      text: '동일 URL의 사진 두 장', url: candidateId, publisher: 'author', time: '2026-11-14T12:00:00Z',
+      media: [{ sourceUrl, alt: '첫 사진 설명' }, { sourceUrl, alt: null }],
+    }],
+  }))));
+  const observed = await mod.scan({ platform: 'x', since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', cursor: null, jobDir: join(work, 'shared-media-id') }, env);
+  assert.deepEqual(observed.candidates[0].media.map(item => item.id), ['1', '2']);
+  const fetcher = fakeEgo('fetch-shared-media', `#!${process.execPath}
+const fs = require('node:fs');
+const script = fs.readFileSync(0, 'utf8');
+const destination = script.match(/"([^"\\n]*\\/media\\/\\.fetch-[^"\\n]*)"/)[1];
+fs.writeFileSync(destination, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jM1sAAAAASUVORK5CYII=', 'base64'));
+console.log(JSON.stringify({ status: 'MEDIA_FETCHED', path: destination, sourceUrl: ${JSON.stringify(sourceUrl)}, finalUrl: ${JSON.stringify(sourceUrl)}, contentType: 'image/png' }));
+`);
+  writeBinding(bindingFor(fetcher));
+  const payload = { jobDir: observed.jobDir, platform: 'x', candidateId, sourceUrl,
+    altOverride: { manifestDigest: observed.manifestDigest, mediaId: '2', alt: '둘째 사진 보완 설명' } };
+  const [second] = await mod.fetchScannedMedia(payload, env);
+  assert.equal(second.alt, '둘째 사진 보완 설명');
+  await assert.rejects(() => mod.fetchScannedMedia({ jobDir: observed.jobDir, platform: 'x', candidateId, sourceUrl }, env), /INVALID_MEDIA/);
+  for (const invalid of [
+    { ...payload, altOverride: { ...payload.altOverride, mediaId: '3' } },
+    { ...payload, sourceUrl: 'https://cdn.test/not-observed.png' },
+    { ...payload, altOverride: { ...payload.altOverride, manifestDigest: '0'.repeat(64) } },
+  ]) await assert.rejects(() => mod.fetchScannedMedia(invalid, env), /INVALID_MEDIA/);
+  assert.equal(createHash('sha256').update(readFileSync(observed.manifestPath)).digest('hex'), observed.manifestDigest);
+});
+
+test('fetchScannedMedia: 기존 alt가 다른 중복 URL은 실행 전에 거부하고 digest와 사진 ID로 선택한다', async () => {
+  const sourceUrl = 'https://cdn.test/duplicate.png';
+  const candidateId = 'https://x.com/author/status/2';
+  const env = { SOCIAL_EGO_STATE_DIR: stateDir };
+  writeBinding(bindingFor(fakeEgo('scan-ambiguous-alt', JSON.stringify({
+    status: 'BOOTSTRAP_OBSERVED', stopReason: 'SCROLL_STALLED', posts: [{
+      text: '서로 다른 사진 설명', url: candidateId, publisher: 'author', time: '2026-11-14T12:00:00Z',
+      media: [{ sourceUrl, alt: '첫 사진 설명' }, { sourceUrl, alt: '둘째 사진 설명' }],
+    }],
+  }))));
+  const observed = await mod.scan({ platform: 'x', cursor: null, since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', jobDir: join(work, 'ambiguous-alt') }, env);
+  const calls = join(work, 'ambiguous-fetch-calls');
+  const fetcher = fakeEgo('fetch-ambiguous-alt', `#!${process.execPath}
+const fs = require('node:fs');
+const script = fs.readFileSync(0, 'utf8');
+fs.appendFileSync(${JSON.stringify(calls)}, 'fetch\\n');
+const destination = script.match(/"([^"\\n]*\\/media\\/\\.fetch-[^"\\n]*)"/)[1];
+fs.writeFileSync(destination, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jM1sAAAAASUVORK5CYII=', 'base64'));
+console.log(JSON.stringify({ status: 'MEDIA_FETCHED', path: destination, sourceUrl: ${JSON.stringify(sourceUrl)}, finalUrl: ${JSON.stringify(sourceUrl)}, contentType: 'image/png' }));
+`);
+  writeBinding(bindingFor(fetcher));
+  const payload = { jobDir: observed.jobDir, platform: 'x', candidateId, sourceUrl };
+  await assert.rejects(() => mod.fetchScannedMedia(payload, env), /INVALID_MEDIA/);
+  assert.throws(() => readFileSync(calls), { code: 'ENOENT' });
+  const [selected] = await mod.fetchScannedMedia({ ...payload,
+    altOverride: { manifestDigest: observed.manifestDigest, mediaId: '2', alt: '둘째 사진 설명' } }, env);
+  assert.equal(selected.alt, '둘째 사진 설명');
+  assert.equal(selected.provenance.publisher, 'author');
+  assert.equal(readFileSync(calls, 'utf8'), 'fetch\n');
+  assert.equal(createHash('sha256').update(readFileSync(observed.manifestPath)).digest('hex'), observed.manifestDigest);
+});
+
+test('scan: 기간 경계·시간 미상·실제 게시자를 분리하고 기본 24시간을 고정한다', async () => {
+  writeBinding(bindingFor(fakeEgo('scan-boundaries', JSON.stringify({ status: 'BOOTSTRAP_OBSERVED', stopReason: 'SCROLL_STALLED', posts: [
+    { text: '시작', url: 'https://x.com/other/status/1', publisher: 'other', media: [{ sourceUrl: 'https://cdn.test/photo.png', alt: null }], parentUrl: 'https://x.com/other/status/0', time: '2026-11-14T09:00:00+09:00' },
+    { text: '시작 직전', url: 'https://x.com/other/status/before-start', publisher: 'other', media: [], time: '2026-11-13T23:59:59.999Z' },
+    { text: '시작 직후', url: 'https://x.com/other/status/after-start', publisher: 'other', media: [], time: '2026-11-14T00:00:00.001Z' },
+    { text: '끝 직전', url: 'https://x.com/other/status/before-end', publisher: 'other', media: [], time: '2026-11-14T23:59:59.999Z' },
+    { text: '끝', url: 'https://x.com/other/status/2', publisher: 'other', media: [], time: '2026-11-15T00:00:00Z' },
+    { text: '끝 직후', url: 'https://x.com/other/status/after-end', publisher: 'other', media: [], time: '2026-11-15T00:00:00.001Z' },
+    { text: '미상', url: 'https://x.com/other/status/3', publisher: 'other', media: [], time: null },
+  ] }))));
+  const env = { SOCIAL_EGO_STATE_DIR: stateDir };
+  const out = await mod.scan({ platform: 'x', since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', cursor: null }, env);
+  assert.deepEqual(out.candidates.map(post => post.text), ['시작', '시작 직후', '끝 직전']);
+  assert.equal(out.candidates[0].publisher, 'other');
+  assert.equal(out.candidates[0].parentUrl, 'https://x.com/other/status/0');
+  assert.equal(out.candidates[0].media[0].alt, null);
+  assert.equal(out.review[0].reason, 'UNKNOWN_TIME');
+  assert.equal(out.review[0].parentUrl, undefined);
+  const defaults = await mod.scan({ platform: 'x', cursor: null }, env);
+  assert.equal(Date.parse(defaults.coverage.requestedUntil) - Date.parse(defaults.coverage.requestedSince), 86400000);
+  assert.ok(Math.abs(Date.parse(defaults.coverage.referenceTime) - Date.now()) < 5000);
+  assert.equal(defaults.coverage.timezone, 'UTC');
+});
+
+test('scan: 네 플랫폼의 manifest와 영수증은 실행·플랫폼 경로별로 보존된다', async () => {
+  const identities = { x: 'me', facebook: 'me', bluesky: 'me', threads: 'me' };
+  const env = { SOCIAL_EGO_STATE_DIR: stateDir };
+  const paths = [];
+  const rootJobDir = join(work, 'shared-job');
+  for (const platform of Object.keys(identities)) {
+    const jobDir = rootJobDir;
+    writeBinding(bindingFor(fakeEgo(`scan-${platform}`, JSON.stringify({ status: 'BOOTSTRAP_OBSERVED', stopReason: 'SCROLL_STALLED', posts: [{ text: platform, url: `https://example.test/${platform}`, publisher: 'actual', time: '2026-11-14T12:00:00Z', media: [{ sourceUrl: `https://cdn.test/${platform}.jpg`, alt: '사진' }] }] })), identities));
+    const result = await mod.scan({ platform, since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', cursor: null, jobDir }, env);
+    assert.ok(result.jobDir.startsWith(join(rootJobDir, 'scans') + '/'));
+    assert.ok(result.jobDir.endsWith('/' + platform));
+    paths.push(result.jobDir);
+  }
+  for (const [i, platform] of Object.keys(identities).entries()) {
+    const manifest = JSON.parse(readFileSync(join(paths[i], 'scan-manifest.json'), 'utf8'));
+    assert.equal(manifest.platform, platform);
+    assert.equal(manifest.candidates[0].media[0].sourceUrl, `https://cdn.test/${platform}.jpg`);
+    const sourceUrl = `https://cdn.test/${platform}.jpg`;
+    const fetcher = fakeEgo(`fetch-saved-${platform}`, `#!${process.execPath}
+const fs = require('node:fs');
+const script = fs.readFileSync(0, 'utf8');
+const destination = script.match(/"([^"\\n]*\\/media\\/\\.fetch-[^"\\n]*)"/)[1];
+fs.writeFileSync(destination, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jM1sAAAAASUVORK5CYII=', 'base64'));
+console.log(JSON.stringify({ status: 'MEDIA_FETCHED', path: destination, sourceUrl: ${JSON.stringify(sourceUrl)}, finalUrl: ${JSON.stringify(sourceUrl)}, contentType: 'image/png' }));
+`);
+    writeBinding(bindingFor(fetcher, identities));
+    const [media] = await mod.fetchScannedMedia({ jobDir: paths[i], platform, candidateId: manifest.candidates[0].id, sourceUrl }, env);
+    assert.equal(media.provenance.sourcePostUrl, `https://example.test/${platform}`);
+  }
+  assert.equal(new Set(paths).size, 4);
+  assert.throws(() => mod.validateScanPayload({ platform: 'x', cursor: null, jobDir: 'relative-job' }), /INVALID_PAYLOAD/);
 });
 
 test('discoverExecutable: SOCIAL_EGO_EXECUTABLE 절대경로 우선', () => {

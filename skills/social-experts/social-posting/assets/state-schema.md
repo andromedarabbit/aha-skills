@@ -27,7 +27,10 @@
     ├── receipt.json            # 승인·게시 영수증 (머신이 쓰는 축)
     ├── material.md             # 사실·관점·수치·고유명사 + 출처, `질문 필요` 마커
     ├── canonical.md            # canonical message
-    ├── drafts/<platform>.md    # 플랫폼별 초안 (x/linkedin/facebook/bluesky)
+    ├── media/                  # materialize-media.mjs가 보관한 local media (선택)
+    ├── scans/<scan-id>/<platform>/ # 플랫폼별 읽기 전용 관찰 산출물
+    │   └── scan-manifest.json   # 후보·검토 목록·관찰 범위
+    ├── drafts/<platform>.md    # 플랫폼별 초안 (x/linkedin/facebook/bluesky/threads)
     └── post-log.md             # 게시 URL·시각·read-back 결과
 ```
 
@@ -42,6 +45,7 @@ updated: YYYY-MM-DD
 platforms: [x, linkedin]              # flow style 필수 — publish.sh가 파싱한다
 accounts: {x: <ego 신원>, linkedin: <ego 신원>}  # flow style 필수 — 플랫폼 → ego 바인딩 신원(setup이 확정한 handle·slug)
 source: {type: topic, topic: ...}     # 또는 {type: document, path: ...}
+# scan 후보에서 시작했을 때: {type: scan, platform: x, candidate_id: ..., url: ..., scanned_at: ...}
 status: {x: draft, linkedin: draft}   # draft → ready → posted (사람용 표시)
 post_intent: teaser                   # teaser | summary — Stage 2 포스트 목적 (선택 키)
 ```
@@ -58,9 +62,14 @@ post_intent: teaser                   # teaser | summary — Stage 2 포스트 �
 ---
 platform: x
 format: single            # single | thread
-media:                    # 선택. 사용자가 제공한 파일만
+media:                    # 선택
   - path: ./image.png
     alt: 대체 텍스트
+    # scan에서 수집한 파일이면 다음 네 필드가 모두 필수
+    source: scan
+    sha256: <64자리 소문자 hex>
+    provenance: ./media/<image-sha256>.<provenance-sha256>.provenance.json
+    provenance_sha256: <출처 파일의 64자리 소문자 hex>
 link: https://example.com # 선택. 본문에 넣을 링크
 visibility: public        # 선택. facebook 전용 — public | friends | keep(기존 설정 유지·기본)
 ---
@@ -78,8 +87,9 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 - 스레드 경계는 **정확히 `=== POST ===` 한 줄**이다 — check-drafts.py가 이 경계로 게시물을 분리해 길이를 각각 검사한다.
 - `visibility`는 선택 키로 **facebook 전용**이다(`public`=공개, `friends`=친구만, `keep`=기존 설정 유지·기본값). Stage 2에서 사용자에게 반드시 묻고 답을 이 키에 기록한다 — publish.sh가 `public`/`friends`일 때 게시 지시에 공개 범위 설정을 포함하고, `keep`이면 지시하지 않는다(계정 기본 설정을 따른다). 하드 제약은 아니다(Convention 등급).
 - `format`과 게시물 수는 정합해야 한다: `single`은 게시물 정확히 1개, `thread`는 **2개 이상**(하드 제약 — 어긋나면 fail-closed).
-- 스레드(`format: thread`)는 **x·bluesky만 지원**한다 — 답글 체인이 네이티브인 플랫폼이다. linkedin·facebook은 네이티브 스레딩이 없어 `format: thread`가 하드 제약 위반으로 거부된다(단일 게시물로 작성한다). X 스레드는 게시물 25개 이하.
-- 스레드 게시는 각 세그먼트를 **이전 게시물에 대한 답글로 연결**한다(ego-post 고정 스크립트가 수행) — 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공은 ego-post의 DOM 증거 판정이다(부분 게시는 `PARTIAL_POSTED`, 클릭 후 결과 불명은 `POST_UNKNOWN`으로 실패 종료하며 둘 다 재시도 금지다. URL 회수 실패는 `POSTED`+`urlRecovered:false`로 성공 종료한다).
+- `source: scan` 미디어는 `path`·`provenance`가 게시 작업의 `media/` 아래 일반 파일이어야 한다. `sha256`은 이미지 파일, `provenance_sha256`은 출처 파일의 SHA-256이다. 출처의 이미지 hash·bytes·alt도 대조한다. 같은 이미지의 여러 원본 출처는 별도 파일로 보존한다. 승인 뒤 파일·alt·출처 변경은 게시를 거부한다. 실행 전에 사진·출처를 전용 임시 사본으로 복사하고 사본의 승인 digest를 다시 대조한다. 실행 계층은 검증된 사본 경로만 읽으며 실행 종료 시 사본을 정리한다. 동결 뒤 원본이 바뀌어도 승인되지 않은 원본 바이트를 업로드하지 않는다. 구계약 초안은 사진을 다시 준비하고 재승인한다.
+- 스레드 초안은 x·bluesky·threads에서 준비할 수 있다. 실제 답글 게시는 X·Bluesky만 지원한다. LinkedIn·Facebook의 `format: thread`는 거부한다. X 스레드는 게시물 25개 이하다. Threads는 길이·사진·답글·read-back 실환경 검증 전까지 `THREADS_UNVERIFIED`로 차단한다.
+- 스레드 게시는 각 세그먼트를 **직전 게시 성공과 URL이 모두 확인된 게시물에 대한 답글로 연결**한다(ego-post 고정 스크립트가 수행). URL 미회수·부분 게시·결과 불명에서는 자동 이어쓰기를 하지 않는다. 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공은 ego-post의 DOM 증거 판정이다(부분 게시는 `PARTIAL_POSTED`, 클릭 후 결과 불명은 `POST_UNKNOWN`으로 실패 종료하며 둘 다 재시도 금지다. URL 회수 실패는 `POSTED`+`urlRecovered:false`로 성공 종료한다).
 - 본문은 게시 그대로의 문구다. **게시 실행은 페이로드 JSON(body·media 절대경로+alt·link·visibility·identity)으로 전달된다**(publish.sh가 frontmatter를 제거해 조립, ego-post가 소비) — 반면 승인 digest는 **초안 전체 파일**(frontmatter 포함) 기준이라 검증 대상과 게시 대상이 원본 하나로 묶인다. `link` 키가 있으면 ego-post가 첫 세그먼트 끝에 링크를 한 줄 덧붙인다 — 본문에 이미 링크가 있으면 `link` 키를 비워라(중복 방지).
 
 ## 4. receipt.json (영수증)
@@ -97,7 +107,9 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 
 불변식:
 
-- `approved_*` 네 키(digests·accounts·at·via)는 **record-approval.sh 훅만** 기록한다(PostToolUse, matcher: AskUserQuestion, header `게시 승인` 계약). post-state.sh로는 set/unset 불가다.
+- `approved_*` 네 키(digests·accounts·at·via)는 **record-approval.sh 훅만** 기록한다(PostToolUse, matcher: AskUserQuestion, header `게시 승인`·정확한 답변 `게시` 계약). post-state.sh로는 set/unset 불가다.
+- 승인 질문은 `게시 대상: x,bluesky` 형식의 한 줄을 포함한다. 목록은 x·linkedin·facebook·bluesky 중 비어 있지 않은 중복 없는 집합이며 job `platforms`의 부분집합이어야 한다. 쉼표 외 공백이나 미지원 이름·Threads·존재하지 않는 초안이 있거나 대상 줄이 없거나 여러 개면 새 승인 기록을 만들지 않는다.
+- `approved_digests`는 질문에 표시한 대상의 초안 전체 파일 SHA-256만 담는다. 새 승인은 이전 집합과 병합하지 않고 교체한다. 승인 범위를 좁혀도 기존 job·다른 초안·전체 계정 매핑·`posted_*` 기록은 축소하거나 삭제하지 않는다. 구영수증은 그대로 보존하되 신규 전문가 진입이나 게시 범위 변경은 새 승인을 요구한다.
 - `approved_accounts`는 승인 시점 job-state의 accounts flow-map 라인 원문이다 — 승인은 **초안 전체 파일 digest + 계정 매핑**을 함께 묶고, publish.sh가 두 값 모두 현재 상태와 대조한다(계정 재타깃 차단).
 - `posted_<platform>`는 게시 성공 후 에이전트가 `post-state.sh set posted_x <url>`로 기록한다. 실패한 게시는 기록하지 않는다.
 - 영수증은 활성 작업 하나를 가리킨다 — 동시에 여러 작업을 활성화하면 섞이므로 금지.
@@ -108,9 +120,38 @@ publish.sh가 게시 직전에 기계적으로 판정한다.
 
 > **Ready 판정식: `approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치**
 
-하드 제약 통과 여부는 별도로 publish.sh가 check-drafts.py를 재실행해 확인한다(이중 검사). 승인 후 초안이 바뀌면 digest가 어긋나 게시가 거부된다 — 이때는 Stage 8 승인부터 다시 받는다. 이 판정식은 SKILL.md와 docs/REFERENCE.md에서 **동일 문구로** 참조해야 한다 — 문구가 어느 한쪽에서 달라지면 게이트 판정이 갈린다.
+하드 제약 통과 여부는 별도로 publish.sh가 check-drafts.py의 `--platform`으로 **현재 게시할 대상만** 재실행해 확인한다(이중 검사). 무관한 플랫폼의 미완성 초안은 이 게시를 막지 않는다. 전체 초안 비교·문형 경고는 검토 단계에서 별도로 제공한다. 승인 후 초안이 바뀌면 digest가 어긋나 게시가 거부된다 — 이때는 Stage 8 승인부터 다시 받는다. 이 판정식은 SKILL.md와 docs/REFERENCE.md에서 **동일 문구로** 참조해야 한다 — 문구가 어느 한쪽에서 달라지면 게이트 판정이 갈린다.
 
 ## 6. 재개·이동 탐지
 
 - 대화 압축 후 재개: `post-state.sh get`으로 승인 여부를 복구한다. **이전 승인을 가정하지 않는다** — 영수증이 비어 있으면 Stage 8부터 다시.
 - 작업 루트 이동: job-state.md frontmatter `root`와 실제 경로가 다르면 사용자에게 확인하고 `root`를 갱신한다.
+
+## 7. 최근 글 관찰 산출물
+
+- `scan` 입력은 `platform`, `cursor: null`과 선택적인 `since`·`until`·`jobDir`다. 기간은 둘 다 생략하면 호출 시각 기준 최근 24시간, 지정하면 timezone offset이 있는 ISO 시각 두 개를 사용한다. `since`는 포함하고 `until`은 제외한다. 여러 플랫폼은 호출자가 같은 기간을 고정해 전달한다.
+- 저장할 때 `jobDir` 입력은 게시 작업 루트의 절대경로다. scan은 `<게시 작업>/scans/<자동 생성 scan-id>/<platform>`에 저장하고 실제 디렉터리 `jobDir`·manifest 파일 `manifestPath`·원문 SHA-256 `manifestDigest`를 반환한다. 같은 루트에서 플랫폼별 조회를 반복해도 이전 결과를 덮어쓰지 않는다. `fetch-media`에는 반환된 `jobDir`를 전달한다.
+- `scan-manifest.json`은 `SCAN_DONE` 결과를 보관한다. `candidates`는 기간 안의 글, `review`는 시각을 확인하지 못한 글(`reason: UNKNOWN_TIME`)이다. 사진만 있는 글도 보존한다. `publisher`는 관찰한 실제 게시자이며 확인하지 못하면 `null`이다. 로그인 신원인 최상위 `identity`로 대신 채우지 않는다.
+- 후보는 `id`, `url`, `text`, `publishedAt`, `publisher`, `media: [{id, sourceUrl, alt}]`를 갖는다. 관찰 결과에 명시된 `parentUrl`은 보존하되 연속된 글이나 비슷한 본문만으로 관계를 추측하지 않는다. 원본 alt가 없으면 `null`로 유지한다. 시간 미상은 `publishedAt: null`이며 최근 글이라고 단정하지 않는다. 게시물 URL로 중복을 제거한다. URL 미상은 같은 페이지 세션의 DOM 노드에 부여한 `observationId`를 `id`로 재사용해 반복 집계를 막으며, 본문이 같아도 다른 노드는 합치지 않는다. 관찰 ID는 세션 사이의 게시물 식별자로 쓰지 않는다. X·Bluesky의 부모 permalink가 명시된 노드에서만 `parentUrl`을 수집하고 manifest까지 보존한다. X·Threads 사진은 첨부 컨테이너 안에서 수집하며 프로필·장식·중첩 인용 이미지는 제외한다. 실제 DOM 셀렉터의 동작은 별도 검증 대상이다.
+- Facebook 게시시각은 정상 UI의 수신 Document·GraphQL 응답에서 같은 Story의 ID·permalink·작성자로 결합한 값으로 우선 보강한다. 본문·사진·parent·신원의 DOM 근거는 유지한다. 다른 글이나 중첩 인용의 `creation_time`은 쓰지 않고 결합 불가 시 `publishedAt: null`·`UNKNOWN_TIME`을 유지한다. 응답 해석·본문 회수 실패로 기존 글을 지우거나 전체 수집 완료로 승격하지 않는다.
+- Bluesky는 같은 feedItem의 시각 링크로 원문 URL을 식별하고, 정상 UI가 받은 피드 응답의 직계 `post.record.createdAt`만 같은 게시물 ID·작성자에 결합한다. URI의 repo DID와 실제 작성자를 대조하며 인용·재게시 사유의 시각, `indexedAt`, 분 단위 tooltip·상대시간은 게시시각으로 채택하지 않는다. DOM 본문·사진·parent를 유지하고 결합하지 못하면 `publishedAt: null`·`UNKNOWN_TIME`이다.
+- `coverage`는 `requestedSince`, `requestedUntil`, `referenceTime`, `timezone: UTC`, `observedOldest`, `observedNewest`, `observedCount`, `unknownTimeCount`, `complete`, `stopReason`, `limitations`를 갖는다. 시각은 UTC로 정규화하며 요청 구간의 offset도 보존한다. 관찰 방식의 limitation은 Facebook·Bluesky가 `DOM_WITH_PASSIVE_RESPONSE_TIME_WHEN_AVAILABLE`, 나머지는 `PROFILE_DOM_ONLY`다. 전자는 수신 응답의 게시시각 보강이 가능한 경로라는 뜻이지 실제 보강 성공이나 수집 완전성을 뜻하지 않는다.
+- `stopReason`은 `POST_LIMIT`(최대 50건), `SCROLL_STALLED`(스크롤 후 새 글 없음), `TIME_LIMIT`(관찰 시간 상한) 또는 접근·실행 실패 코드다. 접근 실패 전 읽은 글은 보존한다. DOM과 수신 응답의 관찰만으로 전체 이력의 끝을 검증할 수 없으므로 `complete: false`, `nextCursor: null`을 유지한다. 고정글·시간 역전·빈 화면은 수집 완료의 근거가 아니다.
+- manifest의 원문 SHA-256은 스킬 관리 상태 디렉터리의 별도 영수증에 경로와 함께 보관한다. `fetch-media`는 digest·플랫폼·로그인 신원·후보·사진 URL을 대조한다. manifest를 편집하면 사진 수집이 거부된다. 이 영수증은 게시 승인 영수증이 아니다.
+- 선택적인 `postUrl`은 X·Facebook·Bluesky·Threads의 검증된 HTTPS 게시물 URL 하나다(LinkedIn 단건 관찰은 지원하지 않는다). 바인딩된 로그인 신원과 실제 게시자는 별개로 보존하며 지정 URL과 일치하는 글만 관찰한다. 타인 피드 전체 탐색·이미지 임의 URL 입력은 지원하지 않는다.
+- `fetch-media` 입력은 `{jobDir, platform, candidateId, sourceUrl}`이다. `jobDir`는 scan이 반환한 디렉터리다. 누락·수정 alt는 선택적인 `altOverride: {manifestDigest, mediaId, alt}`로 받는다. digest와 후보 안의 사진 ID·URL을 모두 대조하고 manifest는 바꾸지 않는다. 사진 ID는 후보 안의 순서 문자열(`"1"`, `"2"`, …)이며 후보 ID·manifest digest와 함께 식별한다.
+- 사진과 출처는 scan 디렉터리에서 세 단계 위인 게시 작업 루트의 `media/`에 보관한다. 결과는 `path`, `sha256`, `bytes`, `alt`, `provenancePath`, `provenanceSha256`, `provenance`다. `observedAt`은 원본 scan 관찰 시각이다. HTTPS만 내려받으며 `redirect: error`, `credentials: same-origin`을 요청하고 다른 origin의 최종 응답은 거부한다. SDK의 실제 옵션 적용·인증 다운로드는 실환경 검증 대상이고 10 MiB는 수신 후 검사다.
+
+## 8. 대응 후보 비교와 게시 기록
+
+`compare`는 `{candidate, existing}`을 유지하며 선택적인 `targetPlatform`, `coverage`, `postLog`를 받는다. scan의 `candidates`와 시간 미상 `review`를 그대로 `candidate`·`existing`에 넘길 수 있다. 각 항목에서 `id`, `url`, `text`, 관찰된 `parentUrl`만 비교에 쓴다. URL 미상은 빈 문자열로 유지하되 빈 URL끼리 또는 빈 정규화 본문끼리는 동일 글로 판정하지 않는다.
+
+`post-log.md`에서 확인한 기록은 에이전트가 다음 필드로 투영한다. 기록 파일 전체를 스크립트가 자동 파싱하지 않는다.
+
+```json
+{"sourceUrl":"https://x.com/me/status/1","platform":"bluesky","status":"POSTED","urls":["https://bsky.app/profile/me/post/1"]}
+```
+
+원본 URL·대상 플랫폼이 같은 `POSTED` 기록에 URL이 있을 때만 대응 게시 근거로 쓴다. `PARTIAL_POSTED`·`POST_UNKNOWN`은 `needs_review`이며 재시도 근거가 아니다. 기존 기록에 원본 URL이 없으면 추측해 연결하지 않는다.
+
+결과는 `decision: duplicate|needs_review|new`, ID 목록 `evidence`, 종류·ID·URL을 담는 `details`, 대상 `targetPlatform`, 입력 `coverage`, `absenceMeaning: NOT_FOUND_IN_OBSERVED_SCOPE`다. 확인된 parent 연결의 비분기 답글만 묶고 답글 묶음의 본문 일치는 검토 근거로 남긴다. coverage가 없거나 불완전해도 미발견을 미게시 확정으로 승격하지 않는다. 이 결과는 게시 승인·자동 제외 권한이 아니다.

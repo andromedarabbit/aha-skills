@@ -41,8 +41,45 @@ run_hook() {
   printf '%s' "$1" | SOCIAL_POSTING_JOB="$job" bash "$HOOK"
 }
 
+# 혼합 작업에서 질문에 표시하지 않은 초안을 승인하면 안 된다.
+mixed_job="$sandbox/job-mixed"
+mkdir -p "$mixed_job/drafts"
+printf 'draft-x\n' >"$mixed_job/drafts/x.md"
+printf 'draft-facebook\n' >"$mixed_job/drafts/facebook.md"
+printf 'platforms: [x, facebook]\naccounts: {x: me, facebook: other}\n' >"$mixed_job/job-state.md"
+selected_json='{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"게시 대상: x\n이 문구로 게시할까요?","header":"게시 승인"}]},"tool_response":{"answers":{"게시 대상: x\n이 문구로 게시할까요?":"게시"}}}'
+printf '%s' "$selected_json" | SOCIAL_POSTING_JOB="$mixed_job" bash "$HOOK"
+jq -e '.approved_digests | keys == ["x"]' "$mixed_job/receipt.json" >/dev/null \
+  || fail "X만 표시한 승인은 같은 작업의 Facebook 초안을 포함하면 안 된다"
+
+# 잘못된 범위는 신규 승인도 만들지 않고 기존 영수증도 바꾸지 않는다.
+mkdir -p "$mixed_job/invalid"
+printf 'draft-threads\n' >"$mixed_job/drafts/threads.md"
+printf 'platforms: [x, facebook, bluesky, threads]\naccounts: {x: me, facebook: other}\n' >"$mixed_job/job-state.md"
+for question in '이 문구로 게시할까요?' '게시 대상:' '게시 대상: ' \
+  '게시 대상: x,x' '게시 대상: twitter' '게시 대상: linkedin' \
+  '게시 대상: x,bluesky' '게시 대상: x,threads' '게시 대상: threads' \
+  '게시 대상: x,' '게시 대상: x, facebook' $'게시 대상: x\n게시 대상: facebook'; do
+  event="$(jq -nc --arg q "$question" '{tool_name:"AskUserQuestion",tool_input:{questions:[{header:"게시 승인",question:$q}]},tool_response:{answers:{($q):"게시"}}}')"
+  printf '{"approved_digests":{"facebook":"legacy"},"approved_accounts":"{x: me, facebook: other}","posted_facebook":"https://stub.example/fb/1","posted_facebook_at":"2026-11-01T00:00:00Z"}' >"$mixed_job/receipt.json"
+  before="$(hash_of "$mixed_job/receipt.json")"
+  printf '%s' "$event" | SOCIAL_POSTING_JOB="$mixed_job" bash "$HOOK"
+  [ "$(hash_of "$mixed_job/receipt.json")" = "$before" ] || fail "잘못된 질문이 기존 영수증을 바꿨다: $question"
+  mv "$mixed_job/receipt.json" "$mixed_job/invalid/receipt.json"
+  printf '%s' "$event" | SOCIAL_POSTING_JOB="$mixed_job" bash "$HOOK"
+  [ ! -f "$mixed_job/receipt.json" ] || fail "잘못된 질문이 새 승인을 만들었다: $question"
+done
+mv "$mixed_job/invalid/receipt.json" "$mixed_job/receipt.json"
+state_before="$(hash_of "$mixed_job/job-state.md")"
+facebook_before="$(hash_of "$mixed_job/drafts/facebook.md")"
+printf '%s' "$selected_json" | SOCIAL_POSTING_JOB="$mixed_job" bash "$HOOK"
+jq -e '.approved_digests | keys == ["x"]' "$mixed_job/receipt.json" >/dev/null || fail "새 승인은 기존 Facebook 승인과 병합하면 안 된다"
+jq -e '.approved_accounts == "{x: me, facebook: other}" and .posted_facebook == "https://stub.example/fb/1" and .posted_facebook_at == "2026-11-01T00:00:00Z"' "$mixed_job/receipt.json" >/dev/null || fail "단독 승인도 전체 계정 스냅샷과 게시 기록을 보존해야 한다"
+[ "$(hash_of "$mixed_job/job-state.md")" = "$state_before" ] || fail "승인 범위를 좁히려고 기존 job을 축소하면 안 된다"
+[ "$(hash_of "$mixed_job/drafts/facebook.md")" = "$facebook_before" ] || fail "선택하지 않은 Facebook 초안을 바꾸거나 삭제하면 안 된다"
+
 # --- 1. 정상 승인: header '게시 승인' + 답변 '게시' ---
-approval_json='{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"이 문구로 게시할까요?","header":"게시 승인","options":[{"label":"게시"},{"label":"수정"},{"label":"취소"}]}]},"tool_response":{"answers":{"이 문구로 게시할까요?":"게시"}}}'
+approval_json='{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"게시 대상: x,linkedin\n이 문구로 게시할까요?","header":"게시 승인","options":[{"label":"게시"},{"label":"수정"},{"label":"취소"}]}]},"tool_response":{"answers":{"게시 대상: x,linkedin\n이 문구로 게시할까요?":"게시"}}}'
 run_hook "$approval_json"
 
 jq -e '.approved_via == "posttooluse-hook" and (.approved_at | type == "string")' "$receipt" >/dev/null \
@@ -62,7 +99,7 @@ run_hook "$other_header"
 
 # --- 3. 답변 불일치('수정') → no-op ---
 rm -f "$receipt"
-revised_json='{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"이 문구로 게시할까요?","header":"게시 승인","options":[{"label":"게시"},{"label":"수정"}]}]},"tool_response":{"answers":{"이 문구로 게시할까요?":"수정"}}}'
+revised_json='{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"게시 대상: x,linkedin\n이 문구로 게시할까요?","header":"게시 승인","options":[{"label":"게시"},{"label":"수정"}]}]},"tool_response":{"answers":{"게시 대상: x,linkedin\n이 문구로 게시할까요?":"수정"}}}'
 run_hook "$revised_json"
 [ ! -f "$receipt" ] || fail "답변 '수정'은 승인이 아니다 — 기록하면 안 된다"
 
