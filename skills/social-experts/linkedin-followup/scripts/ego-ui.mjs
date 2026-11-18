@@ -531,7 +531,8 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
       if (!sender) return null;
       if (ownerSlug && typeof ownerSlug === 'string' && sender.slug === ownerSlug) return true;
       if (ownerProfileId && typeof ownerProfileId === 'string' && sender.id === ownerProfileId) return true;
-      return false;
+      if ((ownerSlug && sender.slug) || (ownerProfileId && sender.id)) return false;
+      return null;
     };
     await page.goto(messagingUrl, { timeout: 45000 });
     const currentUrl = await page.url();
@@ -627,11 +628,13 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
         const proof = normalizeForMatch(textOf(match.last)).startsWith(wantPreview);
         if (wantPreview && !proof) continue;
         const sender = senderOf(match.last);
-        if (!sender) continue;
-        const direction = ownerMatches(sender) ? 'self' : 'other';
-        const events = match.events.slice(-12)
+        const isOwner = ownerMatches(sender);
+        if (isOwner === null) continue;
+        const direction = isOwner ? 'self' : 'other';
+        const recentEvents = match.events.slice(-12);
+        const events = recentEvents.every(ev => ownerMatches(senderOf(ev)) !== null) ? recentEvents
           .map(ev => ({ senderIsOther: !ownerMatches(senderOf(ev)), text: textOf(ev).slice(0, 300) }))
-          .filter(e => e.text);
+          .filter(e => e.text) : [];
         resolved.set(item.index, {
           conversationUuid: match.uuid,
           lastSenderIsOther: direction === 'other',
@@ -851,7 +854,7 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
             // 구조적으로 실패한다. 마지막 버블 내용이 읽혔으면 DOM 발신자 판정을 그대로 신뢰한다.
             lastEventReadable = normalize(thread.text).length > 0;
             threadSeg = seg;
-            events = lastEventReadable && lastSenderIsOther && Array.isArray(thread.events) ? thread.events.slice(-EVENT_MAX) : [];
+            events = lastEventReadable && Array.isArray(thread.events) ? thread.events.slice(-EVENT_MAX) : [];
             if (proofMatch) break;
             // 같은 UUID에서 세 틱 연속 입증 실패면 이미 열린 스레드가 그것이라는 뜻이다 — 대기 없이 UNPROVEN으로 마친다.
             if (uuid === prevUuid) { stableTicks += 1; if (stableTicks >= 3) break; }
