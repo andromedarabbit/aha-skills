@@ -406,4 +406,21 @@ if bash "$PUBLISH" --job "$job_threads" --platform threads >"$sandbox/threads-re
 grep -q 'THREADS_UNVERIFIED' "$sandbox/threads-result" || fail "Threads 차단 이유를 명시해야 한다"
 [ "$(ego_call_count)" = "$before_calls" ] || fail "Threads는 테스트 심으로도 게시할 수 없어야 한다"
 
+# 과거 영수증·테스트 실행층·dry-run 모두 Instagram 쓰기 차단을 우회하지 못한다.
+job_instagram="$sandbox/job-instagram-blocked"
+make_job "$job_instagram" "instagram" "instagram: me"
+printf -- '---\nplatform: instagram\nformat: single\nmedia:\n  - path: ./photo.png\n    alt: 사진 설명\n---\n' >"$job_instagram/drafts/instagram.md"
+touch "$job_instagram/photo.png"
+approve "$job_instagram" instagram "instagram: me"
+for mode in execute dry-run; do
+  before_calls="$(ego_call_count)"
+  if [[ "$mode" == dry-run ]]; then
+    if bash "$PUBLISH" --job "$job_instagram" --platform instagram --dry-run >"$sandbox/instagram-result" 2>&1; then fail "Instagram dry-run도 검증 전 차단돼야 한다"; fi
+  elif bash "$PUBLISH" --job "$job_instagram" --platform instagram >"$sandbox/instagram-result" 2>&1; then
+    fail "Instagram 쓰기는 검증 전 차단돼야 한다"
+  fi
+  grep -q 'INSTAGRAM_UNVERIFIED' "$sandbox/instagram-result" || fail "Instagram 차단 이유를 명시해야 한다"
+  [ "$(ego_call_count)" = "$before_calls" ] || fail "Instagram은 테스트 실행층에도 도달하면 안 된다"
+done
+
 echo "✅ publish.test.sh 통과"

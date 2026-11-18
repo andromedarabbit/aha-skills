@@ -9,6 +9,7 @@
 | `playbook-facebook.md` | Facebook 전문가 `../../facebook-expert/docs/playbook.md`로 이동한 호환 안내 |
 | `playbook-bluesky.md` | Bluesky 전문가 `../../bluesky-expert/docs/playbook.md`로 이동한 호환 안내 |
 | `playbook-threads.md` | Threads 전문가 `../../threads-expert/docs/playbook.md`로 이동한 호환 안내 |
+| `../../instagram-expert/docs/playbook.md` | Instagram 사진 피드 조회·캡션·사진 구성·미검증 쓰기 차단 |
 
 스킬 루트의 산출물 형식 문서:
 

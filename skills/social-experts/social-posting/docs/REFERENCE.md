@@ -16,7 +16,7 @@
 | `record-approval.sh` | PostToolUse 훅 (matcher: AskUserQuestion) | 승인 digest + 계정 스냅샷 기록 (승인의 유일한 입구) |
 | `check-drafts.py` | `uv run $SKILL_DIR/scripts/check-drafts.py <job-dir>` | 하드 제약 검사 (위반·파싱 불가 exit 1) + 플랫폼 간 문형 중복 경고(`warnings` — 차단 안 함) |
 | `check-drafts.py` (페이로드) | 위 명령에 `--platform <p>` 추가 | 게시 페이로드 JSON: 본문(frontmatter 제거)·절대경로 media·link·format·visibility |
-| `publish.sh` | `bash $SKILL_DIR/scripts/publish.sh --job <dir> --platform <p>` | 게시 단일 진입점 (Threads 차단·7중 가드 후 ego-post 실행, DOM 증거 판정) |
+| `publish.sh` | `bash $SKILL_DIR/scripts/publish.sh --job <dir> --platform <p>` | 게시 단일 진입점 (Threads·Instagram 차단·7중 가드 후 ego-post 실행, DOM 증거 판정) |
 
 ## post-state.sh 서브커맨드
 
@@ -38,7 +38,7 @@ ego lite에는 권한 엔진이 없다 — 안전장치는 승인 영수증·dig
 
 - 바인딩 파일: `<상태 디렉토리>/social-posting/binding.json` (`$SOCIAL_EGO_STATE_DIR` 오버라이드, 기본 `$HOME/.local/share/aha-skills/social-posting/` — 경로는 런타임에 확정). 내용: `{transport:"ego-post/1", executable, taskSpaceName:"social-posting-skill", egoVersion, identity:{x:<handle>, linkedin:<slug>, …}}`
 - `setup --platform <p> [--force]`: 실행파일 발견(`SOCIAL_EGO_EXECUTABLE` → PATH의 `ego-browser`) 후 읽기 전용 프로필 확인으로 신원을 얻어 기록한다. 이미 바인딩된 플랫폼은 재호출 없이 `cached:true`로 돌려준다(`--force`로 재측정)
-- `scan`: JSON stdin `{platform,cursor:null,since?,until?,jobDir?,postUrl?}`. 기간 둘 다 생략하면 최근 24시간이며 여러 플랫폼은 호출자가 같은 timezone 포함 구간을 고정한다. `jobDir`는 게시 작업 루트다. 결과의 `jobDir`는 `scans/<scan-id>/<platform>/`이며 `manifestPath`·`manifestDigest`도 반환한다. `postUrl`은 X·Facebook·Bluesky·Threads의 검증된 단건 게시물 URL이다(LinkedIn 단건 관찰은 지원하지 않는다). 시간 미상은 `review`, 접근 실패와 중단 이유는 불완전 `coverage`로 보고한다.
+- `scan`: JSON stdin `{platform,cursor:null,since?,until?,jobDir?,postUrl?}`. 기간 둘 다 생략하면 최근 24시간이며 여러 플랫폼은 호출자가 같은 timezone 포함 구간을 고정한다. `jobDir`는 게시 작업 루트다. 결과의 `jobDir`는 `scans/<scan-id>/<platform>/`이며 `manifestPath`·`manifestDigest`도 반환한다. `postUrl`은 X·Facebook·Bluesky·Threads·Instagram의 검증된 단건 게시물 URL이다(Instagram은 사진 피드 `/p/`만 지원하며 기본 scan 대상에는 추가하지 않는다. LinkedIn 단건 관찰은 지원하지 않는다). 시간 미상은 `review`, 접근 실패와 중단 이유는 불완전 `coverage`로 보고한다.
 - `compare`: JSON stdin `{candidate,existing,targetPlatform?,coverage?,postLog?}`. scan 후보의 `id,url,text,parentUrl`로 비교한다. URL 또는 비어 있지 않은 정규화 본문 일치는 `duplicate`, 확인된 parent 체인과 토큰 유사도는 검토 근거다. `postLog`는 `sourceUrl,platform,status,urls`가 확인된 기존 기록만 투영한다. `POST_UNKNOWN`·`PARTIAL_POSTED`는 검토 대상이지 재시도 지시가 아니다. `new`는 관찰 내 미발견이며 coverage를 유지한다.
 - `fetch-media`: JSON stdin `{jobDir,platform,candidateId,sourceUrl,altOverride?}`. scan이 반환한 `jobDir`와 영수증을 검증하고 게시 작업 루트 `media/`에 저장한다. `altOverride: {manifestDigest,mediaId,alt}`는 manifest를 바꾸지 않고 해당 후보의 사진 ID·URL·digest에 설명을 연결한다. 같은 URL의 사진이 여러 개이면 URL만으로 선택하지 않고 거부한다. 이때 기존 alt도 함께 담은 `altOverride`로 사진 ID를 지정한다. 반환 `path`·`sha256`·`provenancePath`·`provenanceSha256` 중 출처 digest는 초안 `provenance_sha256`에 기록한다. MIME·signature·수신 후 10 MiB 상한을 검사한다. HTTPS만 사용하고 리다이렉트 차단·same-origin 자격증명 정책을 요청하며 최종 다른 origin은 거부한다. SDK 옵션·인증 다운로드의 실제 동작은 별도 검증 대상이다.
 - TaskSpace 이름은 `social-posting-skill` 1개(순차 게시) — 사용자 소유 스페이스 침입·claim·양도 계열 ego API는 고정 스크립트에서 일절 호출하지 않는다(테스트가 정규식으로 강제)
@@ -87,7 +87,7 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 
 - 이벤트: PostToolUse, matcher: `AskUserQuestion`
 - 인식 조건: `tool_input.questions` 중 header가 **정확히 `게시 승인`** 인 문항의 답변이 **정확히 `게시`** 이고, question에 `게시 대상: x,bluesky`처럼 대상 목록이 한 줄로 표시되어야 한다. 단일 전문가는 자기 플랫폼 하나만 표시한다.
-- 목록은 비어 있지 않은 중복 없는 허용 플랫폼 집합이며 job platforms의 부분집합이어야 한다. 대상 초안이 모두 존재해야 하고 Threads는 포함하지 않는다. 누락·손상·범위 밖 목록은 새 승인을 기록하지 않는다.
+- 목록은 비어 있지 않은 중복 없는 허용 플랫폼 집합이며 job platforms의 부분집합이어야 한다. 대상 초안이 모두 존재해야 하고 Threads·Instagram은 포함하지 않는다. 누락·손상·범위 밖 목록은 새 승인을 기록하지 않는다.
 - 기록 내용: 표시한 대상 초안의 sha256만 `approved_digests` 객체로 **교체**한다. 이전 다른 플랫폼 승인과 병합하지 않는다. `approved_accounts`는 기존처럼 전체 계정 스냅샷이며 posted 기록은 보존한다.
 - 신규 전문가 진입이나 대상 범위 변경은 새 승인을 받는다. 구영수증을 삭제하지 않으며 같은 작업 재개는 현재 digest·계정과 함께 확인한다. header·대상 줄이 없는 구형 질문으로 새 승인을 만들지 않는다.
 
@@ -100,11 +100,14 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 | LinkedIn | codepoint | 3000 | |
 | Facebook | codepoint | 63206 | |
 | Threads | codepoint 참고값 | 미확정 | `lengthVerified:false`, 실제 게시는 `THREADS_UNVERIFIED`로 차단 |
+| Instagram | codepoint 로컬 정책 | 2200 | 공통 캡션·링크 포함. 공식 웹 계수 단위 미확인, 게시는 `INSTAGRAM_UNVERIFIED`로 차단 |
 
 - 길이는 실행 시 첫 세그먼트에 붙이는 줄바꿈과 `link`까지 포함해 검사한다. 나머지 세그먼트에는 `link`를 중복 계산하지 않는다.
 - X weighted 규칙은 X 공식 카운팅 라이브러리 twitter-text v3(`config/v3.json`)에서 온 값이다 — 화이트리스트 4개 범위(`X_LIGHT_RANGES`)만 1로 세고 나머지 전부는 2로 센다(한글 음절 140자가 상한). 플랫폼 정책이 바뀌면 `check-drafts.py` 상수와 플레이북을 함께 갱신한다.
-- 스레드 하드 제약: `format: thread`는 세그먼트 2개 이상 + **x·bluesky·threads만 지원**(linkedin·facebook은 거부), X는 게시물 ≤ 25. `format: single`은 세그먼트 정확히 1개. 게시물별 길이·해시태그·alt 검사는 게시물 단위로 각각 적용된다.
+- 스레드 하드 제약: `format: thread`는 세그먼트 2개 이상 + **x·bluesky·threads만 지원**(linkedin·facebook·instagram은 거부), X는 게시물 ≤ 25. `format: single`은 세그먼트 정확히 1개. 게시물별 길이·해시태그·alt 검사는 게시물 단위로 각각 적용된다.
 - 미디어·alt: Bluesky는 이미지 alt text 필수(하드). 해시태그: Bluesky 0~1개(하드). 미디어 개수 상한: X 4, Bluesky 4, LinkedIn 9(하드). Facebook은 개수 상한을 두지 않는다(근거 불명확한 규칙을 하드로 만들지 않는다).
+
+- Instagram은 사진 1~20장과 각 사진의 alt가 필수이며 캡션은 비어 있어도 된다. 기존 `body`와 `media` 배열을 쓰고 별도 caption 필드를 만들지 않는다. 사진 수·순서·공통 방향·원본 비율 유지와 alt는 검수 대상이다. 모바일 이미지 비율 안내를 웹 하드 제약으로 쓰지 않는다.
 
 ## 게시 실행 계약 (ego lite)
 
@@ -113,6 +116,10 @@ publish.sh는 게시 직전 이 판정식을 강제하고(동결 직후 원본 �
 - 계정 신원은 바인딩 파일의 플랫폼별 신원 문자열만 쓴다(이메일 아님). `link` 키가 있으면 ego-post가 첫 세그먼트 끝에 링크를 한 줄 덧붙인다(중복 방지 — 본문에 이미 있으면 `link` 키를 비워둔다).
 
 ## 확인된 제약
+
+- Instagram 사진 피드의 조회·업로드·게시 선택자는 실환경 미검증이다. publish와 공개 post는 브라우저 실행 전에 `INSTAGRAM_UNVERIFIED`로 종료하며 승인 훅 허용 대상에도 넣지 않는다. 우회 플래그·환경변수는 없다. 혼합 요청에서 다른 대상만 진행하려면 사용자에게 확인한다. 읽기 검증, 사진 첨부·게시, 검증용 코드 변경, 일반 차단 해제는 별도 승인 대상이다.
+- Instagram의 캡션 read-back과 사진 구성 검증은 별개다. 실제 관찰한 사진만 반환하고 사진 수·순서·alt를 확인하지 못한 항목은 미검증으로 보고한다. 빈 캡션을 페이지 전체 텍스트나 댓글로 일치 처리하지 않는다. carousel 일부 관찰은 전체 검증이 아니며 캡션 없는 글에서 보이스 문장을 만들지 않는다.
+- 일반 non-scan 로컬 사진은 scan 미디어와 같은 승인 후 바이트 동결 방어가 없다. 이번 기능에서 기존 플랫폼 전체의 방어를 확장하지 않으며 Instagram 쓰기 해제 전에 다시 검토한다.
 
 - Threads는 별도 허가된 test account의 길이·사진·답글·read-back 검증 전까지 publish와 직접 post 모두 `THREADS_UNVERIFIED`로 차단한다. 일반 payload·환경변수로 해제하지 않는다. 전체 본문 UTF-8 500바이트를 웹 UI 규칙으로 적용하지 않는다. 다른 플랫폼의 selector도 실제 페이지 검증을 대신하는 fake DOM 통과만으로 보장하지 않는다.
 - 순차 게시는 의도다: ego 경로는 전부 브라우저 UI라 병렬이 경합만 만든다(aside 시절 실측 2026-09-01: 브라우저+브라우저 조합 wall 422초·상한 초과 사망)

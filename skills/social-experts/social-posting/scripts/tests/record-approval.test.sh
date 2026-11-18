@@ -78,6 +78,30 @@ jq -e '.approved_accounts == "{x: me, facebook: other}" and .posted_facebook == 
 [ "$(hash_of "$mixed_job/job-state.md")" = "$state_before" ] || fail "승인 범위를 좁히려고 기존 job을 축소하면 안 된다"
 [ "$(hash_of "$mixed_job/drafts/facebook.md")" = "$facebook_before" ] || fail "선택하지 않은 Facebook 초안을 바꾸거나 삭제하면 안 된다"
 
+# Instagram이 섞인 요청은 전부 거부하고, X만 표시한 승인은 전체 계정·게시 기록을 보존한다.
+instagram_job="$sandbox/job-instagram"
+mkdir -p "$instagram_job/drafts"
+printf 'draft-x\n' >"$instagram_job/drafts/x.md"
+printf 'draft-instagram\n' >"$instagram_job/drafts/instagram.md"
+printf 'platforms: [x, instagram]\naccounts: {x: me, instagram: photo-owner}\n' >"$instagram_job/job-state.md"
+printf '{"approved_digests":{"x":"legacy"},"approved_accounts":"{x: me, instagram: photo-owner}","posted_x":"https://stub.example/x/1","posted_instagram":"https://www.instagram.com/p/old/","posted_instagram_at":"2026-11-01T00:00:00Z"}' >"$instagram_job/receipt.json"
+state_before="$(hash_of "$instagram_job/job-state.md")"
+draft_before="$(hash_of "$instagram_job/drafts/instagram.md")"
+for question in '게시 대상: instagram' '게시 대상: x,instagram' '게시 대상: instagram,x'; do
+  event="$(jq -nc --arg q "$question" '{tool_name:"AskUserQuestion",tool_input:{questions:[{header:"게시 승인",question:$q}]},tool_response:{answers:{($q):"게시"}}}')"
+  before="$(hash_of "$instagram_job/receipt.json")"
+  printf '%s' "$event" | SOCIAL_POSTING_JOB="$instagram_job" bash "$HOOK"
+  [ "$(hash_of "$instagram_job/receipt.json")" = "$before" ] || fail "Instagram 혼합 승인을 일부 승인으로 복구하면 안 된다"
+  mv "$instagram_job/receipt.json" "$sandbox/instagram-receipt.json"
+  printf '%s' "$event" | SOCIAL_POSTING_JOB="$instagram_job" bash "$HOOK"
+  [ ! -f "$instagram_job/receipt.json" ] || fail "Instagram을 포함한 새 승인을 만들면 안 된다"
+  mv "$sandbox/instagram-receipt.json" "$instagram_job/receipt.json"
+done
+printf '%s' "$selected_json" | SOCIAL_POSTING_JOB="$instagram_job" bash "$HOOK"
+jq -e '(.approved_digests | keys == ["x"]) and .approved_accounts == "{x: me, instagram: photo-owner}" and .posted_x == "https://stub.example/x/1" and .posted_instagram == "https://www.instagram.com/p/old/" and .posted_instagram_at == "2026-11-01T00:00:00Z"' "$instagram_job/receipt.json" >/dev/null || fail "X만 승인해도 Instagram을 포함한 계정·게시 기록은 보존해야 한다"
+[ "$(hash_of "$instagram_job/job-state.md")" = "$state_before" ] || fail "Instagram 혼합 작업의 범위를 축소하면 안 된다"
+[ "$(hash_of "$instagram_job/drafts/instagram.md")" = "$draft_before" ] || fail "Instagram 초안은 보존해야 한다"
+
 # --- 1. 정상 승인: header '게시 승인' + 답변 '게시' ---
 approval_json='{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"게시 대상: x,linkedin\n이 문구로 게시할까요?","header":"게시 승인","options":[{"label":"게시"},{"label":"수정"},{"label":"취소"}]}]},"tool_response":{"answers":{"게시 대상: x,linkedin\n이 문구로 게시할까요?":"게시"}}}'
 run_hook "$approval_json"

@@ -57,6 +57,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$job" && -n "$platform" ]] || { usage; exit 1; }
 job="${job%/}"
+[[ "$platform" != "instagram" ]] || die "INSTAGRAM_UNVERIFIED — 실제 UI의 사진 피드·계정·첨부·read-back 검증 전 Instagram 게시는 차단됩니다"
 [[ "$platform" != "threads" ]] || die "THREADS_UNVERIFIED — 실제 UI의 길이·사진·답글·read-back 검증 전 Threads 게시는 차단됩니다"
 
 STATE_FILE="$job/job-state.md"

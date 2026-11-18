@@ -153,6 +153,41 @@ test('validatePostPayload: 거부 사례', () => {
   assert.throws(() => mod.validatePostPayload({ ...basePayload, identity: '' }), /INVALID_PAYLOAD/);
 });
 
+test('validatePostPayload: Instagram 사진 피드는 빈 캡션·1~20장·필수 alt를 지원한다', () => {
+  const photo = { path: '/tmp/photo.png', alt: '사진 설명' };
+  const payload = { ...basePayload, platform: 'instagram', body: '', media: [photo] };
+  assert.deepEqual(mod.validatePostPayload(payload), ['']);
+  for (const path of ['/tmp/photo.jpg', '/tmp/photo.JPEG', '/tmp/photo.webp']) {
+    assert.equal(mod.validatePostPayload({ ...payload, media: [{ ...photo, path }] }).length, 1);
+  }
+  assert.equal(mod.validatePostPayload({ ...payload, media: Array(20).fill(photo) }).length, 1);
+  for (const media of [[], Array(21).fill(photo), [{ ...photo, path: '/tmp/movie.mp4' }], [{ ...photo, path: '/tmp/animated.gif' }], [{ ...photo, alt: ' ' }], [{ ...photo, alt: 12 }]]) {
+    assert.throws(() => mod.validatePostPayload({ ...payload, media }), /INVALID_PAYLOAD/);
+  }
+  for (const body of ['a\n=== POST ===\nb', '\n=== POST ===\n']) {
+    assert.throws(() => mod.validatePostPayload({ ...payload, body }), /INVALID_PAYLOAD/);
+  }
+  assert.throws(() => mod.validatePostPayload({ ...payload, format: 'thread' }), /INVALID_PAYLOAD/);
+  for (const platform of ['x', 'linkedin', 'facebook', 'bluesky', 'threads']) {
+    assert.throws(() => mod.validatePostPayload({ ...payload, platform }), /INVALID_PAYLOAD/);
+  }
+});
+
+test('validatePostPayload: Instagram 캡션은 링크·개행 포함 2200 codepoint 로컬 정책이다', () => {
+  const payload = { ...basePayload, platform: 'instagram', media: [{ path: '/tmp/photo.png', alt: '사진 설명' }] };
+  for (const body of ['가'.repeat(2200), '😊'.repeat(2200), 'é'.repeat(1100), 'a\nb' + 'x'.repeat(2197)]) {
+    assert.equal(mod.validatePostPayload({ ...payload, body }).length, 1);
+    assert.throws(() => mod.validatePostPayload({ ...payload, body: body + 'x' }), /INVALID_PAYLOAD/);
+  }
+  const link = 'https://example.com';
+  const body = 'x'.repeat(2200 - 1 - link.length);
+  assert.equal(mod.validatePostPayload({ ...payload, body, link }).length, 1);
+  assert.throws(() => mod.validatePostPayload({ ...payload, body: body + 'x', link }), /INVALID_PAYLOAD/);
+  assert.ok(mod.PLATFORMS.includes('instagram'));
+  assert.deepEqual(mod.validateScanPayload({ platform: 'instagram', cursor: null, postUrl: 'https://www.instagram.com/p/photo_1/?tracking=1' }).postUrl, 'https://www.instagram.com/p/photo_1');
+  assert.throws(() => mod.validateScanPayload({ platform: 'instagram', cursor: null, postUrl: 'https://www.instagram.com/reel/movie_1/' }), /INVALID_PAYLOAD/);
+});
+
 test('postTimeoutMs: 세그먼트 수에 비례, 상한 570s', () => {
   assert.equal(mod.postTimeoutMs(1), 150000);
   assert.equal(mod.postTimeoutMs(3), 270000);
@@ -216,6 +251,23 @@ test('compareCandidates: scan 후보·확인된 parent 묶음·게시 기록과 
 
 test('post: Threads는 바인딩 확인과 실행보다 먼저 명시적으로 차단한다', async () => {
   await assert.rejects(() => mod.post({ ...basePayload, platform: 'threads' }, { SOCIAL_EGO_STATE_DIR: join(work, 'unbound-threads') }), /THREADS_UNVERIFIED/);
+});
+
+test('post와 CLI post: Instagram은 바인딩·브라우저·첨부 전에 차단한다', async () => {
+  const marker = join(work, 'instagram-browser-called');
+  writeBinding(bindingFor(fakeEgo('instagram-blocked', `#!/bin/sh
+printf called > '${marker}'
+cat >/dev/null
+printf '%s\\n' '{"status":"POSTED"}'
+`), { x: 'me', instagram: 'me' }));
+  assert.deepEqual(mod.readBinding({ SOCIAL_EGO_STATE_DIR: stateDir })?.identity, { x: 'me', instagram: 'me' });
+  const payload = { ...basePayload, platform: 'instagram', body: '', media: [{ path: '/tmp/photo.png', alt: '사진 설명' }] };
+  await assert.rejects(() => mod.post(payload, { SOCIAL_EGO_STATE_DIR: join(work, 'unbound-instagram') }), /INSTAGRAM_UNVERIFIED/);
+  await assert.rejects(() => mod.post(payload, { SOCIAL_EGO_STATE_DIR: stateDir }), /INSTAGRAM_UNVERIFIED/);
+  const result = runCli(['post'], JSON.stringify(payload));
+  assert.equal(result.status, 1);
+  assert.equal(cliJson(result).reason, 'INSTAGRAM_UNVERIFIED');
+  assert.ok(!readdirSync(work).includes('instagram-browser-called'));
 });
 
 test('CLI scan: bound identity와 관찰 범위를 보존하고 완료를 가장하지 않는다', () => {
@@ -401,8 +453,8 @@ test('scan: 기간 경계·시간 미상·실제 게시자를 분리하고 기�
   assert.equal(defaults.coverage.timezone, 'UTC');
 });
 
-test('scan: 네 플랫폼의 manifest와 영수증은 실행·플랫폼 경로별로 보존된다', async () => {
-  const identities = { x: 'me', facebook: 'me', bluesky: 'me', threads: 'me' };
+test('scan: 플랫폼별 manifest와 사진 provenance는 실행·플랫폼 경로별로 보존된다', async () => {
+  const identities = { x: 'me', facebook: 'me', bluesky: 'me', threads: 'me', instagram: 'me' };
   const env = { SOCIAL_EGO_STATE_DIR: stateDir };
   const paths = [];
   const rootJobDir = join(work, 'shared-job');
@@ -430,7 +482,7 @@ console.log(JSON.stringify({ status: 'MEDIA_FETCHED', path: destination, sourceU
     const [media] = await mod.fetchScannedMedia({ jobDir: paths[i], platform, candidateId: manifest.candidates[0].id, sourceUrl }, env);
     assert.equal(media.provenance.sourcePostUrl, `https://example.test/${platform}`);
   }
-  assert.equal(new Set(paths).size, 4);
+  assert.equal(new Set(paths).size, 5);
   assert.throws(() => mod.validateScanPayload({ platform: 'x', cursor: null, jobDir: 'relative-job' }), /INVALID_PAYLOAD/);
 });
 

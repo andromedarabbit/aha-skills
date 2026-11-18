@@ -32,7 +32,7 @@ suites_run=$((suites_run + 1))
 GATE_PHRASE='`approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치'
 for rel in SKILL.md assets/state-schema.md docs/REFERENCE.md \
   ../x-expert/SKILL.md ../facebook-expert/SKILL.md \
-  ../bluesky-expert/SKILL.md ../linkedin-expert/SKILL.md; do
+  ../bluesky-expert/SKILL.md ../linkedin-expert/SKILL.md ../instagram-expert/SKILL.md; do
   target="$SKILL_DIR/$rel"
   if [ ! -f "$target" ]; then
     echo "❌ 오류: 게이트 판정식 검사 대상 파일이 없습니다 — $target" >&2
@@ -58,6 +58,12 @@ suites_run=$((suites_run + 1))
 for rel in SKILL.md README.md assets/orca-scan-prompt.md ../threads-expert/docs/playbook.md docs/REFERENCE.md; do
   grep -Fq 'THREADS_UNVERIFIED' "$SKILL_DIR/$rel" || {
     printf '❌ 오류: %s에 Threads 게시 차단 계약이 없습니다\n' "$rel" >&2
+    exit 1
+  }
+done
+for rel in SKILL.md README.md assets/orca-scan-prompt.md ../instagram-expert/SKILL.md ../instagram-expert/docs/playbook.md docs/REFERENCE.md; do
+  grep -Fq 'INSTAGRAM_UNVERIFIED' "$SKILL_DIR/$rel" || {
+    printf '❌ 오류: %s에 Instagram 게시 차단 계약이 없습니다\n' "$rel" >&2
     exit 1
   }
 done

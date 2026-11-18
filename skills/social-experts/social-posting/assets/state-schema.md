@@ -30,7 +30,7 @@
     ├── media/                  # materialize-media.mjs가 보관한 local media (선택)
     ├── scans/<scan-id>/<platform>/ # 플랫폼별 읽기 전용 관찰 산출물
     │   └── scan-manifest.json   # 후보·검토 목록·관찰 범위
-    ├── drafts/<platform>.md    # 플랫폼별 초안 (x/linkedin/facebook/bluesky/threads)
+    ├── drafts/<platform>.md    # 플랫폼별 초안 (x/linkedin/facebook/bluesky/threads/instagram)
     └── post-log.md             # 게시 URL·시각·read-back 결과
 ```
 
@@ -53,6 +53,7 @@ post_intent: teaser                   # teaser | summary — Stage 2 포스트 �
 요건:
 
 - `platforms`·`accounts`·`status`는 **한 줄 flow style**(대괄호·중괄호)로 쓴다 — publish.sh가 sed로 파싱한다.
+- `instagram`도 작업·초안·계정 키로 인식한다. 기존 작업이나 영수증을 강제 이전하지 않으며 다른 플랫폼의 초안·전체 계정 매핑·게시 기록을 보존한다. 기본 scan 대상은 기존 X·Facebook·Bluesky·Threads 네 플랫폼이고 Instagram은 명시적으로 선택한다.
 - `accounts` 값은 ego 바인딩 신원만 담는다 — `ego-post.mjs setup`이 기록한 신원 문자열(X handle·LinkedIn slug 등). publish.sh가 이 값을 페이로드 `identity`로 실어 ego-post가 binding과 대조한다(불일치 = 계정 재타깃 → 게시 거부).
 - `post_intent`는 `teaser` 또는 `summary`만 담는다. 없으면 `summary`로 취급한다(기존 작업 호환). Stage 5 canonical이 이 값을 읽어 티저형(훅 1개 + 링크 유도만)과 요약형을 구분한다.
 
@@ -88,6 +89,9 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 - `visibility`는 선택 키로 **facebook 전용**이다(`public`=공개, `friends`=친구만, `keep`=기존 설정 유지·기본값). Stage 2에서 사용자에게 반드시 묻고 답을 이 키에 기록한다 — publish.sh가 `public`/`friends`일 때 게시 지시에 공개 범위 설정을 포함하고, `keep`이면 지시하지 않는다(계정 기본 설정을 따른다). 하드 제약은 아니다(Convention 등급).
 - `format`과 게시물 수는 정합해야 한다: `single`은 게시물 정확히 1개, `thread`는 **2개 이상**(하드 제약 — 어긋나면 fail-closed).
 - `source: scan` 미디어는 `path`·`provenance`가 게시 작업의 `media/` 아래 일반 파일이어야 한다. `sha256`은 이미지 파일, `provenance_sha256`은 출처 파일의 SHA-256이다. 출처의 이미지 hash·bytes·alt도 대조한다. 같은 이미지의 여러 원본 출처는 별도 파일로 보존한다. 승인 뒤 파일·alt·출처 변경은 게시를 거부한다. 실행 전에 사진·출처를 전용 임시 사본으로 복사하고 사본의 승인 digest를 다시 대조한다. 실행 계층은 검증된 사본 경로만 읽으며 실행 종료 시 사본을 정리한다. 동결 뒤 원본이 바뀌어도 승인되지 않은 원본 바이트를 업로드하지 않는다. 구계약 초안은 사진을 다시 준비하고 재승인한다.
+- Instagram은 `format: single` 사진 피드 하나만 준비한다. `media` 배열 순서가 사진 순서이며 JPEG·PNG·WebP 확장자의 사진 경로 1~20개와 각각 비어 있지 않은 문자열 `alt`가 필수다. 이 형식 목록은 로컬 초안 정책이며 실제 파일의 정지 이미지 여부나 웹 업로드 지원을 입증하지 않는다. 텍스트 단독·영상·GIF·릴스·스토리·답글 체인은 지원하지 않고 자동 자르기·분할·변환하지 않는다. `body`는 공통 캡션이며 빈 문자열도 허용한다. 기존 페이로드의 `body`·`media` 배열을 그대로 쓰고 별도 캡션 필드를 만들지 않는다.
+- Instagram 캡션은 본문에 덧붙는 `link`와 줄바꿈까지 합쳐 2,200 Unicode codepoint 이하로 검사한다. 이는 **로컬 초안 정책**이고 실제 웹 UI의 계수 단위는 미검증이다. 검사 결과는 `lengthVerified: false`와 경고를 포함한다. 비율·잘림은 이 검사로 확인하지 않는다.
+- Instagram은 publish와 공개 `post` 모두 브라우저·composer·첨부 전에 `INSTAGRAM_UNVERIFIED`로 차단한다. 과거 영수증·dry-run·테스트 실행층·무인 실행도 우회 경로가 아니며 게시 승인 집합에 포함하지 않는다. 차단 해제는 별도 코드 변경 승인과 실환경 검증·후속 리뷰 뒤의 별도 승인이 필요하다.
 - 스레드 초안은 x·bluesky·threads에서 준비할 수 있다. 실제 답글 게시는 X·Bluesky만 지원한다. LinkedIn·Facebook의 `format: thread`는 거부한다. X 스레드는 게시물 25개 이하다. Threads는 길이·사진·답글·read-back 실환경 검증 전까지 `THREADS_UNVERIFIED`로 차단한다.
 - 스레드 게시는 각 세그먼트를 **직전 게시 성공과 URL이 모두 확인된 게시물에 대한 답글로 연결**한다(ego-post 고정 스크립트가 수행). URL 미회수·부분 게시·결과 불명에서는 자동 이어쓰기를 하지 않는다. 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공은 ego-post의 DOM 증거 판정이다(부분 게시는 `PARTIAL_POSTED`, 클릭 후 결과 불명은 `POST_UNKNOWN`으로 실패 종료하며 둘 다 재시도 금지다. URL 회수 실패는 `POSTED`+`urlRecovered:false`로 성공 종료한다).
 - 본문은 게시 그대로의 문구다. **게시 실행은 페이로드 JSON(body·media 절대경로+alt·link·visibility·identity)으로 전달된다**(publish.sh가 frontmatter를 제거해 조립, ego-post가 소비) — 반면 승인 digest는 **초안 전체 파일**(frontmatter 포함) 기준이라 검증 대상과 게시 대상이 원본 하나로 묶인다. `link` 키가 있으면 ego-post가 첫 세그먼트 끝에 링크를 한 줄 덧붙인다 — 본문에 이미 링크가 있으면 `link` 키를 비워라(중복 방지).
@@ -108,7 +112,7 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 불변식:
 
 - `approved_*` 네 키(digests·accounts·at·via)는 **record-approval.sh 훅만** 기록한다(PostToolUse, matcher: AskUserQuestion, header `게시 승인`·정확한 답변 `게시` 계약). post-state.sh로는 set/unset 불가다.
-- 승인 질문은 `게시 대상: x,bluesky` 형식의 한 줄을 포함한다. 목록은 x·linkedin·facebook·bluesky 중 비어 있지 않은 중복 없는 집합이며 job `platforms`의 부분집합이어야 한다. 쉼표 외 공백이나 미지원 이름·Threads·존재하지 않는 초안이 있거나 대상 줄이 없거나 여러 개면 새 승인 기록을 만들지 않는다.
+- 승인 질문은 `게시 대상: x,bluesky` 형식의 한 줄을 포함한다. 목록은 x·linkedin·facebook·bluesky 중 비어 있지 않은 중복 없는 집합이며 job `platforms`의 부분집합이어야 한다. 쉼표 외 공백이나 미지원 이름·Threads·Instagram·존재하지 않는 초안이 있거나 대상 줄이 없거나 여러 개면 요청 전체를 거부하고 기존 영수증도 바꾸지 않는다. Instagram·X 혼합 작업에서 X만 표시해 승인하면 X digest만 기록하되 Instagram을 포함한 전체 계정 snapshot과 기존 게시 기록은 보존한다.
 - `approved_digests`는 질문에 표시한 대상의 초안 전체 파일 SHA-256만 담는다. 새 승인은 이전 집합과 병합하지 않고 교체한다. 승인 범위를 좁혀도 기존 job·다른 초안·전체 계정 매핑·`posted_*` 기록은 축소하거나 삭제하지 않는다. 구영수증은 그대로 보존하되 신규 전문가 진입이나 게시 범위 변경은 새 승인을 요구한다.
 - `approved_accounts`는 승인 시점 job-state의 accounts flow-map 라인 원문이다 — 승인은 **초안 전체 파일 digest + 계정 매핑**을 함께 묶고, publish.sh가 두 값 모두 현재 상태와 대조한다(계정 재타깃 차단).
 - `posted_<platform>`는 게시 성공 후 에이전트가 `post-state.sh set posted_x <url>`로 기록한다. 실패한 게시는 기록하지 않는다.
@@ -138,7 +142,7 @@ publish.sh가 게시 직전에 기계적으로 판정한다.
 - `coverage`는 `requestedSince`, `requestedUntil`, `referenceTime`, `timezone: UTC`, `observedOldest`, `observedNewest`, `observedCount`, `unknownTimeCount`, `complete`, `stopReason`, `limitations`를 갖는다. 시각은 UTC로 정규화하며 요청 구간의 offset도 보존한다. 관찰 방식의 limitation은 Facebook·Bluesky가 `DOM_WITH_PASSIVE_RESPONSE_TIME_WHEN_AVAILABLE`, 나머지는 `PROFILE_DOM_ONLY`다. 전자는 수신 응답의 게시시각 보강이 가능한 경로라는 뜻이지 실제 보강 성공이나 수집 완전성을 뜻하지 않는다.
 - `stopReason`은 `POST_LIMIT`(최대 50건), `SCROLL_STALLED`(스크롤 후 새 글 없음), `TIME_LIMIT`(관찰 시간 상한) 또는 접근·실행 실패 코드다. 접근 실패 전 읽은 글은 보존한다. DOM과 수신 응답의 관찰만으로 전체 이력의 끝을 검증할 수 없으므로 `complete: false`, `nextCursor: null`을 유지한다. 고정글·시간 역전·빈 화면은 수집 완료의 근거가 아니다.
 - manifest의 원문 SHA-256은 스킬 관리 상태 디렉터리의 별도 영수증에 경로와 함께 보관한다. `fetch-media`는 digest·플랫폼·로그인 신원·후보·사진 URL을 대조한다. manifest를 편집하면 사진 수집이 거부된다. 이 영수증은 게시 승인 영수증이 아니다.
-- 선택적인 `postUrl`은 X·Facebook·Bluesky·Threads의 검증된 HTTPS 게시물 URL 하나다(LinkedIn 단건 관찰은 지원하지 않는다). 바인딩된 로그인 신원과 실제 게시자는 별개로 보존하며 지정 URL과 일치하는 글만 관찰한다. 타인 피드 전체 탐색·이미지 임의 URL 입력은 지원하지 않는다.
+- 선택적인 `postUrl`은 X·Facebook·Bluesky·Threads의 검증된 HTTPS 게시물 URL 또는 Instagram의 `https://www.instagram.com/p/<shortcode>` 사진 피드 URL 하나다(LinkedIn 단건 관찰은 지원하지 않는다). 바인딩된 로그인 신원과 실제 게시자는 별개로 보존하며 지정 URL과 일치하는 글만 관찰한다. 타인 피드 전체 탐색·이미지 임의 URL 입력은 지원하지 않는다.
 - `fetch-media` 입력은 `{jobDir, platform, candidateId, sourceUrl}`이다. `jobDir`는 scan이 반환한 디렉터리다. 누락·수정 alt는 선택적인 `altOverride: {manifestDigest, mediaId, alt}`로 받는다. digest와 후보 안의 사진 ID·URL을 모두 대조하고 manifest는 바꾸지 않는다. 사진 ID는 후보 안의 순서 문자열(`"1"`, `"2"`, …)이며 후보 ID·manifest digest와 함께 식별한다.
 - 사진과 출처는 scan 디렉터리에서 세 단계 위인 게시 작업 루트의 `media/`에 보관한다. 결과는 `path`, `sha256`, `bytes`, `alt`, `provenancePath`, `provenanceSha256`, `provenance`다. `observedAt`은 원본 scan 관찰 시각이다. HTTPS만 내려받으며 `redirect: error`, `credentials: same-origin`을 요청하고 다른 origin의 최종 응답은 거부한다. SDK의 실제 옵션 적용·인증 다운로드는 실환경 검증 대상이고 10 MiB는 수신 후 검사다.
 

@@ -9,8 +9,8 @@
 //   readback  (payload JSON on stdin)    게시 URL 본문 일치 검증 (Stage 10)
 //
 // 안전 모델: ego에는 권한 엔진이 없다. 안전장치는 전부 이 모듈과 publish.sh의
-// 승인 digest 가드가 담당한다. 고정 스크립트는 소유·양도·생명주기 계열 ego API를
-// 일절 호출하지 않는다(테스트가 정규식으로 강제 — ego-post.test.mjs 참조).
+// 승인 digest 가드가 담당한다. 고정 스크립트는 공간 소유·양도·종료 API를
+// 호출하지 않는다(테스트가 정규식으로 강제 — ego-post.test.mjs 참조).
 //
 // 스크립트 함수와 공유 신원 파서는 fn.toString()으로 함께 주입한다. 그 외 바깥
 // 스코프는 참조하지 않으며 입력은 데이터(JSON)로만 주입된다. 플랫폼 DOM 셀렉터는 첫 실측(2026-11)
@@ -29,8 +29,9 @@ import * as linkedinUI from './platforms/linkedin.mjs';
 import * as facebookUI from './platforms/facebook.mjs';
 import * as blueskyUI from './platforms/bluesky.mjs';
 import * as threadsUI from './platforms/threads.mjs';
+import * as instagramUI from './platforms/instagram.mjs';
 
-const PLATFORM_UI = { x: xUI, linkedin: linkedinUI, facebook: facebookUI, bluesky: blueskyUI, threads: threadsUI };
+const PLATFORM_UI = { x: xUI, linkedin: linkedinUI, facebook: facebookUI, bluesky: blueskyUI, threads: threadsUI, instagram: instagramUI };
 const { facebookIdentity, facebookPost } = facebookUI;
 
 const MAX_OUTPUT = 2 * 1024 * 1024;
@@ -52,7 +53,7 @@ export const POST_STEP_CODES = Object.freeze([
   'EGO_EVIDENCE_MISSING', 'EGO_IDENTITY_NOT_FOUND',
 ]);
 
-export const PLATFORMS = Object.freeze(['x', 'linkedin', 'facebook', 'bluesky', 'threads']);
+export const PLATFORMS = Object.freeze(['x', 'linkedin', 'facebook', 'bluesky', 'threads', 'instagram']);
 export const TASK_SPACE_NAME = 'social-posting-skill';
 export const TRANSPORT = 'ego-post/1';
 
@@ -239,6 +240,7 @@ const IDENTITY_SCRIPTS = Object.freeze({
   facebook: facebookUI.childAcquireIdentityFacebook,
   bluesky: blueskyUI.childAcquireIdentityBluesky,
   threads: threadsUI.childAcquireIdentityThreads,
+  instagram: instagramUI.childAcquireIdentityInstagram,
 });
 
 // ── bootstrap: 최근 게시물 verbatim 수집 (Stage 4 보이스 프로필 원본) ──
@@ -253,6 +255,7 @@ async function childBootstrap(spaceName, platform, spec) {
   }
   const stop = code => { throw Object.assign(new Error, { code }); };
   const collected = [];
+  let detailPage = null;
   let networkPage = null;
   let deadline = Date.now() + 60000;
   const beforeDeadline = async promise => {
@@ -316,6 +319,7 @@ async function childBootstrap(spaceName, platform, spec) {
         observing = true;
       } catch {}
     }
+    if (platform === 'instagram') await ui.verifyPostIdentity(page, spec.identity, stop, async () => {}, ms => new Promise(resolve => setTimeout(resolve, ms)));
     await page.goto(spec.postUrl ?? ui.profileUrl(spec.identity), { timeout: 45000 });
     try { await page.waitForFunction(() => (document.body?.innerText?.length ?? 0) > 200, undefined, { timeout: 20000 }); } catch {}
     const baseUrl = await page.url();
@@ -332,6 +336,7 @@ async function childBootstrap(spaceName, platform, spec) {
         return nodes.get(node);
       };
     });
+    if (platform === 'instagram' && !spec.postUrl) detailPage = await task.newPage();
     deadline = Date.now() + 60000;
     let stopReason = 'TIME_LIMIT';
     let stableRounds = 0;
@@ -339,7 +344,14 @@ async function childBootstrap(spaceName, platform, spec) {
     while (Date.now() < deadline && collected.length < spec.max) {
       await observeResponses(deadline);
       if (Date.now() >= deadline) break;
-      const found = await ui.extractPosts(page);
+      let observationError = null;
+      let found;
+      try { found = platform === 'instagram' ? await ui.extractPosts(page, deadline, detailPage) : await ui.extractPosts(page); }
+      catch (error) {
+        if (platform !== 'instagram' || !error.observedPosts?.length) throw error;
+        found = error.observedPosts;
+        observationError = error;
+      }
       for (const item of found) {
         let url = null;
         let publisher = null;
@@ -356,7 +368,7 @@ async function childBootstrap(spaceName, platform, spec) {
           if (photo) canonical.searchParams.set('fbid', photo);
           if (owner && (story || photo)) canonical.searchParams.set('id', owner);
           url = canonical.href;
-          publisher = ui.publisher(canonical, owner);
+          publisher = platform === 'instagram' ? item.publisher ?? null : ui.publisher(canonical, owner);
           if (!publisher && item.publisherHref) publisher = facebookIdentity(new URL(item.publisherHref, baseUrl));
         } catch {}
         if (spec.postUrl && url !== spec.postUrl) continue;
@@ -381,11 +393,13 @@ async function childBootstrap(spaceName, platform, spec) {
         }
         if (!spec.scan && !item.text) continue;
         const post = { text: item.text, url, time, media: item.media ?? [],
+          ...(platform === 'instagram' ? { mediaComplete: item.mediaComplete === true } : {}),
           ...(spec.scan ? { publisher, observationId: item.observationId, ...(parentUrl ? { parentUrl } : {}) } : {}) };
         if (key) seen.set(key, post);
         collected.push(post);
         if (collected.length >= spec.max) break;
       }
+      if (observationError) throw observationError;
       if (collected.length >= spec.max) { stopReason = 'POST_LIMIT'; break; }
       if (collected.length === lastCount) {
         stableRounds += 1;
@@ -400,10 +414,13 @@ async function childBootstrap(spaceName, platform, spec) {
     if (platform === 'threads' && !collected.length && stopReason === 'SCROLL_STALLED') stopReason = 'EGO_EVIDENCE_MISSING';
     console.log(JSON.stringify({ status: 'BOOTSTRAP_OBSERVED', posts: collected.slice(0, spec.max), ...(spec.scan ? { stopReason } : {}) }));
   } catch (error) {
-    const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED'];
+    const codes = ['EGO_SPACE_NAME_IN_USE', 'EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_IDENTITY_NOT_FOUND', 'EGO_ACCOUNT_MISMATCH', 'EGO_EVIDENCE_MISSING'];
     const reason = codes.includes(error?.code) ? error.code : 'EGO_ATTACH_FAILED';
     console.log(JSON.stringify(spec.scan ? { status: 'BOOTSTRAP_OBSERVED', posts: collected, stopReason: reason } : { status: reason }));
   } finally {
+    if (detailPage) {
+      try { await detailPage.close(); } catch {}
+    }
     if (networkPage) {
       try { await beforeDeadline(networkPage.cdp('Network.disable')); } catch {}
       try { await beforeDeadline(networkPage.events()); } catch {}
@@ -564,6 +581,8 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
         if (!prev) stop('EGO_SCHEMA_INVALID');
         if (!(await cfg.replyOpen(prev))) stop('EGO_COMPOSER_NOT_FOUND');
       }
+      // Instagram은 사진 선택·편집 이후에 캡션 입력란이 나타난다.
+      if (platform === 'instagram') await cfg.prepareMedia(media, stop);
       // composer 렌더 대기
       let composerReady = false;
       const readyDeadline = Date.now() + 15000;
@@ -575,7 +594,7 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
       if (!composerReady) stop('EGO_COMPOSER_NOT_FOUND');
       if (i === 0 && ui.setVisibility) await ui.setVisibility(page, visibility, stop, sleep);
       // 본문 삽입 — execCommand insertText(에디터 모델 반영 검증 방식)
-      const fill = await page.evaluate(({ selector, text }) => {
+      const fill = platform === 'instagram' && body.length === 0 ? { ok: true } : await page.evaluate(({ selector, text }) => {
         const box = document.querySelector(selector);
         if (!box) return { ok: false };
         box.focus();
@@ -591,10 +610,11 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
       }, cfg.composerSelector);
       if (typeof read !== 'string' || read.replace(/\r\n/g, '\n') !== body) stop('EGO_READBACK_MISMATCH');
       if (i === 0) {
-        await attachMedia();
+        if (platform !== 'instagram') await attachMedia();
         const afterMedia = await page.evaluate(selector => document.querySelector(selector)?.innerText ?? null, cfg.composerSelector);
         if (typeof afterMedia !== 'string' || afterMedia.replace(/\r\n/g, '\n') !== body) stop('EGO_READBACK_MISMATCH');
       }
+      if (platform === 'instagram') await cfg.verifyBeforeShare(media, body, expectedIdentity, stop);
       // 게시 버튼 1회 클릭 (활성화 대기 포함)
       let postClicked = false;
       const clickDeadline = Date.now() + 15000;
@@ -671,7 +691,16 @@ async function childReadback(spaceName, urls, bodies) {
       const want = norm(bodies[i]);
       await page.goto(url, { timeout: 45000 });
       await new Promise(r => setTimeout(r, 2000));
-      const config = Object.values(PLATFORM_UI).find(ui => ui.readbackHosts.includes(new URL(url).hostname))?.readbackSelectors;
+      const ui = Object.values(PLATFORM_UI).find(ui => ui.readbackHosts.includes(new URL(url).hostname));
+      if (ui?.readbackPost) {
+        const observed = await ui.readbackPost(page, url);
+        const captionMatched = typeof observed?.text === 'string' && norm(observed.text) === want;
+        const items = observed?.media ?? [];
+        results.push({ url, matched: captionMatched && items.length > 0, captionMatched,
+          media: { items, complete: observed?.mediaComplete === true, ...(observed?.stopReason ? { stopReason: observed.stopReason } : {}) } });
+        continue;
+      }
+      const config = ui?.readbackSelectors;
       const text = await page.evaluate(({ target, config }) => {
         const url = new URL(target);
         if (!config) return null;
@@ -751,13 +780,14 @@ function scanDate(value) {
 function observationPostUrl(platform, value) {
   if (!httpUrl(value)) throw fail('INVALID_PAYLOAD');
   const url = new URL(value);
-  const origins = { x: 'https://x.com', facebook: 'https://www.facebook.com', bluesky: 'https://bsky.app', threads: 'https://www.threads.com' };
+  const origins = { x: 'https://x.com', facebook: 'https://www.facebook.com', bluesky: 'https://bsky.app', threads: 'https://www.threads.com', instagram: 'https://www.instagram.com' };
   if (url.origin !== origins[platform] || url.username || url.password || url.hash) throw fail('INVALID_PAYLOAD');
   const paths = {
     x: /^\/[^/]+\/status\/\d+\/?$/,
     facebook: /^\/(?:[^/]+\/posts\/[^/]+|(?:permalink|story|photo)\.php|photo)\/?$/,
     bluesky: /^\/profile\/[^/]+\/post\/[^/]+\/?$/,
     threads: /^\/@[^/]+\/post\/[^/]+\/?$/,
+    instagram: /^\/p\/[A-Za-z0-9_-]+\/?$/,
   };
   if (!paths[platform]?.test(url.pathname)) throw fail('INVALID_PAYLOAD');
   if (platform === 'facebook' && !url.pathname.includes('/posts/') && !url.searchParams.has('story_fbid') && !url.searchParams.has('fbid')) throw fail('INVALID_PAYLOAD');
@@ -903,6 +933,7 @@ export async function scan(payload, env = process.env) {
           !post || typeof post.text !== 'string' || (post.url !== null && !httpUrl(post.url)) ||
           (post.observationId !== undefined && !validString(post.observationId, 512)) ||
           (post.parentUrl !== undefined && !httpUrl(post.parentUrl)) ||
+          (post.mediaComplete !== undefined && typeof post.mediaComplete !== 'boolean') ||
           (post.publisher !== null && !validString(post.publisher, 256)) || !Array.isArray(post.media))) throw fail('EGO_SCHEMA_INVALID');
   } catch (error) {
     observed = { posts: [], stopReason: error.reason ?? error.code ?? 'EGO_PROCESS_FAILED' };
@@ -923,6 +954,7 @@ export async function scan(payload, env = process.env) {
       id, url: post.url || '', text: post.text, publishedAt: time?.toISOString() ?? null, publisher: post.publisher ?? null,
       media: post.media.map((media, index) => ({ id: String(index + 1), sourceUrl: media?.sourceUrl, alt: media?.alt ?? null })),
       ...(post.observationId ? { observationId: post.observationId } : {}),
+      ...(typeof post.mediaComplete === 'boolean' ? { mediaComplete: post.mediaComplete } : {}),
       ...(httpUrl(post.parentUrl) ? { parentUrl: post.parentUrl } : {}),
     };
     if (!time) { review.push({ ...candidate, reason: 'UNKNOWN_TIME' }); continue; }
@@ -936,7 +968,7 @@ export async function scan(payload, env = process.env) {
       observedOldest: times.length ? new Date(Math.min(...times)).toISOString() : null,
       observedNewest: times.length ? new Date(Math.max(...times)).toISOString() : null,
       complete: false, stopReason: observed.stopReason, observedCount: seen.size, unknownTimeCount: review.length,
-      limitations: [['facebook', 'bluesky'].includes(payload.platform) ? 'DOM_WITH_PASSIVE_RESPONSE_TIME_WHEN_AVAILABLE' : 'PROFILE_DOM_ONLY', 'PINNED_OR_UNORDERED_POSTS', 'NO_VERIFIED_HISTORY_END'],
+      limitations: [['facebook', 'bluesky'].includes(payload.platform) ? 'DOM_WITH_PASSIVE_RESPONSE_TIME_WHEN_AVAILABLE' : 'PROFILE_DOM_ONLY', 'PINNED_OR_UNORDERED_POSTS', 'NO_VERIFIED_HISTORY_END', ...(payload.platform === 'instagram' ? ['INSTAGRAM_DOM_UNVERIFIED', 'OBSERVED_PHOTOS_ONLY'] : [])],
     },
     nextCursor: null,
     ...(payload.jobDir ? { jobDir: join(payload.jobDir, 'scans', randomUUID(), payload.platform) } : {}),
@@ -996,13 +1028,21 @@ export function validatePostPayload(payload) {
   if (!exactKeys(payload, ['platform', 'format', 'body', 'media', 'link', 'visibility', 'identity'])) throw fail('INVALID_PAYLOAD');
   if (!PLATFORMS.includes(payload.platform)) throw fail('INVALID_PAYLOAD');
   if (!['single', 'thread'].includes(payload.format)) throw fail('INVALID_PAYLOAD');
-  if (typeof payload.body !== 'string' || !payload.body.trim() || payload.body.includes('\0')) throw fail('INVALID_PAYLOAD');
-  const segments = payload.body.split('\n=== POST ===\n').map(s => s.trim()).filter(s => s.length > 0);
+  const instagram = payload.platform === 'instagram';
+  if (typeof payload.body !== 'string' || (!instagram && !payload.body.trim()) || payload.body.includes('\0')) throw fail('INVALID_PAYLOAD');
+  const parts = payload.body.split('\n=== POST ===\n').map(s => s.trim());
+  const segments = instagram ? parts : parts.filter(s => s.length > 0);
   if (!segments.length || (payload.format === 'single' && segments.length !== 1)) throw fail('INVALID_PAYLOAD');
   if (!Array.isArray(payload.media) || payload.media.some(m =>
     !exactKeys(m, ['path', 'alt']) || !validString(m.path, 4096) || !isAbsolute(m.path) ||
-    typeof m.alt !== 'string' || m.alt.includes('\0') || (payload.platform === 'bluesky' && !m.alt.trim()))) throw fail('INVALID_PAYLOAD');
+    typeof m.alt !== 'string' || m.alt.includes('\0') || (['bluesky', 'instagram'].includes(payload.platform) && !m.alt.trim()))) throw fail('INVALID_PAYLOAD');
   if (typeof payload.link !== 'string' || payload.link.length > 2048) throw fail('INVALID_PAYLOAD');
+  if (instagram) {
+    if (payload.format !== 'single' || payload.media.length < 1 || payload.media.length > 20 ||
+        payload.media.some(m => !/\.(jpe?g|png|webp)$/i.test(m.path))) throw fail('INVALID_PAYLOAD');
+    // 로컬 초안 정책이며 Instagram 웹 UI의 실제 계수 단위는 미검증이다.
+    if ([...(segments[0] + (payload.link ? '\n' + payload.link : ''))].length > 2200) throw fail('INVALID_PAYLOAD');
+  }
   if (!['public', 'friends', 'keep'].includes(payload.visibility)) throw fail('INVALID_PAYLOAD');
   if (!validString(payload.identity, 256)) throw fail('INVALID_PAYLOAD');
   return segments;
@@ -1014,6 +1054,7 @@ export function postTimeoutMs(segmentCount) {
 }
 
 export async function post(payload, env = process.env) {
+  if (payload?.platform === 'instagram') throw fail('INSTAGRAM_UNVERIFIED');
   const segments = validatePostPayload(payload);
   if (payload.platform === 'threads') throw fail('THREADS_UNVERIFIED');
   const binding = readBinding(env);

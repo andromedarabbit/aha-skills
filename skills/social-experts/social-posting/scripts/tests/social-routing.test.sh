@@ -15,11 +15,11 @@ import subprocess
 import sys
 
 category, tmp = map(Path, sys.argv[1:])
-platforms = ('x', 'facebook', 'bluesky', 'threads', 'linkedin')
+platforms = ('x', 'facebook', 'bluesky', 'threads', 'linkedin', 'instagram')
 coordinator = (category / 'social-posting/SKILL.md').read_text()
 assert '호출 자체가 이미' not in coordinator, '조회 호출을 게시 의도로 간주함'
 for phrase in ('조회', '초안', 'bootstrap', 'readback', '게시 대상:', 'approved_digests',
-               'THREADS_UNVERIFIED', '시간 미상', '관찰 범위', '중복 실행 방지'):
+               'THREADS_UNVERIFIED', 'INSTAGRAM_UNVERIFIED', '시간 미상', '관찰 범위', '중복 실행 방지'):
     assert phrase in coordinator, f'조정자의 분기·가드 계약 누락: {phrase}'
 for platform in platforms:
     expert = category / f'{platform}-expert'
@@ -29,7 +29,8 @@ for platform in platforms:
     assert '${CLAUDE_SKILL_DIR}/../social-posting/scripts/' in body
     assert f'../{platform}-expert/docs/playbook.md' in coordinator
     assert (expert / 'docs/playbook.md').is_file()
-    assert f'{platform}-expert/docs/playbook.md' in (category / f'social-posting/docs/playbook-{platform}.md').read_text()
+    if platform != 'instagram':
+        assert f'{platform}-expert/docs/playbook.md' in (category / f'social-posting/docs/playbook-{platform}.md').read_text()
     assert (expert / 'scripts/tests/run.sh').is_file()
     # 하네스가 치환하는 실제 경로를 같은 카테고리에서 해결한다.
     for tail in re.findall(r'\$\{CLAUDE_SKILL_DIR\}(/[A-Za-z0-9._/+-]+)', body):
@@ -45,7 +46,7 @@ hooks = json.loads((category / 'hooks/hooks.json').read_text())
 commands = [hook['command'] for event in hooks['hooks'].values() for matcher in event for hook in matcher['hooks']]
 assert sum('/social-posting/scripts/record-approval.sh' in c for c in commands) == 1
 
-# 제외된 스킬은 열지 않고 허용된 여섯 디렉터리만 설치 형태로 복사한다.
+# 제외된 스킬은 열지 않고 허용된 일곱 디렉터리만 설치 형태로 복사한다.
 installed = tmp / 'plugin with spaces'
 installed.mkdir()
 for name in ('social-posting', *(f'{p}-expert' for p in platforms)):
@@ -62,7 +63,7 @@ for platform in platforms:
     assert broken.returncode != 0, f'깨진 공유 경로를 놓침: {platform}'
     skill.write_text(original)
 gate = '`approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치'
-for platform in ('x', 'facebook', 'bluesky', 'linkedin'):
+for platform in ('x', 'facebook', 'bluesky', 'linkedin', 'instagram'):
     skill = installed / f'{platform}-expert/SKILL.md'
     original = skill.read_text()
     assert gate in original, f'전문가 Ready 판정식 누락: {platform}'

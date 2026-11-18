@@ -56,10 +56,12 @@ LIMITS = {
     "facebook": {"unit": "codepoint", "max": 63206, "media_max": None},
     # 웹 UI 카운터 실측 전에는 참고 codepoint만 제공한다. 실제 post는 별도로 차단한다.
     "threads": {"unit": "codepoint", "max": None, "media_max": None},
+    # 캡션 2200 codepoint는 로컬 초안 정책이며 웹 UI의 실제 계수 단위는 미검증이다.
+    "instagram": {"unit": "codepoint", "max": 2200, "media_max": 20},
 }
 THREAD_SUPPORTED = {"x", "bluesky", "threads"}  # 답글 체인이 네이티브인 플랫폼만 스레드 지원
 THREAD_MAX = {"x": 25}  # X 스레드 게시물 상한. bluesky는 근거 없는 상한을 두지 않는다
-ALT_REQUIRED = {"bluesky"}  # 이미지 alt text 필수 플랫폼
+ALT_REQUIRED = {"bluesky", "instagram"}  # 이미지 alt text 필수 플랫폼
 HASHTAG_MAX = {"bluesky": 1}
 URL_WEIGHT = 23  # X: URL은 길이와 무관하게 23 (transformedURLLength)
 DUP_WINDOW = 10  # 플랫폼 간 문형 중복 경고 임계값 (정규화 글자 수)
@@ -138,6 +140,8 @@ def parse_draft(path: str):
         raw = f.read()
     meta, body = _split_raw(raw)
     posts = [p.strip("\n") for p in body.split(f"\n{THREAD_SEP}\n")]
+    if meta.get("platform") == "instagram":
+        return meta, posts
     posts = [p for p in posts if p.strip()]
     return meta, posts
 
@@ -278,6 +282,17 @@ def check_platform(platform: str, draft_path: str) -> dict:
     if platform == "threads":
         result["lengthVerified"] = False
         result["warnings"] = ["Threads 웹 UI 길이 단위 미검증 — codepoint는 참고값이며 실제 게시는 차단됩니다"]
+    if platform == "instagram":
+        result["lengthVerified"] = False
+        result["warnings"] = ["Instagram 2200 codepoint는 로컬 캡션 정책입니다 — 웹 UI 계수 단위 미검증이며 실제 게시는 차단됩니다"]
+        if not media:
+            result["violations"].append("Instagram 사진 피드는 사진 1~20장이 필요합니다")
+        for item in media:
+            path = item.get("path")
+            if not isinstance(path, str) or os.path.splitext(path)[1].lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                result["violations"].append("Instagram 초안은 JPEG·PNG·WebP 사진 경로만 지원합니다 — 영상·GIF는 지원하지 않습니다")
+            if not isinstance(item.get("alt"), str):
+                result["violations"].append("Instagram 사진 alt는 문자열이어야 합니다")
 
     link = str(meta.get("link") or "")
     for i, post in enumerate(posts, 1):

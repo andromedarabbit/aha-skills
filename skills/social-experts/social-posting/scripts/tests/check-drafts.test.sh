@@ -392,4 +392,55 @@ with tempfile.TemporaryDirectory(dir=sandbox) as snapshot:
 print("scan snapshot: 정상 1건·복사 경합 거부 6건 통과")
 PY
 
+# Instagram은 하나의 사진 피드만 준비하며 웹 계수 검증과 로컬 정책을 구분한다.
+uv run -q --with grapheme --with pyyaml python -I - "$CHECK" "$sandbox" <<'PY'
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import yaml
+
+checker = runpy.run_path(sys.argv[1])
+job = Path(sys.argv[2], "job-instagram")
+(job / "drafts").mkdir(parents=True)
+photo = {"path": "./photo.png", "alt": "사진 설명"}
+draft = job / "drafts/instagram.md"
+
+def check(body="", media=None, **meta):
+    metadata = {"platform": "instagram", "format": "single", "media": [photo] if media is None else media, **meta}
+    draft.write_text("---\n" + yaml.safe_dump(metadata, allow_unicode=True) + "---\n" + body, encoding="utf-8")
+    return checker["check_platform"]("instagram", str(draft))
+
+for size in (1, 20):
+    result = check(media=[photo] * size)
+    assert result["ok"] and result["counts"] == [0], result
+    assert result["lengthVerified"] is False and result["warnings"], result
+    assert checker["parse_draft"](str(draft))[1] == [""]
+    payload = checker["payload_for"]("instagram", str(job))
+    assert payload["body"] == "" and len(payload["media"]) == size
+    assert payload["media"][0] == {"path": str(job / "photo.png"), "alt": "사진 설명"}
+    cli = subprocess.run([sys.executable, sys.argv[1], str(job), "--platform", "instagram"], capture_output=True, text=True)
+    assert cli.returncode == 0, cli.stderr
+for path in ("./photo.jpg", "./photo.JPEG", "./photo.webp"):
+    assert check(media=[{**photo, "path": path}])["ok"]
+for media in ([], [photo] * 21, [{**photo, "path": "./movie.mp4"}], [{**photo, "path": "./animated.gif"}], [{**photo, "path": ""}], [{**photo, "alt": " "}], [{**photo, "alt": 12}], [{**photo, "alt": None}]):
+    assert not check(media=media)["ok"], media
+assert not check(format="thread")["ok"]
+for body in ("a\n=== POST ===\nb", "\n=== POST ===\n"):
+    assert not check(body)["ok"], body
+for body in ("가" * 2200, "😊" * 2200, "é" * 1100, "a\nb" + "x" * 2197):
+    result = check(body)
+    assert result["ok"] and result["counts"] == [2200], result
+    assert not check(body + "x")["ok"]
+link = "https://example.com"
+body = "x" * (2200 - 1 - len(link))
+assert check(body, link=link)["ok"]
+assert not check(body + "x", link=link)["ok"]
+# 다른 플랫폼의 빈 본문 파싱·직접 게시 제한을 완화하지 않는다.
+x = job / "drafts/x.md"
+x.write_text("---\nplatform: x\nformat: single\n---\n", encoding="utf-8")
+assert checker["parse_draft"](str(x))[1] == []
+print("Instagram 초안: 사진 수·형식·alt·빈 캡션·codepoint·링크 경계 통과")
+PY
+
 echo "✅ check-drafts.test.sh 통과"

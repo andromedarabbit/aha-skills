@@ -35,7 +35,9 @@
 
 **Heuristic 수치를 차단 규칙으로 쓰지 않는 이유**: "Facebook은 80자 이하가 66% 더 좋다", "LinkedIn 본문 링크는 도달률을 40~60% 줄인다" 같은 수치는 오래되었거나 출처가 불분명하다. 이런 규칙이 하드가 되면 정당한 게시가 막히고, 신뢰도도 떨어진다. 힌트에는 항상 날짜와 근거를 붙여 스테일 관리한다.
 
-플랫폼별 규칙 목록은 `playbook-{x,linkedin,facebook,bluesky}.md` — 각 플레이북의 Hard 표는 check-drafts.py의 `LIMITS` 상수와 1:1로 대응한다. 한쪽을 바꾸면 반드시 같이 바꾼다.
+플랫폼별 규칙은 각 전문가의 `docs/playbook.md`가 소유한다. 기존 `playbook-{x,linkedin,facebook,bluesky,threads}.md`는 호환 안내이며 Instagram은 `../../instagram-expert/docs/playbook.md`를 읽는다. Hard 표와 check-drafts.py의 `LIMITS`를 함께 갱신한다. Instagram의 캡션 2,200 codepoint는 로컬 초안 정책이고 공식 웹 계수 단위는 미검증이다. 사진 1~20장·각 alt·공통 캡션의 단일 피드만 준비하며 영상·텍스트 단독·자동 분할은 지원하지 않는다. 사진 순서·권리·잘림 의도를 확인하고 원본 비율을 재현할 수 없으면 발행 전 중단한다.
+
+Instagram은 기본 scan 대상에 추가하지 않는다. 두 공개 쓰기 경로는 `INSTAGRAM_UNVERIFIED`를 유지하며 게시 승인 허용 목록에 넣지 않는다. 혼합 요청에서 다른 플랫폼만 진행할지는 사용자에게 확인한다. 내부 게시·read-back의 합성 fixture는 실환경 DOM·첨부·게시 성공의 근거가 아니며, 검증용 코드 변경과 일반 차단 해제도 별도 승인이다.
 
 ## 검증 계층 (forensic → strict → optional style)
 

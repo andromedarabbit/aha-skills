@@ -1,6 +1,6 @@
 # social-posting
 
-선택한 플랫폼 그룹의 조회·비교·초안·승인·게시를 조정하는 스킬. 단일 플랫폼은 `x-expert`·`facebook-expert`·`bluesky-expert`·`threads-expert`·`linkedin-expert`로 직접 요청할 수 있다. 모든 진입점은 같은 ego 실행층과 승인 가드를 공유한다.
+선택한 플랫폼 그룹의 조회·비교·초안·승인·게시를 조정하는 스킬. 단일 플랫폼은 `x-expert`·`facebook-expert`·`bluesky-expert`·`threads-expert`·`linkedin-expert`·`instagram-expert`로 직접 요청할 수 있다. 모든 진입점은 같은 ego 실행층과 승인 가드를 공유한다.
 
 ## 빠른 시작
 
@@ -45,6 +45,12 @@ Bluesky도 정상 UI가 받은 피드 응답의 `record.createdAt`을 같은 게
 수동 실행은 후보·대상·사진을 선택한 뒤 초안을 준비한다. scan 후보는 게시 직전 AskUserQuestion으로 유사 글과 실제 대상을 확인하고 별도의 `게시 승인`을 받는다. Orca는 주기·기간·후보 큐·알림·중복 실행 방지만 관리한다. `assets/orca-scan-prompt.md`가 읽기 전용 전달 프롬프트이며 실제 등록은 별도 승인 대상이다. 무인 실행은 setup·초안 확정·승인·게시·재시도를 하지 않는다.
 
 사진은 접근 가능한 글에서 선택해 재업로드한다. 타인 글의 접근 가능성과 재게시 권리는 구분한다. 사진 상한을 넘으면 관찰 ID·URL·alt를 보고 사용자가 선택한다. scan 사진 파일과 출처 기록은 hash로 검증하며, 실행 전 승인된 바이트의 임시 사본을 만들어 사본만 업로드 경로에 전달한다. 일반 non-scan 로컬 파일에는 이 동결 보장이 없으므로 승인 뒤 파일을 바꾸지 않는다. 사본은 실행 종료 시 정리한다. 반환한 `provenanceSha256`도 초안의 `provenance_sha256`에 기록해 승인에 묶는다. 구계약 scan 초안은 사진 재준비·재승인이 필요하다. MIME·signature·수신 후 10 MiB 검사 통과는 전체 이미지 디코딩·수신 중 상한·실제 업로드 성공을 뜻하지 않는다.
+
+## Instagram 사진 피드
+
+Instagram은 명시적으로 고른 경우에만 조회·비교·보이스 수집·초안·read-back을 처리한다. 기본 scan 네 플랫폼은 바뀌지 않는다. 사진 1~20장과 공통 캡션을 한 피드로 준비하며 빈 캡션은 허용한다. 캡션 2,200 Unicode codepoint는 로컬 정책이고 실제 웹 계수 단위는 미확인이다. 사진 순서·각 alt·원본 출처와 재게시 권리·공통 방향/잘림 의도를 확인한다. 사진이 없으면 제공 또는 대상 제외를 묻는다. 사진을 자동 절삭·분할·생성하지 않고 영상·릴스·스토리·DM·댓글 체인은 다루지 않는다.
+
+게시 프로토콜 코드는 포함하지만 실제 Instagram DOM·첨부·업로드·게시는 미검증이다. `publish.sh`와 직접 `ego-post.mjs post` 모두 `INSTAGRAM_UNVERIFIED`로 차단한다. 최종 게시 승인에 Instagram을 넣지 않으며 혼합 요청에서 다른 대상만 진행할지는 먼저 확인한다. 실환경 검증, 검증용 차단 코드 변경, 일반 차단 해제는 별도 승인 대상이다. 캡션 일치와 사진 구성 확인은 구분해 보고한다. 자세한 규칙은 `../instagram-expert/docs/playbook.md`를 따른다.
 
 ## 보이스 프로필 부트스트랩
 

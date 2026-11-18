@@ -298,7 +298,10 @@ function fakeRuntime(scenario, logPath) {
       if (!input) throw Error('missing input');
       input.value = value;
     },
-    async setInputFiles() {},
+    async setInputFiles(selector, paths) {
+      log.uploads ??= [];
+      log.uploads.push({ selector, paths }); persist();
+    },
     async snapshot() { return '게시 본문 unrelated reply'; },
     mouse: { async move() {}, async wheel() { responseRound++; enqueueResponses(); } },
   };
@@ -985,6 +988,7 @@ test('답글 이동의 ego 네이티브 오류도 첫 글의 게시 수를 보�
 test('여러 이미지의 alt를 각각 적용한다', () => {
   const r = run({ images: 2 }, 'post', { media: [{ path: '/tmp/a.png', alt: '첫 이미지' }, { path: '/tmp/b.png', alt: '둘째 이미지' }] });
   assert.equal(r.output.status, 'POSTED'); assert.deepEqual(r.log.alts, ['첫 이미지', '둘째 이미지']);
+  assert.deepEqual(r.log.uploads, [{ selector: 'input[type="file"]', paths: ['/tmp/a.png', '/tmp/b.png'] }]);
 });
 test('alt 재확인 불일치는 게시 전에 차단한다', () => {
   const r = run({ altReadMismatch: true }, 'post', { media: [{ path: '/tmp/a.png', alt: '설명' }] });
