@@ -21,7 +21,9 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
-import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, mkdtempSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { materializeFetchedMedia } from './materialize-media.mjs';
 import * as xUI from './platforms/x.mjs';
@@ -496,6 +498,7 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
       if (/\/(login|authwall|checkpoint)/.test(u.pathname)) stop('EGO_NEEDS_LOGIN');
     };
     await ui.verifyPostIdentity(page, expectedIdentity, stop, loginCheck, sleep);
+    if (platform === 'instagram' && visibility === 'public') await ui.verifyPublicAccount(page, expectedIdentity, stop, sleep);
 
 
     // ── 미디어 첨부 (게시 클릭 전 fail-closed: 첨부 프리뷰가 보여야 진행) ──
@@ -614,14 +617,14 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
         const afterMedia = await page.evaluate(selector => document.querySelector(selector)?.innerText ?? null, cfg.composerSelector);
         if (typeof afterMedia !== 'string' || afterMedia.replace(/\r\n/g, '\n') !== body) stop('EGO_READBACK_MISMATCH');
       }
-      if (platform === 'instagram') await cfg.verifyBeforeShare(media, body, expectedIdentity, stop);
       // 게시 버튼 1회 클릭 (활성화 대기 포함)
       let postClicked = false;
       const clickDeadline = Date.now() + 15000;
       while (Date.now() < clickDeadline) {
+        if (platform === 'instagram') await cfg.verifyBeforeShare(media, body, expectedIdentity, stop);
         // 평가 요청이 중단되면 click() 도달 여부를 알 수 없으므로 재시도하지 않는다.
         clickUncertain = true;
-        postClicked = await page.evaluate(selector => {
+        postClicked = platform === 'instagram' ? await cfg.clickShare(cfg.postButton, expectedIdentity) : await page.evaluate(selector => {
           const btn = document.querySelector(selector);
           if (!btn) return false;
           const disabled = btn.disabled === true || btn.getAttribute('aria-disabled') === 'true';
@@ -629,6 +632,10 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
           btn.click();
           return true;
         }, cfg.postButton);
+        if (typeof postClicked === 'string') {
+          clickUncertain = false;
+          stop(postClicked === 'account-failed' ? 'EGO_ACCOUNT_MISMATCH' : postClicked === 'readback-failed' ? 'EGO_READBACK_MISMATCH' : 'EGO_VISIBILITY_FAILED');
+        }
         if (postClicked) break;
         clickUncertain = false;
         await sleep(600);
@@ -673,7 +680,7 @@ async function childPost(spaceName, platform, segments, media, link, visibility,
 
 // ── readback: 퍼마링크로 식별한 게시 노드의 승인 본문을 확인 (Stage 10) ──
 
-async function childReadback(spaceName, urls, bodies) {
+async function childReadback(spaceName, urls, bodies, visibility = null) {
   let task;
   try { task = await taskSpace(spaceName); }
   catch (error) {
@@ -696,7 +703,10 @@ async function childReadback(spaceName, urls, bodies) {
         const observed = await ui.readbackPost(page, url);
         const captionMatched = typeof observed?.text === 'string' && norm(observed.text) === want;
         const items = observed?.media ?? [];
+        const audience = observed?.audience ?? 'unknown';
         results.push({ url, matched: captionMatched && items.length > 0, captionMatched,
+          audience: { requested: visibility, observed: audience,
+            matched: visibility === null || audience === 'unknown' ? null : audience === (visibility === 'private' ? 'close_friends' : 'public') },
           media: { items, complete: observed?.mediaComplete === true, ...(observed?.stopReason ? { stopReason: observed.stopReason } : {}) } });
         continue;
       }
@@ -1025,16 +1035,17 @@ export async function fetchScannedMedia(payload, env = process.env) {
 }
 
 export function validatePostPayload(payload) {
-  if (!exactKeys(payload, ['platform', 'format', 'body', 'media', 'link', 'visibility', 'identity'])) throw fail('INVALID_PAYLOAD');
+  const instagram = payload?.platform === 'instagram';
+  if (!(exactKeys(payload, ['platform', 'format', 'body', 'media', 'link', 'visibility', 'identity']) ||
+      instagram && exactKeys(payload, ['platform', 'format', 'body', 'media', 'link', 'identity']))) throw fail('INVALID_PAYLOAD');
   if (!PLATFORMS.includes(payload.platform)) throw fail('INVALID_PAYLOAD');
   if (!['single', 'thread'].includes(payload.format)) throw fail('INVALID_PAYLOAD');
-  const instagram = payload.platform === 'instagram';
   if (typeof payload.body !== 'string' || (!instagram && !payload.body.trim()) || payload.body.includes('\0')) throw fail('INVALID_PAYLOAD');
   const parts = payload.body.split('\n=== POST ===\n').map(s => s.trim());
   const segments = instagram ? parts : parts.filter(s => s.length > 0);
   if (!segments.length || (payload.format === 'single' && segments.length !== 1)) throw fail('INVALID_PAYLOAD');
   if (!Array.isArray(payload.media) || payload.media.some(m =>
-    !exactKeys(m, ['path', 'alt']) || !validString(m.path, 4096) || !isAbsolute(m.path) ||
+    !(exactKeys(m, ['path', 'alt']) || instagram && exactKeys(m, ['path', 'alt', 'sha256']) && typeof m.sha256 === 'string' && /^[a-f0-9]{64}$/.test(m.sha256)) || !validString(m.path, 4096) || !isAbsolute(m.path) ||
     typeof m.alt !== 'string' || m.alt.includes('\0') || (['bluesky', 'instagram'].includes(payload.platform) && !m.alt.trim()))) throw fail('INVALID_PAYLOAD');
   if (typeof payload.link !== 'string' || payload.link.length > 2048) throw fail('INVALID_PAYLOAD');
   if (instagram) {
@@ -1043,7 +1054,9 @@ export function validatePostPayload(payload) {
     // 로컬 초안 정책이며 Instagram 웹 UI의 실제 계수 단위는 미검증이다.
     if ([...(segments[0] + (payload.link ? '\n' + payload.link : ''))].length > 2200) throw fail('INVALID_PAYLOAD');
   }
-  if (!['public', 'friends', 'keep'].includes(payload.visibility)) throw fail('INVALID_PAYLOAD');
+  const visibility = instagram && !Object.hasOwn(payload, 'visibility') ? 'private' : payload.visibility;
+  if (!(instagram ? ['private', 'public'] : ['public', 'friends', 'keep']).includes(visibility)) throw fail('INVALID_PAYLOAD');
+  if (instagram && visibility === 'public' && payload.media.some(image => !/^[a-f0-9]{64}$/.test(image.sha256 ?? ''))) throw fail('INVALID_PAYLOAD');
   if (!validString(payload.identity, 256)) throw fail('INVALID_PAYLOAD');
   return segments;
 }
@@ -1053,13 +1066,74 @@ export function postTimeoutMs(segmentCount) {
   return Math.min(MAX_TIMEOUT_MS, Math.max(DEFAULT_TIMEOUT_MS, 60000 * segmentCount + 90000));
 }
 
+function prepareInstagramPost(payload, env, snapshot) {
+  let job = env.SOCIAL_POSTING_JOB;
+  if (!job) {
+    try { job = readFileSync(join(env.TMPDIR || tmpdir(), 'social-posting-current-job'), 'utf8').split('\n')[0]; }
+    catch { throw fail('INSTAGRAM_JOB_REQUIRED'); }
+  }
+  if (!validString(job, 4096) || !isAbsolute(job)) throw fail('INSTAGRAM_JOB_REQUIRED');
+  const statePath = join(job, 'job-state.md');
+  const draftPath = join(job, 'drafts/instagram.md');
+  const state = readFileSync(statePath, 'utf8');
+  const draft = readFileSync(draftPath);
+  const digest = createHash('sha256').update(draft).digest('hex');
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(state)?.[1] ?? '';
+  const platforms = /^platforms:[ \t]*\[([^\]\n]*)\][ \t]*$/m.exec(frontmatter)?.[1].split(',').map(value => value.trim());
+  const accounts = /^accounts:[ \t]*(\{[^\n]*\})[ \t]*$/m.exec(frontmatter)?.[1];
+  const identity = /(?:\{|,)[ \t]*instagram:[ \t]*([^,}\s]+)/.exec(accounts ?? '')?.[1];
+  if (!platforms?.includes('instagram') || identity !== payload.identity) throw fail('EGO_ACCOUNT_MISMATCH');
+  const receiptCheck = () => {
+    if (payload.visibility !== 'public') return;
+    let receipt;
+    try { receipt = JSON.parse(readFileSync(join(job, 'receipt.json'), 'utf8')); }
+    catch { throw fail('INSTAGRAM_APPROVAL_REQUIRED'); }
+    if (receipt.approved_via !== 'posttooluse-hook' || typeof receipt.approved_at !== 'string' ||
+        receipt.approved_digests?.instagram !== digest || receipt.approved_accounts !== accounts) throw fail('INSTAGRAM_APPROVAL_REQUIRED');
+  };
+  receiptCheck();
+  let canonical;
+  try {
+    canonical = JSON.parse(execFileSync('uv', ['run', '--offline', '--script', fileURLToPath(new URL('./check-drafts.py', import.meta.url)), job,
+      '--platform', 'instagram', '--freeze-media', snapshot], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }));
+  } catch { throw fail('INVALID_MEDIA', 'Instagram 초안·사진 동결 검증 실패'); }
+  if (['platform', 'format', 'body', 'link', 'visibility'].some(key => canonical[key] !== payload[key]) ||
+      canonical.media.length !== payload.media.length) throw fail('INVALID_PAYLOAD');
+  for (let index = 0; index < canonical.media.length; index++) {
+    const want = canonical.media[index], supplied = payload.media[index];
+    if (want.alt !== supplied.alt || supplied.sha256 !== undefined && supplied.sha256 !== want.sha256) throw fail('INVALID_MEDIA');
+    let file;
+    try {
+      file = openSync(supplied.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const info = fstatSync(file);
+      if (!info.isFile() || !info.size || createHash('sha256').update(readFileSync(file)).digest('hex') !== want.sha256) throw fail('INVALID_MEDIA');
+    } catch { throw fail('INVALID_MEDIA'); }
+    finally { if (file !== undefined) closeSync(file); }
+  }
+  if (readFileSync(statePath, 'utf8') !== state || !readFileSync(draftPath).equals(draft)) throw fail('INSTAGRAM_JOB_CHANGED');
+  receiptCheck();
+  return { ...canonical, identity };
+}
+
 export async function post(payload, env = process.env) {
-  if (payload?.platform === 'instagram') throw fail('INSTAGRAM_UNVERIFIED');
   const segments = validatePostPayload(payload);
   if (payload.platform === 'threads') throw fail('THREADS_UNVERIFIED');
   const binding = readBinding(env);
   if (!binding) throw fail('EGO_NOT_BOUND');
   if (binding.identity[payload.platform] !== payload.identity) throw fail('EGO_ACCOUNT_MISMATCH');
+  if (payload.platform !== 'instagram') return executePost(payload, segments, binding);
+  const snapshot = mkdtempSync(join(tmpdir(), 'social-posting-instagram-'));
+  try {
+    payload = { visibility: 'private', ...payload };
+    payload = prepareInstagramPost(payload, env, snapshot);
+    const result = await executePost(payload, segments, binding);
+    return { ...result, audience: { requested: payload.visibility,
+      beforeShare: result.status === 'POSTED' ? (payload.visibility === 'private' ? 'close_friends' : 'public') : 'unknown',
+      afterShare: 'unknown', authorization: payload.visibility === 'private' ? 'policy' : 'human_approval' } };
+  } finally { rmSync(snapshot, { recursive: true, force: true }); }
+}
+
+async function executePost(payload, segments, binding) {
   const timeoutMs = postTimeoutMs(segments.length);
   let output;
   try {
@@ -1084,12 +1158,16 @@ export async function post(payload, env = process.env) {
 }
 
 export async function readback(payload, env = process.env) {
-  if (!exactKeys(payload, ['urls', 'bodies']) || !Array.isArray(payload.urls) || !Array.isArray(payload.bodies) ||
+  if (!(exactKeys(payload, ['urls', 'bodies']) || exactKeys(payload, ['urls', 'bodies', 'visibility']) && ['private', 'public'].includes(payload.visibility)) || !Array.isArray(payload.urls) || !Array.isArray(payload.bodies) ||
       payload.urls.some(u => !validString(u, 2048)) || !payload.urls.length || payload.urls.length !== payload.bodies.length ||
       payload.bodies.some(b => typeof b !== 'string')) throw fail('INVALID_PAYLOAD');
+  if (Object.hasOwn(payload, 'visibility') && payload.urls.some(value => {
+    try { const url = new URL(value); return !['https://www.instagram.com', 'https://instagram.com'].includes(url.origin) || !/^\/p\/[A-Za-z0-9_-]+\/?$/.test(url.pathname); }
+    catch { return true; }
+  })) throw fail('INVALID_PAYLOAD');
   const binding = readBinding(env);
   if (!binding) throw fail('EGO_NOT_BOUND');
-  const output = await execute(binding.executable, scriptOf(childReadback, TASK_SPACE_NAME, payload.urls, payload.bodies), MAX_TIMEOUT_MS);
+  const output = await execute(binding.executable, scriptOf(childReadback, TASK_SPACE_NAME, payload.urls, payload.bodies, payload.visibility ?? null), MAX_TIMEOUT_MS);
   if (output.status === 'READBACK_FAILED') throw fail('READBACK_FAILED');
   if (!exactKeys(output, ['status', 'results', 'matched']) || output.status !== 'READBACK_DONE' ||
       !Array.isArray(output.results) || typeof output.matched !== 'boolean') throw fail('EGO_SCHEMA_INVALID');

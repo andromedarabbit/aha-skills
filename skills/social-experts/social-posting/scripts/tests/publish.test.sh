@@ -406,21 +406,93 @@ if bash "$PUBLISH" --job "$job_threads" --platform threads >"$sandbox/threads-re
 grep -q 'THREADS_UNVERIFIED' "$sandbox/threads-result" || fail "Threads 차단 이유를 명시해야 한다"
 [ "$(ego_call_count)" = "$before_calls" ] || fail "Threads는 테스트 심으로도 게시할 수 없어야 한다"
 
-# 과거 영수증·테스트 실행층·dry-run 모두 Instagram 쓰기 차단을 우회하지 못한다.
-job_instagram="$sandbox/job-instagram-blocked"
-make_job "$job_instagram" "instagram" "instagram: me"
-printf -- '---\nplatform: instagram\nformat: single\nmedia:\n  - path: ./photo.png\n    alt: 사진 설명\n---\n' >"$job_instagram/drafts/instagram.md"
-touch "$job_instagram/photo.png"
-approve "$job_instagram" instagram "instagram: me"
-for mode in execute dry-run; do
+# Instagram private는 추가 사람 승인 없이 동결 사본으로 실행하며 기존 영수증은 건드리지 않는다.
+job_instagram="$sandbox/job-instagram"
+make_job "$job_instagram" "x, instagram" "x: me, instagram: photo-owner"
+printf 'local-photo-bytes' >"$job_instagram/photo.png"
+printf -- '---\nplatform: instagram\nformat: single\nmedia:\n  - path: ./photo.png\n    alt: 사진 설명\n---\n제한 공개 캡션\n' >"$job_instagram/drafts/instagram.md"
+before_calls="$(ego_call_count)"
+bash "$PUBLISH" --job "$job_instagram" --platform instagram >"$sandbox/instagram-result" 2>&1 || fail "범위 생략 private는 사람 승인 없이 실행해야 한다"
+[ "$(ego_call_count)" -eq "$((before_calls + 1))" ] || fail "private는 실행층을 한 번 호출해야 한다"
+[ ! -f "$job_instagram/receipt.json" ] || fail "private 실행은 사람 승인 영수증을 만들면 안 된다"
+[ "$(payload_field '.visibility')" = private ] || fail "범위 생략은 private로 전달해야 한다"
+[ "$(payload_field '.identity')" = photo-owner ] || fail "private도 현재 작업 계정을 전달해야 한다"
+[ "$(payload_field '.media[0].sha256')" = "$(hash_of "$job_instagram/photo.png")" ] || fail "private 사진도 동결 bytes hash를 전달해야 한다"
+[ "$(payload_field '.media[0].path')" != "$job_instagram/photo.png" ] || fail "Instagram 사진은 원본 대신 동결 사본을 전달해야 한다"
+[ ! -e "$(payload_field '.media[0].path')" ] || fail "실행 뒤 동결 사본을 정리해야 한다"
+printf -- '---\nplatform: x\nformat: single\n---\nX 본문\n' >"$job_instagram/drafts/x.md"
+printf '%s' "$selected_json" | SOCIAL_POSTING_JOB="$job_instagram" bash "$SKILL_DIR/scripts/record-approval.sh"
+jq '. + {posted_x:"https://stub.example/x/1",posted_instagram:"https://www.instagram.com/p/old/"}' "$job_instagram/receipt.json" >"$sandbox/ig-receipt"
+mv "$sandbox/ig-receipt" "$job_instagram/receipt.json"
+receipt_before="$(hash_of "$job_instagram/receipt.json")"
+state_before="$(hash_of "$job_instagram/job-state.md")"
+x_before="$(hash_of "$job_instagram/drafts/x.md")"
+out="$(bash "$PUBLISH" --job "$job_instagram" --platform instagram --dry-run)" || fail "X만 승인한 혼합 작업의 private dry-run이 통과해야 한다"
+grep -q '실제 공개 범위 미검증' <<<"$out" || fail "dry-run은 실제 공개 범위 미검증을 명시해야 한다"
+[ "$(hash_of "$job_instagram/receipt.json")" = "$receipt_before" ] || fail "private는 기존 승인·전체 계정·posted 기록을 변경하면 안 된다"
+[ "$(hash_of "$job_instagram/job-state.md")" = "$state_before" ] || fail "private는 혼합 작업 범위를 변경하면 안 된다"
+[ "$(hash_of "$job_instagram/drafts/x.md")" = "$x_before" ] || fail "private는 다른 초안을 변경하면 안 된다"
+
+# private도 대상·계정·하드 제약과 검사 중 변경 검사를 유지한다.
+cp "$job_instagram/drafts/instagram.md" "$sandbox/private-draft"
+for invalid in target account constraints; do
+  case "$invalid" in
+    target) make_job "$job_instagram" x "x: me, instagram: photo-owner" ;;
+    account) make_job "$job_instagram" "x, instagram" "x: me" ;;
+    constraints) printf -- '---\nplatform: instagram\nvisibility: keep\nmedia: []\n---\n본문\n' >"$job_instagram/drafts/instagram.md" ;;
+  esac
   before_calls="$(ego_call_count)"
-  if [[ "$mode" == dry-run ]]; then
-    if bash "$PUBLISH" --job "$job_instagram" --platform instagram --dry-run >"$sandbox/instagram-result" 2>&1; then fail "Instagram dry-run도 검증 전 차단돼야 한다"; fi
-  elif bash "$PUBLISH" --job "$job_instagram" --platform instagram >"$sandbox/instagram-result" 2>&1; then
-    fail "Instagram 쓰기는 검증 전 차단돼야 한다"
-  fi
-  grep -q 'INSTAGRAM_UNVERIFIED' "$sandbox/instagram-result" || fail "Instagram 차단 이유를 명시해야 한다"
-  [ "$(ego_call_count)" = "$before_calls" ] || fail "Instagram은 테스트 실행층에도 도달하면 안 된다"
+  if bash "$PUBLISH" --job "$job_instagram" --platform instagram >"$sandbox/private-invalid" 2>&1; then fail "private도 $invalid 가드를 생략하면 안 된다"; fi
+  [ "$(ego_call_count)" = "$before_calls" ] || fail "private $invalid 위반은 실행 전에 거부해야 한다"
+  make_job "$job_instagram" "x, instagram" "x: me, instagram: photo-owner"
+  cp "$sandbox/private-draft" "$job_instagram/drafts/instagram.md"
 done
+real_uv="$(command -v uv)"
+mkdir -p "$sandbox/race-bin"
+cat >"$sandbox/race-bin/uv" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+"$REAL_UV" "$@"
+case " $* " in
+  *' --freeze-media '*)
+    if [[ "$RACE_KIND" == draft ]]; then
+      printf '\n검사 중 변경\n' >>"$RACE_JOB/drafts/instagram.md"
+    else
+      printf '\n# 검사 중 상태 변경\n' >>"$RACE_JOB/job-state.md"
+    fi
+    ;;
+esac
+EOF
+chmod +x "$sandbox/race-bin/uv"
+for race in draft state; do
+  before_calls="$(ego_call_count)"
+  if PATH="$sandbox/race-bin:$PATH" REAL_UV="$real_uv" RACE_JOB="$job_instagram" RACE_KIND="$race" bash "$PUBLISH" --job "$job_instagram" --platform instagram >"$sandbox/private-race" 2>&1; then fail "private도 검사 중 $race 변경을 거부해야 한다"; fi
+  grep -q '변경됐습니다' "$sandbox/private-race" || fail "private 변경은 digest 재대조에서 거부해야 한다"
+  [ "$(ego_call_count)" = "$before_calls" ] || fail "검사 중 $race 변경 뒤 실행층을 호출하면 안 된다"
+  make_job "$job_instagram" "x, instagram" "x: me, instagram: photo-owner"
+  cp "$sandbox/private-draft" "$job_instagram/drafts/instagram.md"
+done
+
+# public은 실제 훅 영수증·전체 계정 snapshot·초안과 사진 hash가 모두 일치해야 한다.
+photo_digest="$(hash_of "$job_instagram/photo.png")"
+printf -- '---\nplatform: instagram\nformat: single\nvisibility: public\nmedia:\n  - path: ./photo.png\n    alt: 사진 설명\n    sha256: %s\n---\n공개 캡션\n' "$photo_digest" >"$job_instagram/drafts/instagram.md"
+before_calls="$(ego_call_count)"
+if bash "$PUBLISH" --job "$job_instagram" --platform instagram >"$sandbox/instagram-result" 2>&1; then fail "X만 승인한 영수증으로 public을 실행하면 안 된다"; fi
+[ "$(ego_call_count)" = "$before_calls" ] || fail "public 무승인은 실행층 호출 전에 거부해야 한다"
+approve "$job_instagram" instagram "x: me, instagram: photo-owner"
+if bash "$PUBLISH" --job "$job_instagram" --platform instagram >/dev/null 2>&1; then fail "훅 표시가 없는 구 Instagram 영수증은 public 권한이 아니다"; fi
+question='게시 대상: instagram'
+event="$(jq -nc --arg q "$question" '{tool_name:"AskUserQuestion",tool_input:{questions:[{header:"게시 승인",question:$q}]},tool_response:{answers:{($q):"게시"}}}')"
+printf '%s' "$event" | SOCIAL_POSTING_JOB="$job_instagram" bash "$SKILL_DIR/scripts/record-approval.sh"
+bash "$PUBLISH" --job "$job_instagram" --platform instagram >/dev/null || fail "public은 실제 훅 승인 뒤 실행해야 한다"
+[ "$(payload_field '.visibility')" = public ] || fail "public 요청 범위를 그대로 전달해야 한다"
+make_job "$job_instagram" "x, instagram" "x: changed, instagram: photo-owner"
+if bash "$PUBLISH" --job "$job_instagram" --platform instagram >/dev/null 2>&1; then fail "다른 계정도 전체 승인 snapshot 변경이면 public을 거부해야 한다"; fi
+make_job "$job_instagram" "x, instagram" "x: me, instagram: photo-owner"
+printf 'replacement-photo' >"$job_instagram/photo.png"
+if bash "$PUBLISH" --job "$job_instagram" --platform instagram >/dev/null 2>&1; then fail "승인 뒤 같은 경로의 사진 bytes 교체는 public을 거부해야 한다"; fi
+printf 'local-photo-bytes' >"$job_instagram/photo.png"
+printf '\n변경된 캡션\n' >>"$job_instagram/drafts/instagram.md"
+if bash "$PUBLISH" --job "$job_instagram" --platform instagram >/dev/null 2>&1; then fail "승인 뒤 캡션 변경은 public을 거부해야 한다"; fi
 
 echo "✅ publish.test.sh 통과"

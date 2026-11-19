@@ -72,7 +72,7 @@ media:                    # 선택
     provenance: ./media/<image-sha256>.<provenance-sha256>.provenance.json
     provenance_sha256: <출처 파일의 64자리 소문자 hex>
 link: https://example.com # 선택. 본문에 넣을 링크
-visibility: public        # 선택. facebook 전용 — public | friends | keep(기존 설정 유지·기본)
+visibility: public        # 선택. Facebook: public | friends | keep(기본), Instagram: private(기본) | public
 ---
 
 본문 게시 문구.
@@ -86,12 +86,14 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 
 - frontmatter `platform`은 파일명과 같아야 한다(불일치·파싱 불가 형식은 하드 제약 위반 — fail-closed).
 - 스레드 경계는 **정확히 `=== POST ===` 한 줄**이다 — check-drafts.py가 이 경계로 게시물을 분리해 길이를 각각 검사한다.
-- `visibility`는 선택 키로 **facebook 전용**이다(`public`=공개, `friends`=친구만, `keep`=기존 설정 유지·기본값). Stage 2에서 사용자에게 반드시 묻고 답을 이 키에 기록한다 — publish.sh가 `public`/`friends`일 때 게시 지시에 공개 범위 설정을 포함하고, `keep`이면 지시하지 않는다(계정 기본 설정을 따른다). 하드 제약은 아니다(Convention 등급).
+- `visibility`는 선택 키다. Facebook은 기존대로 `public`=공개, `friends`=친구만, `keep`=기존 설정 유지·기본값을 쓴다. Stage 2에서 사용자에게 반드시 묻고 답을 기록하며 공개 범위는 Convention 등급이다. Instagram은 **키를 생략한 경우만 `private`**로 정규화한다. `private`는 로컬 초안이나 나만 보기가 아니라 기존 친한친구 대상 실게시 요청이고, `public`은 전체 공개 요청이다. 명시적인 `keep`·빈 값·알 수 없는 값은 하드 제약 위반으로 거부하며 계정 기본 설정으로 대신하지 않는다. 다른 플랫폼의 기존 기본값과 동작은 바꾸지 않는다.
 - `format`과 게시물 수는 정합해야 한다: `single`은 게시물 정확히 1개, `thread`는 **2개 이상**(하드 제약 — 어긋나면 fail-closed).
 - `source: scan` 미디어는 `path`·`provenance`가 게시 작업의 `media/` 아래 일반 파일이어야 한다. `sha256`은 이미지 파일, `provenance_sha256`은 출처 파일의 SHA-256이다. 출처의 이미지 hash·bytes·alt도 대조한다. 같은 이미지의 여러 원본 출처는 별도 파일로 보존한다. 승인 뒤 파일·alt·출처 변경은 게시를 거부한다. 실행 전에 사진·출처를 전용 임시 사본으로 복사하고 사본의 승인 digest를 다시 대조한다. 실행 계층은 검증된 사본 경로만 읽으며 실행 종료 시 사본을 정리한다. 동결 뒤 원본이 바뀌어도 승인되지 않은 원본 바이트를 업로드하지 않는다. 구계약 초안은 사진을 다시 준비하고 재승인한다.
 - Instagram은 `format: single` 사진 피드 하나만 준비한다. `media` 배열 순서가 사진 순서이며 JPEG·PNG·WebP 확장자의 사진 경로 1~20개와 각각 비어 있지 않은 문자열 `alt`가 필수다. 이 형식 목록은 로컬 초안 정책이며 실제 파일의 정지 이미지 여부나 웹 업로드 지원을 입증하지 않는다. 텍스트 단독·영상·GIF·릴스·스토리·답글 체인은 지원하지 않고 자동 자르기·분할·변환하지 않는다. `body`는 공통 캡션이며 빈 문자열도 허용한다. 기존 페이로드의 `body`·`media` 배열을 그대로 쓰고 별도 캡션 필드를 만들지 않는다.
+- Instagram `public` 초안은 `source: scan` 여부와 관계없이 각 사진의 현재 바이트와 일치하는 64자리 소문자 hex `sha256`이 필수다. 승인 전에 사진 해시를 초안에 기록해 전체 초안 digest에 결합한다. 게시용 페이로드의 `--freeze-media` 경로는 `private`·`public` 모두 일반 로컬 사진까지 전용 임시 사본으로 동결하고, 사본 경로·사진 순서·alt·사본 바이트의 `sha256`을 전달한다. 사진은 비어 있지 않은 일반 파일이어야 하며 심볼릭 링크·FIFO·디렉터리를 거부한다. 초안에 사진 해시가 있으면 동결 사본과도 일치해야 한다. 동결 뒤 원본 경로나 바이트가 바뀌어도 실행층은 검증된 사본만 읽는다. 다른 플랫폼의 일반 로컬 사진 경로 계약은 유지한다.
 - Instagram 캡션은 본문에 덧붙는 `link`와 줄바꿈까지 합쳐 2,200 Unicode codepoint 이하로 검사한다. 이는 **로컬 초안 정책**이고 실제 웹 UI의 계수 단위는 미검증이다. 검사 결과는 `lengthVerified: false`와 경고를 포함한다. 비율·잘림은 이 검사로 확인하지 않는다.
-- Instagram은 publish와 공개 `post` 모두 브라우저·composer·첨부 전에 `INSTAGRAM_UNVERIFIED`로 차단한다. 과거 영수증·dry-run·테스트 실행층·무인 실행도 우회 경로가 아니며 게시 승인 집합에 포함하지 않는다. 차단 해제는 별도 코드 변경 승인과 실환경 검증·후속 리뷰 뒤의 별도 승인이 필요하다.
+- Instagram은 두 게시 진입점(`publish.sh`·직접 `ego-post.mjs post`)에서 같은 private/public 정책을 적용한다. 명시적 게시 요청 또는 사전에 허용한 게시 작업의 private만 건별 추가 사람 승인을 생략하며, 기존 친한친구 대상이 실제 composer에서 선택·확인되어야 한다. public은 공개 계정·실제 전체 공개 대상과 내용/사진/계정/범위에 결합된 사람 승인 영수증이 필요하다. 실제 대상 불명·불일치·팔로워 공개는 Share 전에 거부하며 계정 설정·친한친구 목록을 변경하거나 public으로 대체하지 않는다. UI 선택자는 합성 fixture만 검증했으며 실환경 지원은 미확인이다. dry-run은 정적 검사이고 실제 대상 확인이나 게시 허가가 아니다.
+- Instagram 게시 결과에는 `audience: {requested, beforeShare, afterShare, authorization}`을 덧붙인다. `requested`는 private/public, 게시가 성립한 `beforeShare`는 close_friends/public이고 성립하지 않은 결과는 unknown이다. `afterShare`는 별도 사후 확인 전 unknown이며 `authorization`은 policy/human_approval로 구분한다. read-back 입력은 기존 `{urls,bodies}`에 Instagram 전용 `visibility`를 선택적으로 받을 수 있다. 결과의 `captionMatched`, `media.complete`, `audience: {requested, observed, matched}`는 별개다. 대상 게시물에 범위 근거가 없으면 observed=unknown·matched=null이며, 명시된 근거가 요청과 다르면 matched=false다. 캡션 일치나 일부 사진 관찰을 전체 사진/alt/공개 범위 확인으로 승격하지 않는다. 사후 범위 불명·불일치는 이미 성립한 POSTED를 실패로 바꾸거나 자동 삭제·재게시·범위 변경할 근거가 아니다.
 - 스레드 초안은 x·bluesky·threads에서 준비할 수 있다. 실제 답글 게시는 X·Bluesky만 지원한다. LinkedIn·Facebook의 `format: thread`는 거부한다. X 스레드는 게시물 25개 이하다. Threads는 길이·사진·답글·read-back 실환경 검증 전까지 `THREADS_UNVERIFIED`로 차단한다.
 - 스레드 게시는 각 세그먼트를 **직전 게시 성공과 URL이 모두 확인된 게시물에 대한 답글로 연결**한다(ego-post 고정 스크립트가 수행). URL 미회수·부분 게시·결과 불명에서는 자동 이어쓰기를 하지 않는다. 흩어진 게시물 N개가 아니라 하나의 답글 체인이어야 하며, 게시 성공은 ego-post의 DOM 증거 판정이다(부분 게시는 `PARTIAL_POSTED`, 클릭 후 결과 불명은 `POST_UNKNOWN`으로 실패 종료하며 둘 다 재시도 금지다. URL 회수 실패는 `POSTED`+`urlRecovered:false`로 성공 종료한다).
 - 본문은 게시 그대로의 문구다. **게시 실행은 페이로드 JSON(body·media 절대경로+alt·link·visibility·identity)으로 전달된다**(publish.sh가 frontmatter를 제거해 조립, ego-post가 소비) — 반면 승인 digest는 **초안 전체 파일**(frontmatter 포함) 기준이라 검증 대상과 게시 대상이 원본 하나로 묶인다. `link` 키가 있으면 ego-post가 첫 세그먼트 끝에 링크를 한 줄 덧붙인다 — 본문에 이미 링크가 있으면 `link` 키를 비워라(중복 방지).
@@ -112,7 +114,7 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 불변식:
 
 - `approved_*` 네 키(digests·accounts·at·via)는 **record-approval.sh 훅만** 기록한다(PostToolUse, matcher: AskUserQuestion, header `게시 승인`·정확한 답변 `게시` 계약). post-state.sh로는 set/unset 불가다.
-- 승인 질문은 `게시 대상: x,bluesky` 형식의 한 줄을 포함한다. 목록은 x·linkedin·facebook·bluesky 중 비어 있지 않은 중복 없는 집합이며 job `platforms`의 부분집합이어야 한다. 쉼표 외 공백이나 미지원 이름·Threads·Instagram·존재하지 않는 초안이 있거나 대상 줄이 없거나 여러 개면 요청 전체를 거부하고 기존 영수증도 바꾸지 않는다. Instagram·X 혼합 작업에서 X만 표시해 승인하면 X digest만 기록하되 Instagram을 포함한 전체 계정 snapshot과 기존 게시 기록은 보존한다.
+- 승인 질문은 `게시 대상: x,bluesky` 형식의 한 줄을 포함한다. 목록은 x·linkedin·facebook·bluesky·public인 instagram 중 비어 있지 않은 중복 없는 집합이며 job `platforms`의 부분집합이어야 한다. 쉼표 외 공백이나 미지원 이름·Threads·private인 Instagram·존재하지 않는 초안이 있거나 대상 줄이 없거나 여러 개면 요청 전체를 거부하고 기존 영수증도 바꾸지 않는다. Instagram public은 승인 전에 사진 바이트와 초안의 sha256도 검사한다. Instagram·X 혼합 작업에서 X만 표시해 승인하면 X digest만 기록하되 Instagram을 포함한 전체 계정 snapshot과 기존 게시 기록은 보존한다. private 실행은 승인 집합을 교체하거나 사람 승인 키를 생성하지 않는다.
 - `approved_digests`는 질문에 표시한 대상의 초안 전체 파일 SHA-256만 담는다. 새 승인은 이전 집합과 병합하지 않고 교체한다. 승인 범위를 좁혀도 기존 job·다른 초안·전체 계정 매핑·`posted_*` 기록은 축소하거나 삭제하지 않는다. 구영수증은 그대로 보존하되 신규 전문가 진입이나 게시 범위 변경은 새 승인을 요구한다.
 - `approved_accounts`는 승인 시점 job-state의 accounts flow-map 라인 원문이다 — 승인은 **초안 전체 파일 digest + 계정 매핑**을 함께 묶고, publish.sh가 두 값 모두 현재 상태와 대조한다(계정 재타깃 차단).
 - `posted_<platform>`는 게시 성공 후 에이전트가 `post-state.sh set posted_x <url>`로 기록한다. 실패한 게시는 기록하지 않는다.
@@ -120,15 +122,19 @@ visibility: public        # 선택. facebook 전용 — public | friends | keep(
 
 ## 5. Ready 판정식 (게이트 판정 가능 형태)
 
-publish.sh가 게시 직전에 기계적으로 판정한다.
+사람 승인이 필요한 public과 기존 플랫폼은 publish.sh가 게시 직전에 기계적으로 판정한다.
 
 > **Ready 판정식: `approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치**
+
+Instagram private 판정식: 명시적 게시 요청 또는 사전에 허용한 게시 작업이고, 현재 초안·사진·계정이 검증되며 Share 직전 실제 친한친구 대상이 확인됨
+
+private는 이 정책 허용으로 분기하며 사람 승인 Ready로 기록하지 않는다. 대상·계정·하드 제약·초안/사진 동결·실행 직전 변경 검사는 유지한다. 직접 post도 현재 작업(기존 `SOCIAL_POSTING_JOB` 또는 활성 포인터)의 초안·계정과 실제 전달한 본문/링크/공개 범위·사진 hash/순서/alt/바이트를 대조한다. public은 같은 작업의 훅 영수증과 전체 계정 snapshot도 재검증한다. 호출자가 넣은 `approved`·`verified` 표식은 승인 근거가 아니다. 실행할 사진은 이 검사를 통과한 새 동결 사본으로 고정한다.
 
 하드 제약 통과 여부는 별도로 publish.sh가 check-drafts.py의 `--platform`으로 **현재 게시할 대상만** 재실행해 확인한다(이중 검사). 무관한 플랫폼의 미완성 초안은 이 게시를 막지 않는다. 전체 초안 비교·문형 경고는 검토 단계에서 별도로 제공한다. 승인 후 초안이 바뀌면 digest가 어긋나 게시가 거부된다 — 이때는 Stage 8 승인부터 다시 받는다. 이 판정식은 SKILL.md와 docs/REFERENCE.md에서 **동일 문구로** 참조해야 한다 — 문구가 어느 한쪽에서 달라지면 게이트 판정이 갈린다.
 
 ## 6. 재개·이동 탐지
 
-- 대화 압축 후 재개: `post-state.sh get`으로 승인 여부를 복구한다. **이전 승인을 가정하지 않는다** — 영수증이 비어 있으면 Stage 8부터 다시.
+- 대화 압축 후 재개: `post-state.sh get`으로 승인 여부를 복구한다. **이전 승인을 가정하지 않는다** — 사람 승인이 필요한 경로에서 영수증이 비어 있으면 Stage 8부터 다시 진행한다. Instagram private도 게시 의도·현재 대상·계정·초안·사진을 복구하고 실제 친한친구 범위를 새로 확인한다. 조회·초안 작업이나 기존 scan 전용 자동화에 게시 권한을 소급하지 않는다.
 - 작업 루트 이동: job-state.md frontmatter `root`와 실제 경로가 다르면 사용자에게 확인하고 `root`를 갱신한다.
 
 ## 7. 최근 글 관찰 산출물

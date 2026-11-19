@@ -14,4 +14,4 @@
 
 조회 기준 시각·timezone·since/until, 플랫폼별 바인딩·coverage·중단 이유를 적는다. 후보별 원본 플랫폼·ID·URL·실제 게시자·시각·사진 관찰 ID와 alt·대상 플랫폼의 비교 근거를 적는다. 시간 미상과 불완전 수집을 별도로 표시한다.
 
-다음 수동 세션이 이어받을 작업 루트·scan 디렉터리·manifest 경로·digest·후보 ID를 남긴다. 수동 세션에서 후보·계정·사진·alt·권리를 확인하고 초안을 준비한 뒤, 유사 후보 확인과 별도의 `게시 승인`을 받아야 한다. Threads·Instagram 게시는 실환경 검증 전 각각 `THREADS_UNVERIFIED`·`INSTAGRAM_UNVERIFIED`로 차단 상태임을 적는다. Instagram은 최종 게시 승인 집합에도 넣지 않으며 다른 대상만 진행할지는 수동 세션에서 확인한다.
+다음 수동 세션이 이어받을 작업 루트·scan 디렉터리·manifest 경로·digest·후보 ID를 남긴다. 수동 세션에서 후보·계정·사진·alt·권리를 확인하고 초안을 준비한다. 이 scan 전용 작업에는 게시 권한이 없으며 Instagram 기본값이 private여도 게시하지 않는다. 별도로 게시를 요청하거나 사전에 허용한 게시 작업에서만 Instagram private를 기존 친한친구 대상으로 확인한 뒤 추가 사람 승인 없이 발행할 수 있다. public과 다른 플랫폼은 유사 후보 확인과 별도의 `게시 승인`이 필요하다. Threads 게시는 `THREADS_UNVERIFIED`로 계속 차단된다. Instagram 웹의 실제 대상 선택 지원은 미확인이며, 친한친구 대상이 없거나 불명·불일치하면 중단하고 public이나 팔로워 공개로 대체하지 않는다.

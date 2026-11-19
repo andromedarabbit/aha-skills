@@ -394,10 +394,14 @@ PY
 
 # Instagram은 하나의 사진 피드만 준비하며 웹 계수 검증과 로컬 정책을 구분한다.
 uv run -q --with grapheme --with pyyaml python -I - "$CHECK" "$sandbox" <<'PY'
+import hashlib
+import os
 from pathlib import Path
 import runpy
 import subprocess
 import sys
+import tempfile
+from unittest.mock import patch
 import yaml
 
 checker = runpy.run_path(sys.argv[1])
@@ -418,6 +422,7 @@ for size in (1, 20):
     assert checker["parse_draft"](str(draft))[1] == [""]
     payload = checker["payload_for"]("instagram", str(job))
     assert payload["body"] == "" and len(payload["media"]) == size
+    assert payload["visibility"] == "private"
     assert payload["media"][0] == {"path": str(job / "photo.png"), "alt": "사진 설명"}
     cli = subprocess.run([sys.executable, sys.argv[1], str(job), "--platform", "instagram"], capture_output=True, text=True)
     assert cli.returncode == 0, cli.stderr
@@ -436,11 +441,130 @@ link = "https://example.com"
 body = "x" * (2200 - 1 - len(link))
 assert check(body, link=link)["ok"]
 assert not check(body + "x", link=link)["ok"]
+for visibility in ("keep", "friends", "PUBLIC", "", None, False, ["private"]):
+    assert not check(visibility=visibility)["ok"], visibility
+assert check(visibility="private")["ok"]
+assert not check(visibility="public")["ok"]
+image = job / "photo.png"
+image.write_bytes(b"original-photo")
+digest = hashlib.sha256(image.read_bytes()).hexdigest()
+public_photo = {**photo, "sha256": digest}
+assert check(visibility="public", media=[public_photo])["ok"]
+with tempfile.TemporaryDirectory(dir=job) as snapshot:
+    payload = checker["payload_for"]("instagram", str(job), snapshot)
+    frozen = Path(payload["media"][0]["path"])
+    assert frozen != image and frozen.read_bytes() == b"original-photo"
+    assert payload["visibility"] == "public"
+    assert payload["media"][0]["sha256"] == digest
+    assert frozen.stat().st_mode & 0o222 == 0
+image.write_bytes(b"replaced-photo")
+assert not checker["check_platform"]("instagram", str(draft))["ok"]
+assert check(visibility="private")["ok"]
+with tempfile.TemporaryDirectory(dir=job) as snapshot:
+    payload = checker["payload_for"]("instagram", str(job), snapshot)
+    assert Path(payload["media"][0]["path"]) != image
+    assert payload["media"][0]["sha256"] == hashlib.sha256(image.read_bytes()).hexdigest()
+# public 검사와 동결 모두 잘못된 해시·심볼릭 링크·비일반파일을 거부한다.
+original_bytes = b"original-photo"
+copyfileobj = checker["shutil"].copyfileobj
+open_file = os.open
+for invalid_digest in (None, "", "A" * 64, "0" * 63, 123, "0" * 64):
+    item = {**photo, "sha256": invalid_digest}
+    assert not check(visibility="public", media=[item])["ok"], invalid_digest
+
+for replacement in ("bytes", "symlink", "fifo", "directory", "empty"):
+    image.write_bytes(original_bytes)
+    assert check(visibility="public", media=[public_photo])["ok"]
+    changed = False
+
+    def open_with_race(path, flags, *args, **kwargs):
+        global changed
+        if str(path) == str(image) and not changed:
+            changed = True
+            image.unlink()
+            if replacement == "symlink":
+                image.symlink_to(job / "other.png")
+            elif replacement == "fifo":
+                os.mkfifo(image)
+            elif replacement == "directory":
+                image.mkdir()
+            else:
+                image.write_bytes(b"replaced-photo" if replacement == "bytes" else b"")
+        return open_file(path, flags, *args, **kwargs)
+
+    (job / "other.png").write_bytes(original_bytes)
+    with tempfile.TemporaryDirectory(dir=job) as snapshot:
+        with patch.object(os, "open", open_with_race):
+            try:
+                checker["payload_for"]("instagram", str(job), snapshot)
+            except (checker["DraftFormatError"], OSError):
+                pass
+            else:
+                raise AssertionError(f"Instagram 동결 직전 {replacement} 교체를 거부해야 한다")
+    assert changed
+    assert not checker["check_platform"]("instagram", str(draft))["ok"], replacement
+    if replacement == "directory":
+        image.rmdir()
+    else:
+        image.unlink()
+
+# 파일을 연 뒤 복사 중 바뀐 bytes도 public 해시와 대조한다.
+for visibility, replacement_bytes in (("public", b"changed-during-copy"), ("private", b"")):
+    image.write_bytes(original_bytes)
+    item = public_photo if visibility == "public" else photo
+    assert check(visibility=visibility, media=[item])["ok"]
+
+    def copy_with_race(src, dst):
+        image.write_bytes(replacement_bytes)
+        return copyfileobj(src, dst)
+
+    with tempfile.TemporaryDirectory(dir=job) as snapshot:
+        with patch.object(checker["shutil"], "copyfileobj", copy_with_race):
+            try:
+                checker["payload_for"]("instagram", str(job), snapshot)
+            except (checker["DraftFormatError"], OSError):
+                pass
+            else:
+                raise AssertionError(f"Instagram {visibility} 복사 중 변경을 거부해야 한다")
+
+# private도 순서·alt·현재 bytes의 해시를 동결하며 이후 원본 교체는 사본에 영향이 없다.
+image.write_bytes(original_bytes)
+second = job / "second.webp"
+second.write_bytes(b"second-photo")
+assert check(media=[photo, {"path": "./second.webp", "alt": "두 번째 설명"}])["ok"]
+with tempfile.TemporaryDirectory(dir=job) as snapshot:
+    payload = checker["payload_for"]("instagram", str(job), snapshot)
+    image.write_bytes(b"later-replacement")
+    second.unlink()
+    image.unlink()
+    image.symlink_to(second)
+    assert payload["visibility"] == "private"
+    for item, expected_bytes, expected_alt in zip(payload["media"], (original_bytes, b"second-photo"), ("사진 설명", "두 번째 설명"), strict=True):
+        frozen = Path(item["path"])
+        assert frozen.parent == Path(snapshot, "media")
+        assert frozen.read_bytes() == expected_bytes and item["alt"] == expected_alt
+        assert item["sha256"] == hashlib.sha256(expected_bytes).hexdigest()
+        assert frozen.stat().st_mode & 0o222 == 0
+
+# 기존 플랫폼의 생략값 keep·명시 범위와 로컬 미디어 경로는 바꾸지 않는다.
+for platform in ("x", "bluesky", "linkedin", "facebook", "threads"):
+    other_draft = job / "drafts" / f"{platform}.md"
+    for visibility in (None, "keep", "public", "friends"):
+        metadata = {"platform": platform, "media": [photo]}
+        if visibility is not None:
+            metadata["visibility"] = visibility
+        other_draft.write_text("---\n" + yaml.safe_dump(metadata, allow_unicode=True) + "---\n본문", encoding="utf-8")
+        assert checker["check_platform"](platform, str(other_draft))["ok"]
+        with tempfile.TemporaryDirectory(dir=job) as snapshot:
+            payload = checker["payload_for"](platform, str(job), snapshot)
+        assert payload["visibility"] == (visibility or "keep")
+        assert payload["media"] == [{"path": str(image), "alt": photo["alt"]}]
+
 # 다른 플랫폼의 빈 본문 파싱·직접 게시 제한을 완화하지 않는다.
 x = job / "drafts/x.md"
 x.write_text("---\nplatform: x\nformat: single\n---\n", encoding="utf-8")
 assert checker["parse_draft"](str(x))[1] == []
-print("Instagram 초안: 사진 수·형식·alt·빈 캡션·codepoint·링크 경계 통과")
+print("Instagram 초안: 범위·사진 해시·동결 경합·순서·alt·캡션 경계·기존 플랫폼 호환 통과")
 PY
 
 echo "✅ check-drafts.test.sh 통과"

@@ -1,4 +1,4 @@
-// shortcut: Instagram DOM은 합성 fixture만 확인했다. 실환경 검증·리뷰 후 선택자를 교정하며 공개 쓰기 차단은 유지한다.
+// shortcut: Instagram DOM은 합성 fixture만 확인했다. 실제 웹 UI에서 대상 근거가 없으면 중단하며 실환경 검증 뒤 선택자를 교정한다.
 
 export const profileUrl = id => 'https://www.instagram.com/' + encodeURIComponent(id) + '/';
 export const ownProfileSelector = 'nav a:has(svg[aria-label="Profile"]), nav a:has(svg[aria-label="프로필"]), nav a:has(img[alt$="profile picture"]), [role="navigation"] a:has(svg[aria-label="Profile"]), [role="navigation"] a:has(img[alt$="profile picture"])';
@@ -37,6 +37,72 @@ export async function verifyPostIdentity(page, expectedIdentity, stop, loginChec
   if (!match || /^(accounts|explore|direct|reels|stories|p|create|about|legal|web|challenge)$/i.test(match[1])) stop('EGO_IDENTITY_NOT_FOUND');
   if (expectedIdentity !== null && match[1] !== expectedIdentity) stop('EGO_ACCOUNT_MISMATCH');
   return match[1];
+}
+
+export async function verifyPublicAccount(page, identity, stop, sleep) {
+  await page.goto('https://www.instagram.com/accounts/account_privacy/', { timeout: 45000 });
+  await sleep(800);
+  const url = new URL(await page.url());
+  if (url.origin !== 'https://www.instagram.com' || url.pathname !== '/accounts/account_privacy/') stop('EGO_VISIBILITY_FAILED');
+  const href = await ownProfileHref(page, 'instagram');
+  if (href?.replace(/^\/|\/$/g, '') !== identity) stop('EGO_ACCOUNT_MISMATCH');
+  const publicAccount = await page.evaluate(() => {
+    const controls = [...document.querySelectorAll('[aria-label="Private account"], [aria-label="비공개 계정"]')]
+      .filter(node => node.getClientRects().length);
+    if (controls.length !== 1) return false;
+    const control = controls[0];
+    return control.checked === undefined ? control.getAttribute('aria-checked') === 'false' : control.checked === false && control.getAttribute('aria-checked') !== 'true';
+  });
+  if (!publicAccount) stop('EGO_VISIBILITY_FAILED');
+  await PLATFORM_UI.instagram.verifyPostIdentity(page, identity, stop, async () => {}, sleep);
+}
+
+export async function setVisibility(page, visibility, stop, sleep) {
+  if (!['private', 'public'].includes(visibility)) stop('EGO_VISIBILITY_FAILED');
+  const selected = await page.evaluate(visibility => {
+    const dialogs = [...document.querySelectorAll('div[role="dialog"]')];
+    if (dialogs.length !== 1) return null;
+    const dialog = dialogs[0];
+    const buttons = [...dialog.querySelectorAll('[aria-label="Audience"], [aria-label="공개 대상"]')]
+      .filter(node => node.getClientRects().length);
+    if (buttons.length !== 1) return null;
+    const button = buttons[0];
+    const label = String(button.innerText ?? '').trim();
+    if (!/^(Everyone|모든 사람|Close Friends|친한 친구)$/.test(label)) return null;
+    const pattern = visibility === 'private' ? '^(Close Friends|친한 친구)$' : '^(Everyone|모든 사람)$';
+    globalThis[Symbol.for('aha-skills.social-posting.instagram-audience')] = { dialog, button, pattern };
+    if (new RegExp(pattern).test(label)) return true;
+    button.click(); return false;
+  }, visibility);
+  if (selected === null) stop('EGO_VISIBILITY_FAILED');
+  if (!selected) {
+    await sleep(300);
+    const changed = await page.evaluate(() => {
+      const proof = globalThis[Symbol.for('aha-skills.social-posting.instagram-audience')];
+      if (!proof?.dialog.isConnected) return false;
+      const menuId = proof.button.getAttribute('aria-controls');
+      const menu = menuId && document.getElementById(menuId);
+      if (!menu?.getClientRects().length) return false;
+      const choices = [...menu.querySelectorAll('[role="radio"], [role="menuitemradio"]')]
+        .filter(node => node.getClientRects().length && new RegExp(proof.pattern).test(String(node.innerText ?? '').trim()));
+      if (choices.length !== 1 || choices[0].disabled || choices[0].getAttribute('aria-disabled') === 'true') return false;
+      choices[0].click(); return true;
+    });
+    if (!changed) stop('EGO_VISIBILITY_FAILED');
+    await sleep(300);
+  }
+  if (!await PLATFORM_UI.instagram.verifyAudience(page)) stop('EGO_VISIBILITY_FAILED');
+}
+
+export function verifyAudience(page) {
+  return page.evaluate(() => {
+    const proof = globalThis[Symbol.for('aha-skills.social-posting.instagram-audience')];
+    const dialogs = [...document.querySelectorAll('div[role="dialog"]')];
+    if (!proof || dialogs.length !== 1 || dialogs[0] !== proof.dialog || !proof.dialog.isConnected) return false;
+    const buttons = [...proof.dialog.querySelectorAll('[aria-label="Audience"], [aria-label="공개 대상"]')]
+      .filter(node => node.getClientRects().length);
+    return buttons.length === 1 && buttons[0] === proof.button && new RegExp(proof.pattern).test(String(buttons[0].innerText ?? '').trim());
+  });
 }
 
 export function observePosts(page) {
@@ -162,7 +228,17 @@ export async function readbackPost(page, target) {
     posts = error.observedPosts.map(post => ({ ...post, stopReason: error.code ?? 'EGO_ATTACH_FAILED' }));
   }
   const matches = posts.filter(post => post.href === key);
-  return matches.length === 1 ? matches[0] : null;
+  if (matches.length !== 1) return null;
+  const audience = await page.evaluate(key => {
+    const roots = [...document.querySelectorAll('article')].filter(root => [...root.querySelectorAll('a[href]')]
+      .some(anchor => anchor.closest('article') === root && anchor.getAttribute('href')?.replace(/\/+$/, '') === key));
+    if (roots.length !== 1) return 'unknown';
+    const markers = [...roots[0].querySelectorAll('header [aria-label="Close Friends"], header [aria-label="친한 친구"], header [aria-label="Everyone"], header [aria-label="모든 사람"]')]
+      .filter(node => node.closest('article') === roots[0] && node.getClientRects().length);
+    if (markers.length !== 1) return 'unknown';
+    return /^(Close Friends|친한 친구)$/.test(markers[0].getAttribute('aria-label')) ? 'close_friends' : 'public';
+  }, key).catch(() => 'unknown');
+  return { ...matches[0], audience };
 }
 
 export function publisher() { return null; }
@@ -287,6 +363,7 @@ export function postProfile(page, norm, sleep) {
       } catch { stop('EGO_MEDIA_FAILED'); }
     },
     verifyBeforeShare: async (media, body, expectedIdentity, stop) => {
+      if (!await PLATFORM_UI.instagram.verifyAudience(page)) stop('EGO_VISIBILITY_FAILED');
       if (!mediaMatches(await PLATFORM_UI.instagram.inspectMedia(page))) stop('EGO_MEDIA_FAILED');
       const ready = await page.evaluate(({ selector, descriptions, body }) => {
         const dialogs = [...document.querySelectorAll('div[role="dialog"]')];
@@ -307,6 +384,21 @@ export function postProfile(page, norm, sleep) {
       const href = await ownProfileHref(page, 'instagram');
       if (href?.replace(/^\/|\/$/g, '') !== expectedIdentity) stop('EGO_ACCOUNT_MISMATCH');
     },
+    clickShare: async (selector, identity) => page.evaluate(({ selector, identity, profileSelector }) => {
+      const proof = globalThis[Symbol.for('aha-skills.social-posting.instagram-audience')];
+      const dialogs = [...document.querySelectorAll('div[role="dialog"]')];
+      const buttons = proof ? [...proof.dialog.querySelectorAll('[aria-label="Audience"], [aria-label="공개 대상"]')].filter(node => node.getClientRects().length) : [];
+      if (!proof || dialogs.length !== 1 || dialogs[0] !== proof.dialog || !proof.dialog.isConnected ||
+          buttons.length !== 1 || buttons[0] !== proof.button || !new RegExp(proof.pattern).test(String(buttons[0].innerText ?? '').trim())) return 'visibility-failed';
+      const identities = new Set([...document.querySelectorAll(profileSelector)].filter(node => node.getClientRects().length)
+        .map(node => node.getAttribute('href')?.replace(/^\/|\/$/g, '')));
+      if (identities.size !== 1 || !identities.has(identity)) return 'account-failed';
+      const controls = [...proof.dialog.querySelectorAll('input[type="checkbox"], [role="switch"], [role="checkbox"]')];
+      if (!controls.length || controls.some(node => node.checked === true || node.getAttribute('aria-checked') !== 'false' && node.checked !== false)) return 'readback-failed';
+      const button = document.querySelector(selector);
+      if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return false;
+      button.click(); return true;
+    }, { selector, identity, profileSelector: PLATFORM_UI.instagram.ownProfileSelector }),
     evidence: async () => {
       const result = await page.evaluate(() => {
         const dialog = globalThis[Symbol.for('aha-skills.social-posting.instagram-share-dialog')];

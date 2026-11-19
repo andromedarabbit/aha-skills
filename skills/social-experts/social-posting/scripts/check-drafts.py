@@ -8,7 +8,7 @@
 Usage:
     ./check-drafts.py <job-dir>                # 하드 제약 검사
     ./check-drafts.py <job-dir> --platform <p> # 게시 페이로드 JSON
-    # publish 내부: --freeze-media <전용 임시디렉터리>로 scan 사진·출처 사본을 검증
+    # publish 내부: --freeze-media <전용 임시디렉터리>로 scan·Instagram 사진 사본을 검증
 
 하드 제약(Hard constraint)만 차단한다 — 위반 시 exit 1. 플랫폼 간 문형 중복은 warnings
 배열로 알릴 뿐 게시를 차단하지 않는다(convention 등급 — ok·exit code에 영향 없음).
@@ -212,6 +212,26 @@ def _scan_media_violations(job: str, media: list[dict]) -> list[str]:
     return violations
 
 
+def _instagram_media_violations(job: str, media: list[dict]) -> list[str]:
+    violations = []
+    for item in media:
+        digest = item.get("sha256")
+        if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+            violations.append("Instagram public 사진 sha256이 없습니다 — 승인 전에 사진 해시를 준비하세요")
+            continue
+        try:
+            path = _resolve_job_path(job, item.get("path"))
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as image:
+                info = os.fstat(image.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size < 1:
+                    raise DraftFormatError("사진이 비어 있거나 일반 파일이 아닙니다")
+                if hashlib.file_digest(image, "sha256").hexdigest() != digest:
+                    raise DraftFormatError("승인 대상 사진 sha256과 현재 파일이 다릅니다")
+        except (DraftFormatError, OSError) as exc:
+            violations.append(f"Instagram 사진 검증 실패: {exc}")
+    return violations
+
+
 def _normalized_body(posts) -> str:
     """게시물 본문 → 중복 비교용 정규화 문자열 (URL·공백·문장부호 제거, 한글·숫자 유지)."""
     text = URL_RE.sub("", "\n".join(posts))
@@ -284,7 +304,12 @@ def check_platform(platform: str, draft_path: str) -> dict:
         result["warnings"] = ["Threads 웹 UI 길이 단위 미검증 — codepoint는 참고값이며 실제 게시는 차단됩니다"]
     if platform == "instagram":
         result["lengthVerified"] = False
-        result["warnings"] = ["Instagram 2200 codepoint는 로컬 캡션 정책입니다 — 웹 UI 계수 단위 미검증이며 실제 게시는 차단됩니다"]
+        result["warnings"] = ["Instagram 2200 codepoint는 로컬 캡션 정책입니다 — 웹 UI 계수 단위와 실제 게시 대상 지원은 미검증입니다"]
+        visibility = meta.get("visibility", "private")
+        if visibility not in ("private", "public"):
+            result["violations"].append("Instagram visibility는 private 또는 public이어야 합니다 — keep은 허용하지 않습니다")
+        if visibility == "public":
+            result["violations"].extend(_instagram_media_violations(os.path.dirname(os.path.dirname(draft_path)), media))
         if not media:
             result["violations"].append("Instagram 사진 피드는 사진 1~20장이 필요합니다")
         for item in media:
@@ -325,7 +350,7 @@ def check_platform(platform: str, draft_path: str) -> dict:
     return result
 
 
-def _freeze_scan_media(job: str, media: list[dict], snapshot: str) -> list[dict]:
+def _freeze_scan_media(job: str, media: list[dict], snapshot: str, platform: str | None = None) -> list[dict]:
     """승인된 사진·출처를 전용 사본으로 묶고 원본 대신 사본 bytes를 검증한다."""
     violations = _scan_media_violations(job, media)
     if violations:
@@ -334,11 +359,14 @@ def _freeze_scan_media(job: str, media: list[dict], snapshot: str) -> list[dict]
     media_dir = os.path.join(os.path.abspath(snapshot), "media")
     os.mkdir(media_dir, 0o700)
     for index, item in enumerate(media):
-        if item.get("source") != "scan":
+        if item.get("source") != "scan" and platform != "instagram":
             frozen.append(item)
             continue
         copied = dict(item)
-        for key, suffix in (("path", os.path.splitext(item["path"])[1]), ("provenance", ".provenance.json")):
+        files = [("path", os.path.splitext(item["path"])[1])]
+        if item.get("source") == "scan":
+            files.append(("provenance", ".provenance.json"))
+        for key, suffix in files:
             source = _resolve_job_path(job, item[key])
             destination = os.path.join(media_dir, f"{index}{suffix}")
             # lstat 이후 교체도 막고, FIFO로 교체돼도 파일 열기에서 멈추지 않는다.
@@ -348,8 +376,16 @@ def _freeze_scan_media(job: str, media: list[dict], snapshot: str) -> list[dict]
                     raise DraftFormatError("scan media 또는 provenance가 일반 파일이 아닙니다")
                 with open(destination, "xb") as dst:
                     shutil.copyfileobj(src, dst)
+                    if dst.tell() < 1:
+                        raise DraftFormatError("동결 사진 또는 provenance가 비어 있습니다")
             os.chmod(destination, 0o400)
             copied[key] = destination
+        if platform == "instagram":
+            with open(copied["path"], "rb") as image:
+                digest = hashlib.file_digest(image, "sha256").hexdigest()
+            if item.get("sha256") is not None and digest != item["sha256"]:
+                raise DraftFormatError("동결 사진 sha256이 초안과 다릅니다")
+            copied["sha256"] = digest
         frozen.append(copied)
     violations = _scan_media_violations(snapshot, frozen)
     if violations:
@@ -358,26 +394,28 @@ def _freeze_scan_media(job: str, media: list[dict], snapshot: str) -> list[dict]
 
 
 def payload_for(platform: str, job: str, freeze_media: str | None = None) -> dict:
-    """게시 페이로드 — scan은 요청 시 승인 bytes 사본, 기존 local은 원본 절대경로."""
+    """게시 페이로드 — scan·Instagram은 요청 시 동결 사본, 다른 local은 원본 절대경로."""
     draft = os.path.join(job, "drafts", f"{platform}.md")
     with open(draft, encoding="utf-8-sig") as f:
         meta, body = _split_raw(f.read())
     media = _media_items(meta)
     if freeze_media is not None:
-        media = _freeze_scan_media(job, media, freeze_media)
+        media = _freeze_scan_media(job, media, freeze_media, platform)
     resolved = []
     for item in media:
         p = str(item.get("path", ""))
         if p and not os.path.isabs(p):
             p = os.path.normpath(os.path.join(job, p))
         resolved.append({"path": p, "alt": str(item.get("alt", ""))})
+        if platform == "instagram" and "sha256" in item:
+            resolved[-1]["sha256"] = item["sha256"]
     return {
         "platform": platform,
         "format": str(meta.get("format") or "single"),
         "body": body.strip("\n"),
         "media": resolved,
         "link": str(meta.get("link") or ""),
-        "visibility": str(meta.get("visibility") or "keep"),
+        "visibility": meta.get("visibility", "private") if platform == "instagram" else str(meta.get("visibility") or "keep"),
     }
 
 

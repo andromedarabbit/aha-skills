@@ -155,7 +155,7 @@ test('validatePostPayload: 거부 사례', () => {
 
 test('validatePostPayload: Instagram 사진 피드는 빈 캡션·1~20장·필수 alt를 지원한다', () => {
   const photo = { path: '/tmp/photo.png', alt: '사진 설명' };
-  const payload = { ...basePayload, platform: 'instagram', body: '', media: [photo] };
+  const payload = { ...basePayload, platform: 'instagram', visibility: 'private', body: '', media: [photo] };
   assert.deepEqual(mod.validatePostPayload(payload), ['']);
   for (const path of ['/tmp/photo.jpg', '/tmp/photo.JPEG', '/tmp/photo.webp']) {
     assert.equal(mod.validatePostPayload({ ...payload, media: [{ ...photo, path }] }).length, 1);
@@ -174,7 +174,7 @@ test('validatePostPayload: Instagram 사진 피드는 빈 캡션·1~20장·필�
 });
 
 test('validatePostPayload: Instagram 캡션은 링크·개행 포함 2200 codepoint 로컬 정책이다', () => {
-  const payload = { ...basePayload, platform: 'instagram', media: [{ path: '/tmp/photo.png', alt: '사진 설명' }] };
+  const payload = { ...basePayload, platform: 'instagram', visibility: 'private', media: [{ path: '/tmp/photo.png', alt: '사진 설명' }] };
   for (const body of ['가'.repeat(2200), '😊'.repeat(2200), 'é'.repeat(1100), 'a\nb' + 'x'.repeat(2197)]) {
     assert.equal(mod.validatePostPayload({ ...payload, body }).length, 1);
     assert.throws(() => mod.validatePostPayload({ ...payload, body: body + 'x' }), /INVALID_PAYLOAD/);
@@ -186,6 +186,17 @@ test('validatePostPayload: Instagram 캡션은 링크·개행 포함 2200 codepo
   assert.ok(mod.PLATFORMS.includes('instagram'));
   assert.deepEqual(mod.validateScanPayload({ platform: 'instagram', cursor: null, postUrl: 'https://www.instagram.com/p/photo_1/?tracking=1' }).postUrl, 'https://www.instagram.com/p/photo_1');
   assert.throws(() => mod.validateScanPayload({ platform: 'instagram', cursor: null, postUrl: 'https://www.instagram.com/reel/movie_1/' }), /INVALID_PAYLOAD/);
+});
+
+test('Instagram 입력의 생략 범위만 private이고 임의 범위/해시/승인 표식은 거부한다', () => {
+  const payload = { ...basePayload, platform: 'instagram', visibility: 'private', media: [{ path: '/tmp/photo.png', alt: '설명' }] };
+  const { visibility, ...withoutVisibility } = payload;
+  assert.deepEqual(mod.validatePostPayload(withoutVisibility), ['게시 본문']);
+  for (const value of ['keep', 'friends', '', null, false, ['private']]) assert.throws(() => mod.validatePostPayload({ ...payload, visibility: value }), /INVALID_PAYLOAD/);
+  for (const sha256 of [null, false, ['a'.repeat(64)], 'A'.repeat(64), 'short']) assert.throws(() => mod.validatePostPayload({ ...payload, media: [{ ...payload.media[0], sha256 }] }), /INVALID_PAYLOAD/);
+  assert.throws(() => mod.validatePostPayload({ ...payload, visibility: 'public' }), /INVALID_PAYLOAD/);
+  assert.throws(() => mod.validatePostPayload({ ...payload, verified: true }), /INVALID_PAYLOAD/);
+  assert.throws(() => mod.validatePostPayload({ ...basePayload, visibility: 'private' }), /INVALID_PAYLOAD/);
 });
 
 test('postTimeoutMs: 세그먼트 수에 비례, 상한 570s', () => {
@@ -253,21 +264,80 @@ test('post: Threads는 바인딩 확인과 실행보다 먼저 명시적으로 �
   await assert.rejects(() => mod.post({ ...basePayload, platform: 'threads' }, { SOCIAL_EGO_STATE_DIR: join(work, 'unbound-threads') }), /THREADS_UNVERIFIED/);
 });
 
-test('post와 CLI post: Instagram은 바인딩·브라우저·첨부 전에 차단한다', async () => {
-  const marker = join(work, 'instagram-browser-called');
-  writeBinding(bindingFor(fakeEgo('instagram-blocked', `#!/bin/sh
-printf called > '${marker}'
-cat >/dev/null
-printf '%s\\n' '{"status":"POSTED"}'
-`), { x: 'me', instagram: 'me' }));
-  assert.deepEqual(mod.readBinding({ SOCIAL_EGO_STATE_DIR: stateDir })?.identity, { x: 'me', instagram: 'me' });
-  const payload = { ...basePayload, platform: 'instagram', body: '', media: [{ path: '/tmp/photo.png', alt: '사진 설명' }] };
-  await assert.rejects(() => mod.post(payload, { SOCIAL_EGO_STATE_DIR: join(work, 'unbound-instagram') }), /INSTAGRAM_UNVERIFIED/);
-  await assert.rejects(() => mod.post(payload, { SOCIAL_EGO_STATE_DIR: stateDir }), /INSTAGRAM_UNVERIFIED/);
-  const result = runCli(['post'], JSON.stringify(payload));
+function instagramJob(visibility = 'private', approved = false) {
+  const job = mkdtempSync(join(work, 'instagram-job-'));
+  mkdirSync(join(job, 'drafts'));
+  const image = join(job, 'photo.png');
+  writeFileSync(image, 'synthetic-photo');
+  const sha256 = createHash('sha256').update(readFileSync(image)).digest('hex');
+  const draft = `---\nplatform: instagram\nformat: single\nvisibility: ${visibility}\nmedia:\n  - path: ${JSON.stringify(image)}\n    alt: 사진 설명\n    sha256: ${sha256}\n---\n게시 본문\n`;
+  writeFileSync(join(job, 'drafts/instagram.md'), draft);
+  writeFileSync(join(job, 'job-state.md'), '---\nplatforms: [instagram, x]\naccounts: {instagram: me, x: me}\nsource: {type: topic, topic: test}\n---\n');
+  if (approved) writeFileSync(join(job, 'receipt.json'), JSON.stringify({
+    approved_digests: { instagram: createHash('sha256').update(draft).digest('hex') },
+    approved_accounts: '{instagram: me, x: me}', approved_via: 'posttooluse-hook', approved_at: new Date().toISOString(), posted_x: 'https://x.com/me/status/1',
+  }));
+  return { job, image, payload: { ...basePayload, platform: 'instagram', visibility, media: [{ path: image, alt: '사진 설명', sha256 }] } };
+}
+
+test('직접 Instagram post는 현재 작업이 없으면 브라우저 전에 거부한다', () => {
+  const { payload } = instagramJob();
+  writeBinding(bindingFor(fakeEgo('instagram-no-job', '{"status":"POSTED","urls":[],"urlRecovered":false,"identity":"me"}'), { instagram: 'me' }));
+  const result = runCli(['post'], JSON.stringify(payload), { SOCIAL_POSTING_JOB: '', TMPDIR: work });
   assert.equal(result.status, 1);
-  assert.equal(cliJson(result).reason, 'INSTAGRAM_UNVERIFIED');
-  assert.ok(!readdirSync(work).includes('instagram-browser-called'));
+  assert.equal(cliJson(result).reason, 'INSTAGRAM_JOB_REQUIRED');
+});
+
+test('직접 private는 사람 영수증 없이 동결 사본을 전달하고 승인 키를 만들지 않는다', () => {
+  const { job, image, payload } = instagramJob();
+  const transmitted = join(work, 'instagram-private-source');
+  writeBinding(bindingFor(fakeEgo('instagram-private', `#!/bin/sh
+cat > '${transmitted}'
+printf '%s\\n' '{"status":"POSTED","urls":[],"urlRecovered":false,"identity":"me"}'
+`), { instagram: 'me' }));
+  delete payload.visibility;
+  const result = runCli(['post'], JSON.stringify(payload), { SOCIAL_POSTING_JOB: job });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(cliJson(result).audience.authorization, 'policy');
+  assert.ok(!readFileSync(transmitted, 'utf8').includes(JSON.stringify(image)), '원본 대신 새 동결 사진 경로 전달');
+  assert.throws(() => readFileSync(join(job, 'receipt.json')), { code: 'ENOENT' });
+});
+
+for (const approved of [false, true]) test(`직접 public은 실제 승인 대상과 같을 때만 실행한다: approved=${approved}`, () => {
+  const { job, payload } = instagramJob('public', approved);
+  const marker = join(job, 'called');
+  writeBinding(bindingFor(fakeEgo('instagram-public', `#!/bin/sh
+cat >/dev/null
+printf called > '${marker}'
+printf '%s\\n' '{"status":"POSTED","urls":[],"urlRecovered":false,"identity":"me"}'
+`), { instagram: 'me' }));
+  const result = runCli(['post'], JSON.stringify(payload), { SOCIAL_POSTING_JOB: job });
+  assert.equal(result.status, approved ? 0 : 1, result.stdout + result.stderr);
+  if (approved) assert.equal(cliJson(result).audience.authorization, 'human_approval');
+  if (!approved) {
+    assert.equal(cliJson(result).reason, 'INSTAGRAM_APPROVAL_REQUIRED');
+    assert.throws(() => readFileSync(marker), { code: 'ENOENT' });
+  }
+});
+
+for (const change of ['caption', 'alt', 'bytes', 'accounts', 'visibility', 'approved-boolean', 'old-receipt']) test(`직접 public 승인 결합: ${change} 변경은 브라우저 0회`, () => {
+  const { job, image, payload } = instagramJob('public', true);
+  if (change === 'caption') payload.body += ' 변경';
+  if (change === 'alt') payload.media[0].alt += ' 변경';
+  if (change === 'bytes') writeFileSync(image, 'changed-photo');
+  if (change === 'accounts') writeFileSync(join(job, 'job-state.md'), '---\nplatforms: [instagram, x]\naccounts: {instagram: me, x: other}\n---\n');
+  if (change === 'visibility') payload.visibility = 'private';
+  if (change === 'approved-boolean') payload.approved = true;
+  if (change === 'old-receipt') writeFileSync(join(job, 'receipt.json'), '{}');
+  const marker = join(job, 'called');
+  writeBinding(bindingFor(fakeEgo('instagram-altered', `#!/bin/sh
+cat >/dev/null
+printf called > '${marker}'
+printf '%s\\n' '{"status":"POSTED","urls":[],"urlRecovered":false,"identity":"me"}'
+`), { instagram: 'me' }));
+  const result = runCli(['post'], JSON.stringify(payload), { SOCIAL_POSTING_JOB: job });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.throws(() => readFileSync(marker), { code: 'ENOENT' });
 });
 
 test('CLI scan: bound identity와 관찰 범위를 보존하고 완료를 가장하지 않는다', () => {

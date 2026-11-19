@@ -26,7 +26,7 @@
 # question의 고정 형식 "게시 대상: x,bluesky" 한 줄에 표시한 초안만 승인한다.
 # 대상은 중복 없는 허용 플랫폼 집합이며 작업 platforms의 부분집합이어야 한다.
 # 새 approved_digests는 이전 승인 집합을 교체한다. 전체 accounts 스냅샷과
-# posted_* 기록은 보존한다. Threads·Instagram은 게시 미검증이므로 승인하지 않는다.
+# posted_* 기록은 보존한다. Instagram public만 사진 hash 검사 후 승인하며 Threads는 차단한다.
 #
 # 한계(문서화): 로컬 bash 스크립트라 에이전트가 이 스크립트를 직접 호출하며
 # 위조 stdin을 흘려보내면 속일 수 있다. 그건 정상 도구 호출 경로를 지키는
@@ -64,7 +64,7 @@ main() {
   targets="$(printf '%s' "$q_text" | jq -Rsec '
     split("\n") | map(select(startswith("게시 대상:")))
     | select(length == 1) | .[0]
-    | capture("^게시 대상: (?<targets>(?:x|linkedin|facebook|bluesky)(?:,(?:x|linkedin|facebook|bluesky))*)$")
+    | capture("^게시 대상: (?<targets>(?:x|linkedin|facebook|bluesky|instagram)(?:,(?:x|linkedin|facebook|bluesky|instagram))*)$")
     | .targets | split(",")
     | select(length == (unique | length))
   ' 2>/dev/null)" || exit 0
@@ -86,7 +86,7 @@ main() {
   export SOCIAL_POSTING_RECEIPT="${job%/}/receipt.json"
 
   # 전체 대상을 검증한 뒤에만 영수증을 쓴다. 누락을 전체 승인으로 복구하지 않는다.
-  local digests draft name digest platforms_line
+  local digests draft name digest platforms_line payload
   platforms_line="$(sed -n 's/^platforms:[[:space:]]*//p' "$job/job-state.md" 2>/dev/null | head -1)"
   # pipefail 아래에서 `tr | grep -q`는 grep이 먼저 끝나면 tr이 SIGPIPE로 실패해 일치를
   # 불일치로 뒤집는다(CI 실측: 승인 누락) — 목록을 한 번 만들어 here-string으로 검사한다.
@@ -99,6 +99,13 @@ main() {
     [ -f "$draft" ] || exit 0
     digest="$(hash_file "$draft")" || exit 0
     [ -n "$digest" ] || exit 0
+    if [ "$name" = instagram ]; then
+      # private는 사람 승인으로 기록하지 않으며 public 사진은 승인 전에 bytes까지 검사한다.
+      command -v uv >/dev/null 2>&1 || exit 0
+      payload="$(uv run -q --with grapheme --with pyyaml python "$(dirname "$lib_path")/../check-drafts.py" "$job" --platform instagram 2>/dev/null)" || exit 0
+      printf '%s' "$payload" | jq -e '.visibility == "public"' >/dev/null || exit 0
+      [ "$(hash_file "$draft")" = "$digest" ] || exit 0
+    fi
     digests="$(printf '%s' "$digests" | jq --arg k "$name" --arg v "$digest" '.[$k] = $v')" || exit 0
   done < <(printf '%s' "$targets" | jq -r '.[]')
 

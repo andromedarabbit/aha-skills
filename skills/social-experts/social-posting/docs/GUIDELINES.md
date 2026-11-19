@@ -6,6 +6,7 @@
 
 - **게시 API 없음** — 스킬은 글쓰기 판단과 게시 전 검증만 담당하고, 게시 실행은 ego-post 실행 계층(ego lite 고정 스크립트)이 맡는다.
 - **강제력은 스크립트가 갖는다** — 훅은 실패해도 조용히 무시될 수 있으므로, 되돌릴 수 없는 검사(digest 가드·하드 제약·계정 가드)는 전부 `scripts/publish.sh` 안에 있다.
+- **정책 허용과 사람 승인은 별개** — 명시적 게시 요청 또는 사전에 허용한 Instagram private 작업만 건별 승인을 생략한다. 정책 허용을 approved_* 영수증이나 사람 승인으로 기록하지 않으며 다른 플랫폼의 승인을 바꾸지 않는다.
 - **승인은 하네스가 목격한 사실만** — `approved_*` 영수증 키는 AskUserQuestion PostToolUse 훅(`scripts/record-approval.sh`)만 기록할 수 있다.
 
 ## 처리 순서
@@ -19,7 +20,7 @@
 5. 하드 제약 검사 (기계 판정)
 6. 선택적 스타일 휴리스틱 검사 (힌트만)
 7. 사실·수치·인용 검증
-8. 선택한 게시 대상의 초안만 함께 제시하고, 대상 목록을 표시한 새 승인 후 공통 publish.sh로 게시. 이전 다른 대상의 승인과 병합하지 않는다.
+8. 선택한 게시 대상의 초안만 함께 제시한다. 사람 승인 경로는 대상 목록을 표시한 새 승인 후 공통 publish.sh로 게시하며 이전 승인 집합과 병합하지 않는다. Instagram private만 별도 정책 판정으로 진행한다.
 
 새 사실이 생기면 플랫폼 파생본보다 **canonical을 먼저 갱신**한다(파생본은 canonical에서 다시 파생).
 
@@ -37,7 +38,9 @@
 
 플랫폼별 규칙은 각 전문가의 `docs/playbook.md`가 소유한다. 기존 `playbook-{x,linkedin,facebook,bluesky,threads}.md`는 호환 안내이며 Instagram은 `../../instagram-expert/docs/playbook.md`를 읽는다. Hard 표와 check-drafts.py의 `LIMITS`를 함께 갱신한다. Instagram의 캡션 2,200 codepoint는 로컬 초안 정책이고 공식 웹 계수 단위는 미검증이다. 사진 1~20장·각 alt·공통 캡션의 단일 피드만 준비하며 영상·텍스트 단독·자동 분할은 지원하지 않는다. 사진 순서·권리·잘림 의도를 확인하고 원본 비율을 재현할 수 없으면 발행 전 중단한다.
 
-Instagram은 기본 scan 대상에 추가하지 않는다. 두 공개 쓰기 경로는 `INSTAGRAM_UNVERIFIED`를 유지하며 게시 승인 허용 목록에 넣지 않는다. 혼합 요청에서 다른 플랫폼만 진행할지는 사용자에게 확인한다. 내부 게시·read-back의 합성 fixture는 실환경 DOM·첨부·게시 성공의 근거가 아니며, 검증용 코드 변경과 일반 차단 해제도 별도 승인이다.
+Instagram은 기본 scan 대상에 추가하지 않는다. 게시 기본값 private는 기존 친한친구 목록 대상의 실게시다. visibility 생략은 private이며 명시적 keep은 거부한다. public만 공개 계정의 Everyone 대상과 내용·사진·계정·범위에 결합된 사람 승인이 필요하다. publish와 직접 post에 같은 정책을 적용하고 실제 composer 대상을 확인하지 못하면 Share 전에 중단한다. 팔로워 공개·계정 설정/목록 변경·public 대체는 허용하지 않는다. 모든 Instagram 사진을 읽기 전용 사본으로 동결하고 public 사진 sha256은 승인 전 초안에 필수로 기록한다.
+
+기존 무인 scan은 계속 읽기 전용이며 조회·초안·영수증만으로 게시 권한을 만들지 않는다. 사전에 허용한 Instagram 게시 작업의 private 정책 분기와 일치하는 public 사람 승인만 인정하며, 다른 플랫폼 무인 쓰기 금지는 유지한다. UI는 합성 fixture만 검증했으며 실서비스는 미확인이다. dry-run은 정적 검사이지 게시 허가가 아니며 계정 접근·사진 업로드·실환경 검증은 별도 승인 대상이다. read-back의 캡션·사진·범위는 따로 보고하고 범위 불명·불일치로 POSTED를 취소·삭제·재게시하지 않는다.
 
 ## 검증 계층 (forensic → strict → optional style)
 
@@ -66,5 +69,6 @@ AI 패턴은 "작성자 판별"의 신호가 아니라 **수정할 수 있는 �
 ## Draft → Ready
 
 - 모든 초안은 `draft`로 태어난다.
-- **Ready 판정식**: `approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치 — publish.sh가 강제한다.
+- **Ready 판정식**: `approved_digests`에 해당 플랫폼이 있고 `drafts/<platform>.md`의 sha256과 일치 — 사람 승인이 필요한 경로에서 publish.sh가 강제한다.
+- Instagram private는 사람 승인 Ready가 아니라 게시 의도·현재 초안/사진/계정·실제 친한친구 확인에 따른 정책 허용이다.
 - 게시 후 상태는 `posted_<platform>`(URL) 영수증 키로 남는다.

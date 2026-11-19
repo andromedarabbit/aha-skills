@@ -3,15 +3,14 @@
 #
 # 게시 직전 7중 가드 (전부 이 스크립트가 강제 — 훅은 승인 기록 담당):
 #   1. 플랫폼이 job-state.md의 platforms 안에 있는가 (Stage 2에서 사용자가 고른 대상)
-#   2. Ready 판정식 — approved_digests에 해당 플랫폼이 있고 drafts/<platform>.md의
-#      sha256과 일치 (승인 후 초안이 바뀌면 거부 = 실패-닫힘 가드)
+#   2. 사람 승인 경로는 approved_digests와 현재 초안 sha256이 일치해야 한다.
+#      Instagram private만 추가 사람 승인을 생략한다(public은 실제 훅 영수증 필수).
 #   3. 하드 제약 재실행 (check-drafts.py, 이중 검사)
 #   4. 계정 — job-state.md accounts에서 해당 플랫폼 계정(ego 바인딩 신원)만 읽는다
 #      (사용자가 Stage 2에서 지정한 값 외에는 애초에 입력 경로가 없다)
-#   5. 승인 시점 계정 매핑(approved_accounts, 훅 스냅샷)과 현재 job-state가 일치하는가
-#      (승인 후 계정 변경 = 계정 재타깃 차단)
-#   6. 본문 동결 직후 원본 전체 파일 digest를 승인과 재검증 (검사→동결 사이 TOCTOU 차단)
-#   7. scan 사진·출처는 전용 사본의 승인 digest를 검증하고 사본만 실행층에 전달
+#   5. 사람 승인 경로는 전체 approved_accounts 스냅샷과 현재 계정 매핑이 일치해야 한다.
+#   6. scan 사진·출처 및 Instagram 사진은 동결 사본만 실행층에 전달한다.
+#   7. 동결·재검사 뒤 초안·작업 상태 digest를 재대조한다(private도 변경 검사 유지).
 #
 # 통과하면 check-drafts 페이로드 JSON(본문·media 절대경로+alt·link·visibility)에 가드 4의
 # ego 신원을 실어 ego-post.mjs post(고정 스크립트 실행 계층)에 넘긴다. 게시 성공 신호는
@@ -21,7 +20,7 @@
 # posted_<platform> <url>로 에이전트가 한다. 동결 파일은 EXIT trap으로 정리된다.
 #
 # Usage:
-#   publish.sh --job <job-dir> --platform <x|linkedin|facebook|bluesky> [--dry-run]
+#   publish.sh --job <job-dir> --platform <x|linkedin|facebook|bluesky|instagram> [--dry-run]
 # --dry-run: 가드만 통과시키고 ego 실행 계층은 호출하지 않는다 (게시 직전 확인용).
 #
 # Exit: 0 게시 지시 완료(URL 회수 실패 포함) / 1 가드 거부·실패·부분 게시 (fail-closed)
@@ -35,7 +34,7 @@ source "$SCRIPT_DIR/lib/receipt.sh"
 usage() {
   cat >&2 <<'EOF'
 사용법:
-  publish.sh --job <job-dir> --platform <x|linkedin|facebook|bluesky> [--dry-run]
+  publish.sh --job <job-dir> --platform <x|linkedin|facebook|bluesky|instagram> [--dry-run]
 EOF
 }
 
@@ -57,7 +56,6 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$job" && -n "$platform" ]] || { usage; exit 1; }
 job="${job%/}"
-[[ "$platform" != "instagram" ]] || die "INSTAGRAM_UNVERIFIED — 실제 UI의 사진 피드·계정·첨부·read-back 검증 전 Instagram 게시는 차단됩니다"
 [[ "$platform" != "threads" ]] || die "THREADS_UNVERIFIED — 실제 UI의 길이·사진·답글·read-back 검증 전 Threads 게시는 차단됩니다"
 
 STATE_FILE="$job/job-state.md"
@@ -69,15 +67,21 @@ DRAFT="$job/drafts/$platform.md"
 export SOCIAL_POSTING_JOB="$job"
 export SOCIAL_POSTING_RECEIPT="$job/receipt.json"
 
+# private도 검사·동결 사이 초안과 계정·작업 대상이 바뀌면 중단한다.
+initial_digest="$(hash_file "$DRAFT")" || die "초안 digest 계산 실패"
+initial_state_digest="$(hash_file "$STATE_FILE")" || die "작업 상태 digest 계산 실패"
+
 # --- 가드 1: Stage 2에서 지정한 플랫폼인가 ---
 platforms_line="$(sed -n 's/^platforms:[[:space:]]*//p' "$STATE_FILE" | head -1)"
 platforms_norm="$(printf '%s' "$platforms_line" | tr -d '[]' | tr ',' ' ')"
 grep -qw "$platform" <<<"$platforms_norm" \
   || die "플랫폼 '$platform'은 이 작업의 대상이 아닙니다 (platforms: $platforms_line)"
 
-# --- 가드 2: Ready 판정식 (승인 digest 일치) ---
-receipt_digest_matches "$platform" \
-  || die "승인 digest가 없거나 현재 초안과 일치하지 않습니다 — 승인 후 초안이 수정됐습니다. Stage 8 승인을 다시 받으세요 (실패-닫힘 가드)"
+# --- 가드 2: 기존 플랫폼은 Ready 판정식 유지 (Instagram은 범위 판정 후 검사) ---
+if [[ "$platform" != instagram ]]; then
+  receipt_digest_matches "$platform" \
+    || die "승인 digest가 없거나 현재 초안과 일치하지 않습니다 — 승인 후 초안이 수정됐습니다. Stage 8 승인을 다시 받으세요 (실패-닫힘 가드)"
+fi
 
 # --- 가드 3: 하드 제약 재실행 ---
 command -v uv >/dev/null 2>&1 \
@@ -87,15 +91,32 @@ check_out="$(
 )" || die "하드 제약 위반 — 게시를 거부합니다:
 $check_out"
 
+requires_approval=true
+if [[ "$platform" == instagram ]]; then
+  visibility="$(printf '%s' "$check_out" | jq -er '.visibility')" || die "Instagram 공개 범위 판정 실패"
+  case "$visibility" in
+    private) requires_approval=false ;;
+    public)
+      receipt_digest_matches "$platform" \
+        || die "승인 digest가 없거나 현재 초안과 일치하지 않습니다 — public은 Stage 8 승인이 필요합니다"
+      [[ "$(receipt_get '.approved_via // ""')" == posttooluse-hook ]] \
+        || die "Instagram public은 실제 AskUserQuestion 훅의 승인 영수증이 필요합니다"
+      ;;
+    *) die "Instagram 공개 범위는 private 또는 public이어야 합니다" ;;
+  esac
+fi
+
 # --- 가드 4: 계정은 job-state.md 기재값만 ---
 accounts_line="$(sed -n 's/^accounts:[[:space:]]*//p' "$STATE_FILE" | head -1)"
 account="$(printf '%s' "$accounts_line" | sed -n "s/.*[{,][[:space:]]*$platform:[[:space:]]*\([^,}[:space:]]*\).*/\1/p")"
 [[ -n "$account" ]] || die "job-state.md accounts에 '$platform' 계정이 없습니다 — Stage 2에서 사용자가 계정을 지정해야 합니다 (스킬이 임의로 정하지 않는다)"
 
 # --- 가드 5: 승인 시점 계정 매핑과 일치해야 한다 (계정 재타깃 차단) ---
-approved_accounts="$(receipt_get '.approved_accounts // ""')"
-[[ -n "$approved_accounts" ]] || die "승인 영수증에 approved_accounts 스냅샷이 없습니다 — 이전 계약의 승인입니다. Stage 8 승인을 다시 받으세요"
-[[ "$approved_accounts" == "$accounts_line" ]] || die "승인 시점 계정 매핑과 현재 job-state accounts가 다릅니다 — 승인 후 계정이 변경됐습니다. Stage 8 승인을 다시 받으세요 (실패-닫힘 가드)"
+if [[ "$requires_approval" == true ]]; then
+  approved_accounts="$(receipt_get '.approved_accounts // ""')"
+  [[ -n "$approved_accounts" ]] || die "승인 영수증에 approved_accounts 스냅샷이 없습니다 — 이전 계약의 승인입니다. Stage 8 승인을 다시 받으세요"
+  [[ "$approved_accounts" == "$accounts_line" ]] || die "승인 시점 계정 매핑과 현재 job-state accounts가 다릅니다 — 승인 후 계정이 변경됐습니다. Stage 8 승인을 다시 받으세요 (실패-닫힘 가드)"
+fi
 
 # --- 게시 페이로드: check-drafts 산출 JSON + ego 바인딩 신원 → ego-post 실행 계층 ---
 # 실행 계층: SOCIAL_EGO_POST 심(테스트 전용 — payload JSON을 stdin으로 받고 JSON 1줄을
@@ -117,16 +138,22 @@ frozen="$(mktemp "${TMPDIR:-/tmp}/social-posting-body.XXXXXX")"
 printf '%s' "$payload_json" | jq -j '.body' >"$frozen"
 chmod 0400 "$frozen"
 
-# --- 가드 6: 동결 직후 원본 전체 파일의 digest를 승인과 재검증 (TOCTOU 차단) ---
-approved_digest="$(receipt_get ".approved_digests[\"$platform\"] // \"\"")"
-current_digest="$(hash_file "$DRAFT")"
-[[ -n "$approved_digest" && "$approved_digest" == "$current_digest" ]] \
-  || die "승인 digest와 현재 초안이 일치하지 않습니다 — 가드 통과 후 초안이 변경됐습니다. Stage 8 승인을 다시 받으세요 (실패-닫힘 가드)"
-
-# --- 가드 7: 사본 동결 이후 원본 변경도 실행 전에 거부한다 (실행층은 검증한 사본만 읽음) ---
+# --- 가드 6: 사본 동결 이후 원본 미디어 변경도 실행 전에 거부한다 ---
 check_out="$(
   uv run -q --with grapheme --with pyyaml python "$SCRIPT_DIR/check-drafts.py" "$job" --platform "$platform" 2>&1
 )" || die "scan 미디어 재검증 실패 — 게시를 거부합니다:\n$check_out"
+
+# --- 가드 7: 정책·계정 검사와 동결 사이 초안/작업 변경을 거부한다 (TOCTOU 차단) ---
+current_digest="$(hash_file "$DRAFT")" || die "초안 digest 재계산 실패"
+[[ "$initial_digest" == "$current_digest" ]] \
+  || die "가드 통과 후 초안이 변경됐습니다 — 현재 내용과 공개 범위를 다시 확인하세요"
+[[ "$initial_state_digest" == "$(hash_file "$STATE_FILE")" ]] \
+  || die "가드 통과 후 작업 대상이나 계정이 변경됐습니다"
+if [[ "$requires_approval" == true ]]; then
+  approved_digest="$(receipt_get ".approved_digests[\"$platform\"] // \"\"")"
+  [[ -n "$approved_digest" && "$approved_digest" == "$current_digest" ]] \
+    || die "승인 digest와 현재 초안이 일치하지 않습니다 — Stage 8 승인을 다시 받으세요 (실패-닫힘 가드)"
+fi
 
 media_count="$(printf '%s' "$payload_json" | jq '.media | length')"
 link="$(printf '%s' "$payload_json" | jq -r '.link // ""')"
@@ -141,7 +168,7 @@ visibility="$(printf '%s' "$payload_json" | jq -r '.visibility // "keep"')"
 ego_payload="$(printf '%s' "$payload_json" | jq -c --arg identity "$account" '. + {identity: $identity}')"
 
 if [[ "$dry_run" == "true" ]]; then
-  echo "가드 통과 (dry-run): platform=$platform identity=$account format=$format"
+  echo "정적 가드 통과 (dry-run, 실제 공개 범위 미검증): platform=$platform identity=$account format=$format"
   [[ "$format" == "thread" ]] && echo "스레드: 세그먼트 $segments개, 답글 체인으로 연결 게시"
   echo "동결 본문: $frozen ($(wc -c <"$frozen" | tr -d ' ') bytes)"
   echo "media: $media_count, link: ${link:-없음}, visibility: $visibility"

@@ -18,8 +18,15 @@ category, tmp = map(Path, sys.argv[1:])
 platforms = ('x', 'facebook', 'bluesky', 'threads', 'linkedin', 'instagram')
 coordinator = (category / 'social-posting/SKILL.md').read_text()
 assert '호출 자체가 이미' not in coordinator, '조회 호출을 게시 의도로 간주함'
+assert 'INSTAGRAM_UNVERIFIED' not in coordinator, '구 Instagram 전면 차단 정책 잔존'
 for phrase in ('조회', '초안', 'bootstrap', 'readback', '게시 대상:', 'approved_digests',
-               'THREADS_UNVERIFIED', 'INSTAGRAM_UNVERIFIED', '시간 미상', '관찰 범위', '중복 실행 방지'):
+               'THREADS_UNVERIFIED', 'private는 기존 친한친구 목록에만 실제 발행',
+               '조회·비교·초안은 게시 권한이 아니다', 'visibility 생략은 private',
+               '명시적 keep은 거부', '공개 계정과 Everyone', 'AskUserQuestion 사람 승인',
+               '사람이 승인한 것으로 기록하지 않는다', '전체 approved_accounts 스냅샷',
+               'authorization: policy', 'authorization: human_approval',
+               'captionMatched', 'media.complete', 'audience.observed',
+               '시간 미상', '관찰 범위', '중복 실행 방지'):
     assert phrase in coordinator, f'조정자의 분기·가드 계약 누락: {phrase}'
 for platform in platforms:
     expert = category / f'{platform}-expert'
@@ -72,5 +79,23 @@ for platform in ('x', 'facebook', 'bluesky', 'linkedin', 'instagram'):
                             cwd=elsewhere, capture_output=True, text=True)
     assert broken.returncode != 0 and '게이트 판정식 문구가' in broken.stderr, f'게이트 드리프트를 놓침: {platform}'
     skill.write_text(original)
-print('조정자·등록·공백 설치 경로·손상 감지 계약 통과')
+# 두 진입 문서와 공통 스키마의 private/public 정책 손상도 전문가 연결 검사에서 잡는다.
+private_gate = 'Instagram private 판정식: 명시적 게시 요청 또는 사전에 허용한 게시 작업이고, 현재 초안·사진·계정이 검증되며 Share 직전 실제 친한친구 대상이 확인됨'
+instagram_runner = installed / 'instagram-expert/scripts/tests/run.sh'
+for relative, phrase in (
+    ('instagram-expert/SKILL.md', private_gate),
+    ('social-posting/SKILL.md', private_gate),
+    ('social-posting/assets/state-schema.md', private_gate),
+    ('social-posting/docs/REFERENCE.md', private_gate),
+    ('instagram-expert/SKILL.md', '공개 계정과 Everyone'),
+    ('instagram-expert/SKILL.md', '사람이 승인한 것으로 기록하지 않는다'),
+):
+    document = installed / relative
+    original = document.read_text()
+    assert phrase in original, f'정책 문구 누락: {relative}'
+    document.write_text(original.replace(phrase, 'BROKEN_POLICY'))
+    broken = subprocess.run(['bash', str(instagram_runner)], cwd=elsewhere, capture_output=True, text=True)
+    assert broken.returncode != 0, f'Instagram 정책 드리프트를 놓침: {relative}: {phrase}'
+    document.write_text(original)
+print('조정자·등록·공백 설치 경로·private/public 정책 손상 감지 계약 통과')
 PY

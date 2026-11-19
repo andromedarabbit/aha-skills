@@ -44,6 +44,13 @@ for rel in SKILL.md assets/state-schema.md docs/REFERENCE.md \
   fi
 done
 echo "  게이트 판정식 동일 문구 통과"
+PRIVATE_PHRASE='Instagram private 판정식: 명시적 게시 요청 또는 사전에 허용한 게시 작업이고, 현재 초안·사진·계정이 검증되며 Share 직전 실제 친한친구 대상이 확인됨'
+for rel in SKILL.md assets/state-schema.md docs/REFERENCE.md ../instagram-expert/SKILL.md; do
+  grep -Fq "$PRIVATE_PHRASE" "$SKILL_DIR/$rel" || {
+    printf '❌ 오류: %s에 Instagram private 판정식이 없습니다\n' "$rel" >&2
+    exit 1
+  }
+done
 suites_run=$((suites_run + 1))
 
 # --- 훅 계약 header 문구: record-approval.sh가 인식하려면 SKILL.md가 계약 문구를 써야 한다 ---
@@ -62,10 +69,12 @@ for rel in SKILL.md README.md assets/orca-scan-prompt.md ../threads-expert/docs/
   }
 done
 for rel in SKILL.md README.md assets/orca-scan-prompt.md ../instagram-expert/SKILL.md ../instagram-expert/docs/playbook.md docs/REFERENCE.md; do
-  grep -Fq 'INSTAGRAM_UNVERIFIED' "$SKILL_DIR/$rel" || {
-    printf '❌ 오류: %s에 Instagram 게시 차단 계약이 없습니다\n' "$rel" >&2
-    exit 1
-  }
+  for phrase in private public 친한친구; do
+    grep -Fq "$phrase" "$SKILL_DIR/$rel" || {
+      printf '❌ 오류: %s에 Instagram 공개 범위 계약(%s)이 없습니다\n' "$rel" "$phrase" >&2
+      exit 1
+    }
+  done
 done
 for phrase in '최근 24시간' '시간 미상' '관찰 범위' '중복 실행 방지'; do
   for rel in SKILL.md assets/orca-scan-prompt.md; do

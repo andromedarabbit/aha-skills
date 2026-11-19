@@ -102,6 +102,29 @@ jq -e '(.approved_digests | keys == ["x"]) and .approved_accounts == "{x: me, in
 [ "$(hash_of "$instagram_job/job-state.md")" = "$state_before" ] || fail "Instagram 혼합 작업의 범위를 축소하면 안 된다"
 [ "$(hash_of "$instagram_job/drafts/instagram.md")" = "$draft_before" ] || fail "Instagram 초안은 보존해야 한다"
 
+# public Instagram만 실제 사진 hash 검사 뒤 사람 승인 집합에 들어간다.
+printf 'public-photo' >"$instagram_job/photo.png"
+photo_digest="$(hash_of "$instagram_job/photo.png")"
+printf -- '---\nplatform: instagram\nformat: single\nvisibility: public\nmedia:\n  - path: ./photo.png\n    alt: 사진 설명\n    sha256: %s\n---\n공개 캡션\n' "$photo_digest" >"$instagram_job/drafts/instagram.md"
+question='게시 대상: x,instagram'
+event="$(jq -nc --arg q "$question" '{tool_name:"AskUserQuestion",tool_input:{questions:[{header:"게시 승인",question:$q}]},tool_response:{answers:{($q):"게시"}}}')"
+printf '%s' "$event" | SOCIAL_POSTING_JOB="$instagram_job" bash "$HOOK"
+jq -e '(.approved_digests | keys == ["instagram","x"]) and .approved_via == "posttooluse-hook" and .approved_accounts == "{x: me, instagram: photo-owner}" and .posted_instagram == "https://www.instagram.com/p/old/"' "$instagram_job/receipt.json" >/dev/null || fail "정상 public 혼합 승인은 전체 계정과 게시 기록을 보존해야 한다"
+[ "$(jq -r '.approved_digests.instagram' "$instagram_job/receipt.json")" = "$(hash_of "$instagram_job/drafts/instagram.md")" ] || fail "Instagram public 승인 digest가 초안 전체와 일치해야 한다"
+for invalid in private omitted missing-hash changed-bytes; do
+  printf -- '---\nplatform: instagram\nformat: single\nvisibility: public\nmedia:\n  - path: ./photo.png\n    alt: 사진 설명\n    sha256: %s\n---\n공개 캡션\n' "$photo_digest" >"$instagram_job/drafts/instagram.md"
+  case "$invalid" in
+    private) sed 's/visibility: public/visibility: private/' "$instagram_job/drafts/instagram.md" >"$sandbox/invalid-draft" ;;
+    omitted) grep -v '^visibility:' "$instagram_job/drafts/instagram.md" >"$sandbox/invalid-draft" ;;
+    missing-hash) grep -v 'sha256:' "$instagram_job/drafts/instagram.md" >"$sandbox/invalid-draft" ;;
+    changed-bytes) cp "$instagram_job/drafts/instagram.md" "$sandbox/invalid-draft"; printf 'replacement' >"$instagram_job/photo.png" ;;
+  esac
+  mv "$sandbox/invalid-draft" "$instagram_job/drafts/instagram.md"
+  before="$(hash_of "$instagram_job/receipt.json")"
+  printf '%s' "$event" | SOCIAL_POSTING_JOB="$instagram_job" bash "$HOOK"
+  [ "$(hash_of "$instagram_job/receipt.json")" = "$before" ] || fail "private·hash 미검증 Instagram은 일부 승인도 만들면 안 된다: $invalid"
+done
+
 # --- 1. 정상 승인: header '게시 승인' + 답변 '게시' ---
 approval_json='{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"게시 대상: x,linkedin\n이 문구로 게시할까요?","header":"게시 승인","options":[{"label":"게시"},{"label":"수정"},{"label":"취소"}]}]},"tool_response":{"answers":{"게시 대상: x,linkedin\n이 문구로 게시할까요?":"게시"}}}'
 run_hook "$approval_json"

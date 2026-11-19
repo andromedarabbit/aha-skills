@@ -46,6 +46,7 @@ function photoFeed(posts, grid = false, options = {}) {
         return null;
       },
       querySelectorAll(selector) {
+        if (selector.startsWith('header [aria-label=')) return post.audience ? [{ ...attr({ 'aria-label': post.audience }), closest: () => root, getClientRects: () => [{}] }] : [];
         if (selector === 'a[href]') return post.href ? [anchor] : [];
         if (selector.includes('img[src]')) return images[slide] ?? [];
         return [];
@@ -140,7 +141,10 @@ test('readback은 지정 permalink의 빈 캡션과 사진만 읽고 다른 게�
 
 function composerFixture(options = {}) {
   const count = options.count ?? 1;
-  const log = { paths: [], stages: [], clicked: 0, gotos: [] };
+  const log = { paths: [], stages: [], clicked: 0, gotos: [], audienceChanges: 0 };
+  let audience = options.audience ?? 'Everyone';
+  let audienceOpen = false;
+  let audienceReads = 0, dialogReads = 0, channelReads = 0;
   let currentUrl = 'https://www.instagram.com/';
   let stage = 'select', files = [], caption = '', alts = Array(count).fill('');
   let previewsReady = !options.delayedPreview;
@@ -164,8 +168,26 @@ function composerFixture(options = {}) {
     stage = stage === 'select' ? 'edit' : 'caption'; log.stages.push(stage);
   } });
   const box = { focus() {}, get innerText() { return caption; } };
-  const channel = attrs({ 'aria-label': 'Share to Facebook', 'aria-checked': options.crossShare ? 'true' : 'false' });
+  const channel = { getAttribute(name) {
+    if (name === 'aria-label') return 'Share to Facebook';
+    if (name === 'aria-checked') return options.crossShare || options.lateCrossShare && channelReads++ >= 1 ? 'true' : 'false';
+    return null;
+  } };
   const heading = { innerText: options.foreignSuccess ? 'New post' : 'Your post has been shared.', getClientRects: () => options.hiddenSuccess ? [] : [{}] };
+  const audienceButton = {
+    getAttribute: name => ({ 'aria-label': 'Audience', 'aria-controls': options.staleMenu ? 'old-menu' : 'audience-menu' })[name] ?? null,
+    get innerText() {
+      if (options.audienceSwitch && audienceReads++ >= 2) return 'Everyone';
+      return audience;
+    },
+    getClientRects: () => options.hiddenAudience ? [] : [{}],
+    click() { audienceOpen = true; },
+  };
+  const choices = ['Everyone', 'Close Friends'].map(label => attrs({ role: 'radio' }, {
+    innerText: label, getClientRects: () => [{}],
+    click() { if (!options.selectionFails) audience = label; log.audienceChanges++; audienceOpen = false; },
+  }));
+  const privacy = attrs({ 'aria-label': 'Private account', 'aria-checked': options.privateAccount ? 'true' : 'false' }, { getClientRects: () => [{}] });
   const dialog = {
     isConnected: true,
     querySelector(selector) {
@@ -175,6 +197,8 @@ function composerFixture(options = {}) {
       return null;
     },
     querySelectorAll(selector) {
+      if (selector === '[aria-label="Audience"], [aria-label="공개 대상"]') return options.noAudience ? [] : [audienceButton];
+      if (selector.includes('[role="radio"]')) return audienceOpen && !options.noChoices ? choices : [];
       if (selector.includes('img[')) return options.partial ? images.slice(0, -1) : images;
       if (selector.includes('button') && !selector.includes('checkbox')) return [next];
       if (selector.includes('checkbox') || selector.includes('switch')) return [channel];
@@ -190,7 +214,8 @@ function composerFixture(options = {}) {
     if (!options.noEvidence) stage = 'shared';
   } });
   const document = {
-    querySelectorAll: selector => selector === 'div[role="dialog"]' ? [dialog] : selector.includes('svg[aria-label="New post"]') ? [{ closest: () => ({ click() { stage = 'select'; } }) }] : [],
+    getElementById: id => id === 'audience-menu' && audienceOpen ? { getClientRects: () => [{}], querySelectorAll: () => options.noChoices ? [] : choices } : null,
+    querySelectorAll: selector => selector.includes('Private account') ? (options.unknownPrivacy ? [] : [privacy]) : selector.includes('[role="radio"]') ? (audienceOpen && !options.noChoices ? choices : []) : selector === 'div[role="dialog"]' ? [options.staleComposer && dialogReads++ >= 2 ? { ...dialog } : dialog] : selector.includes('svg[aria-label="New post"]') ? [{ closest: () => ({ click() { stage = 'select'; } }) }] : [],
     querySelector: selector => selector.includes('[aria-label="Share"]') ? (stage === 'caption' ? share : null) : selector === 'div[role="dialog"]' ? dialog : dialog.querySelector(selector),
     createElement() {
       let image;
@@ -227,7 +252,8 @@ function composerFixture(options = {}) {
   const media = Array.from({ length: count }, (_, index) => ({ path: `/synthetic/photo-${index}.jpg`, alt: `설명 ${index}` }));
   return { log, media, child, page, context, get alts() { return alts; },
     async prepare() { child.media = media; return vm.runInContext("cfg.prepareMedia(media, code => { throw Object.assign(Error(code), {code}); })", child); },
-    async verify() { return vm.runInContext("cfg.verifyBeforeShare(media, '', 'me', code => { throw Object.assign(Error(code), {code}); })", child); },
+    async select(visibility = 'private') { child.visibility = visibility; return vm.runInContext("PLATFORM_UI.instagram.setVisibility(page, visibility, code => { throw Object.assign(Error(code), {code}); }, sleep)", child); },
+    async verify() { await this.select(); return vm.runInContext("cfg.verifyBeforeShare(media, '', 'me', code => { throw Object.assign(Error(code), {code}); })", child); },
     shared() { stage = 'shared'; },
   };
 }
@@ -257,6 +283,60 @@ test('다른 위치의 성공 문구를 현재 피드 게시 증거로 쓰지 �
   assert.equal(await vm.runInContext('cfg.evidence()', fixture.child), false);
 });
 
+test('private는 현재 composer의 친한친구 선택을 읽어 확인한다', async () => {
+  const fixture = composerFixture();
+  await fixture.prepare(); await fixture.verify();
+  assert.equal(fixture.log.audienceChanges, 1);
+});
+
+for (const options of [{ noAudience: true }, { hiddenAudience: true }, { noChoices: true }, { staleMenu: true }, { staleComposer: true }, { selectionFails: true }, { audience: 'Followers' }]) {
+  test(`실제 childPost: 공개 범위 근거가 없거나 요청과 다르면 Share 0회 ${JSON.stringify(options)}`, () => {
+    const result = transmitted(options);
+    assert.equal(result.output.status, 'POST_FAILED', JSON.stringify(result.output));
+    assert.equal(result.output.reason, 'EGO_VISIBILITY_FAILED');
+    assert.equal(result.log.clicked, 0);
+  });
+}
+
+test('실제 childPost: 확인 뒤 공개 범위가 바뀌면 최종 클릭도 거부한다', () => {
+  const result = transmitted({ audienceSwitch: true, audience: 'Close Friends' });
+  assert.equal(result.output.status, 'POST_FAILED', JSON.stringify(result.output));
+  assert.equal(result.output.reason, 'EGO_VISIBILITY_FAILED');
+  assert.equal(result.log.clicked, 0);
+});
+
+for (const options of [{ privateAccount: true }, { unknownPrivacy: true }]) test(`public은 공개 계정 근거가 없으면 첨부 전 중단 ${JSON.stringify(options)}`, () => {
+  const result = transmitted({ ...options, visibility: 'public' });
+  assert.equal(result.output.status, 'POST_FAILED', JSON.stringify(result.output));
+  assert.equal(result.output.reason, 'EGO_VISIBILITY_FAILED');
+  assert.equal(result.log.paths.length, 0);
+  assert.equal(result.log.clicked, 0);
+});
+
+for (const [options, reason] of [[{ lateIdentitySwitch: true }, 'EGO_ACCOUNT_MISMATCH'], [{ lateCrossShare: true }, 'EGO_READBACK_MISMATCH']]) test(`최종 클릭과 같은 DOM 검사에서 계정·동시 공유 변경도 차단한다 ${reason}`, () => {
+  const result = transmitted(options);
+  assert.equal(result.output.status, 'POST_FAILED', JSON.stringify(result.output));
+  assert.equal(result.output.reason, reason);
+  assert.equal(result.log.clicked, 0);
+});
+
+test('공개 계정의 public은 Everyone을 확인하고 Share 한 번만 실행한다', () => {
+  const result = transmitted({ visibility: 'public', audience: 'Close Friends' });
+  assert.equal(result.output.status, 'POSTED', JSON.stringify(result.output));
+  assert.equal(result.log.clicked, 1);
+  assert.equal(result.log.audienceChanges, 1);
+  assert.ok(result.log.gotos.includes('https://www.instagram.com/accounts/account_privacy/'));
+});
+
+for (const [audience, matched] of [[undefined, null], ['Close Friends', true], ['Everyone', false]]) test(`read-back은 캡션 성공과 사후 범위 확인을 분리한다: ${audience}`, () => {
+  const result = transmitted({ posts: [{ href: '/p/target/', text: '게시 본문', audience, slides: [[photo('one')]] }] }, 'readback', { visibility: 'private' });
+  assert.equal(result.output.status, 'READBACK_DONE');
+  assert.equal(result.output.matched, true);
+  assert.equal(result.output.results[0].captionMatched, true);
+  assert.equal(result.output.results[0].audience.matched, matched);
+  assert.deepEqual(result.log.gotos, ['https://www.instagram.com/p/target/']);
+});
+
 const work = mkdtempSync(join(tmpdir(), 'instagram-vm-'));
 const script = fileURLToPath(new URL('../ego-post.mjs', import.meta.url));
 const modulePath = new URL('../platforms/instagram.mjs', import.meta.url).href;
@@ -282,7 +362,7 @@ const fs = require('node:fs'), vm = require('node:vm'), webcrypto = require('nod
   const page = fixture.page;
   const originalAll = fixture.context.document.querySelectorAll;
   let profileReads = 0;
-  const own = { getAttribute: key => key === 'href' ? (options.identitySwitch && profileReads++ > 0 ? '/other/' : options.identity ?? '/me/') : null, getClientRects: () => [{}] };
+  const own = { getAttribute: key => key === 'href' ? (options.identitySwitch && profileReads++ > 0 || options.lateIdentitySwitch && profileReads++ > 1 ? '/other/' : options.identity ?? '/me/') : null, getClientRects: () => [{}] };
   fixture.context.document.querySelectorAll = selector => /nav|navigation/.test(selector) ? [own] : originalAll(selector);
   const gotos = [];
   const goto = page.goto.bind(page);
@@ -298,7 +378,7 @@ const fs = require('node:fs'), vm = require('node:vm'), webcrypto = require('nod
   const end = source.lastIndexOf(').catch(() => {');
   if (start < 0 || end < start) throw Error('missing actual childPost invocation');
   const args = JSON.parse('[' + source.slice(start + 2, end) + ']');
-  args[1] = 'instagram'; args[2] = [options.body ?? '게시 본문'];
+  args[1] = 'instagram'; args[2] = [options.body ?? '게시 본문']; args[5] = options.visibility ?? 'private';
   source = source.slice(0, start + 2) + args.map(value => JSON.stringify(value)).join(', ') + source.slice(end);` : ''}
   const runtime = { console: options.responseLoss ? { log() {} } : console, URL, Symbol, Buffer, taskSpace: async () => ({ pages: async () => [{ label: 'one' }], page: () => page,
       newPage: async () => {
@@ -328,7 +408,7 @@ const fs = require('node:fs'), vm = require('node:vm'), webcrypto = require('nod
   writeFileSync(join(directory, 'binding.json'), JSON.stringify({ transport: 'ego-post/1', executable, taskSpaceName: 'social-posting-skill', egoVersion: 'test', identity: { instagram: 'me', x: 'me' } }));
   const media = Array.from({ length: scenario.count ?? 1 }, (_, index) => ({ path: `/synthetic/photo-${index}.jpg`, alt: `설명 ${index}` }));
   const payload = command === 'post' ? { platform: 'x', format: 'single', body: '게시 본문', media, link: '', visibility: 'keep', identity: 'me' }
-    : command === 'readback' ? { urls: ['https://www.instagram.com/p/target/'], bodies: [scenario.body ?? '게시 본문'] }
+    : command === 'readback' ? { urls: ['https://www.instagram.com/p/target/'], bodies: [scenario.body ?? '게시 본문'], ...changes }
       : { platform: 'instagram', since: '2026-11-14T00:00:00Z', until: '2026-11-15T00:00:00Z', cursor: null, ...changes };
   const args = command === 'setup' ? ['setup', '--platform', 'instagram', '--force'] : command === 'bootstrap' ? ['bootstrap', '--platform', 'instagram', '--count', '2'] : [command];
   const result = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', input: JSON.stringify(payload), env: { ...process.env, SOCIAL_EGO_STATE_DIR: directory }, timeout: 10000 });

@@ -7,7 +7,10 @@
 - 캡션 **2200 Unicode codepoint 이하**는 이 저장소의 로컬 초안 정책이다. Instagram 웹의 공식 계수 단위를 입증한 값이 아니다.
 - 영상·릴스·스토리·DM·댓글 체인·이미지 생성과 자동 편집·프로필 및 계정 설정 변경은 범위 밖이다.
 - 사진 상한을 넘으면 사용자가 최대 20장을 선택한다. 자동 삭제·절삭·여러 게시물로 분할하지 않는다.
-- 현재 Instagram 게시 실행은 `INSTAGRAM_UNVERIFIED`다. 캡션·사진 초안이 유효해도 게시 가능 상태를 뜻하지 않는다.
+- 게시 기본값 private는 기존 친한친구 목록에만 실제 발행이다. 로컬 초안·나만 보기·비공개 계정 팔로워 전체 공개가 아니다. visibility 생략은 private, 명시적 keep은 거부한다.
+- 조회·비교·초안은 게시 권한이 아니다. 명시적 게시 요청 또는 사전에 허용한 게시 작업의 private만 건별 사람 승인을 생략하며 사람 승인으로 기록하지 않는다.
+- public은 공개 계정과 Everyone의 실제 UI 증거 및 캡션·사진·계정·범위에 결합된 AskUserQuestion 사람 승인이 필요하다. 승인 뒤 변경은 재승인한다.
+- 실제 composer의 대상 선택·Share 직전 재확인이 불가능하거나 불명·팔로워 공개·다른 계정이면 Share 전에 중단한다. 계정 설정·계정 유형·친한친구 목록 변경이나 public 대체는 하지 않는다.
 
 ## 사진·권리·접근성
 
@@ -27,7 +30,7 @@ alt는 관찰한 사진의 정보와 맥락을 설명한다. 캡션을 그대로
 
 고정글은 최신순의 근거가 아니다. 동일 게시물의 캡션·시각·사진·작성자만 연결하며 댓글·추천 글·아바타·영상 썸네일은 제외한다. 시간 미상·일부 carousel만 관찰한 결과와 `coverage.complete:false`를 그대로 보고한다.
 
-read-back에서 캡션 일치와 사진 수·순서·alt 확인 여부는 별개다. 확인하지 못한 사진 구성을 검증 성공으로 표시하지 않는다. `POSTED`의 URL 미회수는 실패가 아니며 `POST_UNKNOWN`·`PARTIAL_POSTED`를 자동 재게시 근거로 쓰지 않는다.
+read-back은 captionMatched·media.complete·audience.requested/observed/matched를 분리한다. 요청 범위는 private/public, 관찰 범위는 close_friends/public/unknown, 범위 일치는 true/false/null이다. 확인하지 못한 사진·범위를 검증 성공으로 표시하지 않는다. 게시 결과의 audience.beforeShare와 afterShare: unknown도 사후 확인 성공을 뜻하지 않는다. `POSTED`의 URL 미회수는 실패가 아니며 사후 범위 불명·불일치로 POSTED를 취소·삭제·재게시하지 않는다. `POST_UNKNOWN`·`PARTIAL_POSTED`도 자동 재시도하지 않는다.
 
 ## 근거와 미확인 범위
 
@@ -37,4 +40,6 @@ read-back에서 캡션 일치와 사진 수·순서·alt 확인 여부는 별개
 - [Instagram 이미지 해상도 안내](https://help.instagram.com/1631821640426723/): 모바일 앱 기준 안내. 웹 업로드 하드 제약으로 옮기지 않는다.
 - [UC Berkeley Digital Accessibility — 이미지와 캡션](https://dap.berkeley.edu/social-media/images): 캡션 2,200자 보조 자료. Instagram 웹 계수 단위의 근거는 아니다.
 
-실환경 검증·검증용 차단 코드 변경·일반 사용 차단 해제는 별도 승인 대상이다. 일반 non-scan 로컬 사진에는 scan 사진과 같은 승인 후 파일 변경 방어가 없다는 한계를 유지한다.
+UI는 합성 fixture만 검증했으며 실서비스는 미확인이다. 웹 composer의 친한친구 대상 지원을 약속하지 않고 관찰할 수 없으면 중단한다. 실환경 계정·사진 업로드·게시 검증은 별도 승인 대상이며 dry-run은 정적 검사일 뿐 게시 허가가 아니다.
+
+모든 Instagram 사진은 일반 non-scan 로컬 사진도 읽기 전용 사본으로 동결한다. public은 승인 전에 사진 sha256을 초안에 기록하고, 승인 뒤 바이트·순서·alt 변경은 재승인한다. scan 사진의 manifest·사진 hash·출처 digest 검사는 유지한다. 이 보장을 다른 플랫폼의 일반 로컬 파일에 확대하지 않는다.
