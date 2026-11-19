@@ -88,9 +88,13 @@ main() {
   # 전체 대상을 검증한 뒤에만 영수증을 쓴다. 누락을 전체 승인으로 복구하지 않는다.
   local digests draft name digest platforms_line
   platforms_line="$(sed -n 's/^platforms:[[:space:]]*//p' "$job/job-state.md" 2>/dev/null | head -1)"
+  # pipefail 아래에서 `tr | grep -q`는 grep이 먼저 끝나면 tr이 SIGPIPE로 실패해 일치를
+  # 불일치로 뒤집는다(CI 실측: 승인 누락) — 목록을 한 번 만들어 here-string으로 검사한다.
+  local platform_list
+  platform_list="$(printf '%s' "$platforms_line" | tr -d '[]' | tr -d '[:space:]' | tr ',' '\n')"
   digests="{}"
   while IFS= read -r name; do
-    printf '%s' "$platforms_line" | tr -d '[]' | tr -d '[:space:]' | tr ',' '\n' | grep -Fxq "$name" || exit 0
+    grep -Fxq "$name" <<<"$platform_list" || exit 0
     draft="$job/drafts/$name.md"
     [ -f "$draft" ] || exit 0
     digest="$(hash_file "$draft")" || exit 0

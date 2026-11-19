@@ -143,4 +143,23 @@ if ! printf '%s' "$approval_json" | env -u SOCIAL_POSTING_JOB bash "$HOOK"; then
   fail "작업 없음에도 exit 0이어야 한다"
 fi
 
+# --- 7. 플랫폼 목록 검사의 SIGPIPE 경합 회귀 (CI 실측: 다중 플랫폼 승인 누락) ---
+# tr stub이 첫 줄만 쓰고 잠시 뒤 나머지를 쓴다. 검사가 `tr | grep -q` 파이프면 grep이 첫 줄에서
+# 끝난 뒤 나머지 쓰기가 SIGPIPE로 죽고 pipefail이 일치를 실패로 뒤집어 영수증이 비게 된다.
+real_tr="$(command -v tr)"
+stub_bin="$sandbox/stub-bin"
+mkdir -p "$stub_bin"
+cat >"$stub_bin/tr" <<EOF
+#!/bin/bash
+out="\$("$real_tr" "\$@"; printf .)"; out="\${out%.}"
+printf '%s\n' "\${out%%\$'\n'*}"
+sleep 0.3
+case "\$out" in *\$'\n'*) printf '%s' "\${out#*\$'\n'}" ;; esac
+EOF
+chmod +x "$stub_bin/tr"
+rm -f "$receipt"
+printf '%s' "$approval_json" | PATH="$stub_bin:$PATH" SOCIAL_POSTING_JOB="$job" bash "$HOOK"
+jq -e '.approved_digests | keys == ["linkedin", "x"]' "$receipt" >/dev/null 2>&1 \
+  || fail "grep이 먼저 끝나 앞단 tr이 SIGPIPE를 받아도 다중 플랫폼 승인이 기록돼야 한다"
+
 echo "✅ record-approval.test.sh 통과"
