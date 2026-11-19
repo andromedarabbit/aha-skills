@@ -2,6 +2,9 @@ import { spawn } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 
 const MAX_OUTPUT = 2 * 1024 * 1024;
+// read fullText 검증 상한: 자르지 않은 원문이 이보다 길면 조용히 자르지 않고 스키마 실패로 멈춘다.
+// shortcut: LinkedIn 메시지 길이 제한(약 8,000자)보다 넉넉히 잡은 값 — 실측으로 더 긴 원문이 나오면 올린다.
+const FULL_TEXT_MAX = 20000;
 const TIMEOUT_MS = 125000;
 const ORIGIN = 'https://www.linkedin.com';
 const fail = (code, reason) => Object.assign(new Error, { code, reason });
@@ -1129,7 +1132,8 @@ async function readThread(spaceName, threadUrl, maxEventChars, maxEvents, deadli
         const clone = row.cloneNode(true);
         for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
         const parts = clone.children.length ? [...clone.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean) : [(clone.textContent || '').replace(/\s+/g, ' ').trim()];
-              return { senderIsOther: isOther, text: parts.join(' ').slice(0, eventTextMax) };
+              const text = parts.join(' ');
+              return { senderIsOther: isOther, text: eventTextMax == null ? text : text.slice(0, eventTextMax) };
       };
       const rows = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
       const renderedCount = rows.length;
@@ -1154,7 +1158,7 @@ export async function readEgoThread(binding) {
   if (!validString(binding.executable, 4096) || !isAbsolute(binding.executable)) throw fail('INVALID_ARGUMENT');
   if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
   if (typeof binding.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}={0,2}$/.test(binding.threadSeg)) throw fail('INVALID_ARGUMENT');
-  if (!Number.isSafeInteger(binding.maxEventChars) || binding.maxEventChars < 40 || binding.maxEventChars > 1000) throw fail('INVALID_ARGUMENT');
+  if (binding.maxEventChars !== null && (!Number.isSafeInteger(binding.maxEventChars) || binding.maxEventChars < 40 || binding.maxEventChars > 1000)) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.maxEvents) || binding.maxEvents < 1 || binding.maxEvents > 50) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 60000) throw fail('INVALID_ARGUMENT');
   const threadUrl = `https://www.linkedin.com/messaging/thread/${binding.threadSeg}/`;
@@ -1163,7 +1167,7 @@ export async function readEgoThread(binding) {
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   const eventsOk = Array.isArray(output.events) && output.events.length <= 50 &&
     output.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
-      typeof e.text === 'string' && e.text.length >= 1 && e.text.length <= 1000);
+      typeof e.text === 'string' && e.text.length >= 1 && e.text.length <= (binding.maxEventChars ?? FULL_TEXT_MAX));
   if (!exactKeys(output, ['status', 'events', 'renderedCount', 'returnedCount', 'truncatedFromOldest']) || output.status !== 'THREAD_READ' ||
       !Number.isSafeInteger(output.renderedCount) || output.renderedCount < 0 || output.renderedCount > 1999 ||
       !Number.isSafeInteger(output.returnedCount) || output.returnedCount < 0 || output.returnedCount > 50 ||
@@ -1214,7 +1218,7 @@ async function captureThread(spaceName, threadUrl, selfProfileId, maxEventChars,
       .map(m => ({
         deliveredAt: Number(m.deliveredAt) || 0,
         senderIsOther: !String(m['*sender'] || '').includes(selfProfileId),
-        text: String((m.body && m.body.text) || '').replace(/\s+/g, ' ').trim().slice(0, maxEventChars),
+        text: (t => maxEventChars == null ? t : t.slice(0, maxEventChars))(String((m.body && m.body.text) || '').replace(/\s+/g, ' ').trim()),
       }))
       .filter(e => e.text)
       .sort((a, b) => a.deliveredAt - b.deliveredAt);
@@ -1236,7 +1240,7 @@ export async function captureEgoThread(binding) {
   if (!validString(binding.taskSpaceName, 512) || binding.taskSpaceName.startsWith('-')) throw fail('INVALID_ARGUMENT');
   if (typeof binding.threadSeg !== 'string' || !/^2-[A-Za-z0-9_-]{2,254}={0,2}$/.test(binding.threadSeg)) throw fail('INVALID_ARGUMENT');
   if (typeof binding.selfProfileId !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(binding.selfProfileId)) throw fail('INVALID_ARGUMENT');
-  if (!Number.isSafeInteger(binding.maxEventChars) || binding.maxEventChars < 40 || binding.maxEventChars > 1000) throw fail('INVALID_ARGUMENT');
+  if (binding.maxEventChars !== null && (!Number.isSafeInteger(binding.maxEventChars) || binding.maxEventChars < 40 || binding.maxEventChars > 1000)) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.maxEvents) || binding.maxEvents < 1 || binding.maxEvents > 50) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(binding.deadlineMs) || binding.deadlineMs < 5000 || binding.deadlineMs > 60000) throw fail('INVALID_ARGUMENT');
   const threadUrl = `https://www.linkedin.com/messaging/thread/${binding.threadSeg}/`;
@@ -1246,7 +1250,7 @@ export async function captureEgoThread(binding) {
   if (exactKeys(output, ['status']) && (EGO_STEP_CODES.includes(output.status) || captureCodes.includes(output.status))) throw Object.assign(fail(output.status), { detail: String(output.diagTmp ?? output.reason ?? '') || null });
   const eventsOk = Array.isArray(output.events) && output.events.length <= 50 &&
     output.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
-      typeof e.text === 'string' && e.text.length >= 1 && e.text.length <= 1000);
+      typeof e.text === 'string' && e.text.length >= 1 && e.text.length <= (binding.maxEventChars ?? FULL_TEXT_MAX));
   if (!exactKeys(output, ['status', 'events', 'renderedCount', 'returnedCount', 'truncatedFromOldest']) || output.status !== 'CAPTURED' ||
       !Number.isSafeInteger(output.renderedCount) || output.renderedCount < 0 || output.renderedCount > 1999 ||
       !Number.isSafeInteger(output.returnedCount) || output.returnedCount < 0 || output.returnedCount > 50 ||
