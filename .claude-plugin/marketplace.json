@@ -36,7 +36,8 @@
         "./threads-expert",
         "./linkedin-expert",
         "./instagram-expert",
-        "./linkedin-followup"
+        "./linkedin-followup",
+        "./social-sync"
       ]
     },
     {
