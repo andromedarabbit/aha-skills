@@ -138,7 +138,7 @@ bash "$SKILL_DIR/scripts/tests/run.sh"
 | `scan` | 빈 입력 또는 `{}` | 후보·검토 필요 항목·조회 범위. 1.12.0부터 `/messaging/` 로드 때 수신한 응답으로 발신자를 바로 확정한다 — 개방 0회 가능. 응답에 없는 항목만 상세 개방 폴백 |
 | `prepare` | `conversationId`, 현재 하네스 `sessionId`, 최종 `text` | 새 job과 정확한 승인 질문 |
 | `send` | `jobId`, 동일한 `sessionId` | 승인·최신성 대조 후 `SENT` 또는 차단·`UNKNOWN` |
-| `read` | `transport`·`executable`·`taskSpaceName`, `conversationUuid` (선택 `maxEventChars` 기본 300·`maxEvents` 기본 12) | 기록된 스레드 seg로 직행해 렌더된 메시지 이력을 반환. 수동 전용 |
+| `read` | `transport`·`executable`·`taskSpaceName`, `conversationUuid` (선택 `maxEventChars` 기본 300·`maxEvents` 기본 12, 원문 전체 요청 시 `fullText: true`) | 기록된 스레드 seg로 직행해 렌더된 메시지 이력을 반환. 수동 전용 |
 
 본문은 줄바꿈·한글·따옴표·마지막 공백까지 그대로 보존합니다. 본문을 명령 인자로 넘기지 않습니다.
 `prepare.question`을 단독 `AskUserQuestion` 문항으로 그대로 전달해야 합니다.

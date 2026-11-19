@@ -802,6 +802,10 @@ export async function readEgo(input, mode = 'manual') {
   if (input.maxEventChars !== undefined) keys.push('maxEventChars');
   if (input.maxEvents !== undefined) keys.push('maxEvents');
   if (input.source !== undefined) keys.push('source');
+  if (input.fullText !== undefined) keys.push('fullText');
+  // fullText: 사용자가 특정 메시지 원문을 명시 요청한 수동 회차 전용 — 행당 자르기를 끈다.
+  // maxEventChars와 함께 줄 수 없고, 무인 회차에서는 거부한다(scan은 고정 300자 상한 그대로).
+  if (input.fullText !== undefined && (input.fullText !== true || input.maxEventChars !== undefined || mode !== 'manual')) throw fail('INVALID_ARGUMENT');
   if (Object.keys(input).some(key => !keys.includes(key)) ||
       input.transport !== 'ego-ui/1' || typeof input.executable !== 'string' || !input.executable.startsWith('/') ||
       input.executable.length > 4096 || /[\x00-\x1f\x7f]/.test(input.executable) || typeof input.taskSpaceName !== 'string' ||
@@ -810,9 +814,9 @@ export async function readEgo(input, mode = 'manual') {
       (input.source !== undefined && !['capture', 'dom', 'auto'].includes(input.source))) throw fail('INVALID_ARGUMENT');
   // unattended 회차는 캡처(비공식 API 응답 읽기)를 시도하지 않는다 — DOM 관측만 허용된다.
   const source = mode === 'unattended' ? 'dom' : (input.source ?? 'auto');
-  const maxEventChars = input.maxEventChars ?? 300;
+  const maxEventChars = input.fullText ? null : (input.maxEventChars ?? 300);
   const maxEvents = input.maxEvents ?? 12;
-  if (!Number.isSafeInteger(maxEventChars) || maxEventChars < 40 || maxEventChars > 1000) throw fail('INVALID_ARGUMENT');
+  if (maxEventChars !== null && (!Number.isSafeInteger(maxEventChars) || maxEventChars < 40 || maxEventChars > 1000)) throw fail('INVALID_ARGUMENT');
   if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 50) throw fail('INVALID_ARGUMENT');
   const link = egoBinding();
   if (link.executable !== input.executable || link.taskSpaceName !== input.taskSpaceName) throw fail('NEEDS_SETUP');

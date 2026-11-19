@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -88,7 +88,7 @@ const pageStub = (label, baseUrl) => ({
     press: async key => { record('key:' + key); },
     insertText: async text => { record('insertText'); },
   },
-  evaluate: async fn => {
+  evaluate: async (fn, arg) => {
     record('evaluate');
     // 폴링 코드와 큐의 정렬을 피한다: evaluate 대상 함수 소스로 종별을 판정해 고정 응답을 serve하고,
     // readItems(목록 순회 시나리오)만 큐 기반으로 둔다.
@@ -109,7 +109,10 @@ const pageStub = (label, baseUrl) => ({
         if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, readEventsQueue: state.readEventsQueue }));
         return next;
       }
-      return state.readEvents ?? null;
+      // 실제 추출 evaluate처럼 행당 본문 상한 인자(arg)를 적용한다 — null(fullText)이면 자르지 않는다.
+      const read = state.readEvents ?? null;
+      if (!read || typeof arg !== 'number') return read;
+      return { ...read, events: read.events.map(e => ({ ...e, text: e.text.slice(0, arg) })) };
     }
     if (src.includes('cloneNode')) {
       if (Array.isArray(state.threadQueue) && state.threadQueue.length) {
@@ -978,7 +981,8 @@ test('무인 read는 BLOCKED_UNATTENDED로 차단된다', t => {
   assert.equal(f.records('calls').length, 1);
 });
 
-for (const patch of [{ extra: 1 }, { conversationUuid: 'short' }, { transport: 'aside-ui/1' }, { maxEventChars: 10 }, { maxEvents: 0 }]) {
+for (const patch of [{ extra: 1 }, { conversationUuid: 'short' }, { transport: 'aside-ui/1' }, { maxEventChars: 10 }, { maxEvents: 0 },
+  { fullText: 'yes' }, { fullText: true, maxEventChars: 1000 }]) {
   test(`read의 잘못된 입력은 자식 시작 전에 거부한다: ${Object.keys(patch)[0]}`, t => {
     const f = scanSetup(t);
     const result = f.runRead(patch);
@@ -1114,6 +1118,47 @@ test('read capture 명시는 실패 시 폴백 없이 실패를 반환한다', t
   f.save({ resourceUrls: [] });
   const result = f.runRead({ source: 'capture', maxEvents: 10, maxEventChars: 300 });
   assert.equal(result.data.status, 'CAPTURE_NO_ENDPOINT');
+});
+
+// 회귀: 1,000자를 넘는 메시지의 원문 요청이 기존 상한(1,000자)에서 잘리지 않아야 한다.
+const LONG_ORIGINAL = Array.from({ length: 60 }, (_, i) => `문단${String(i + 1).padStart(2, '0')} 원문 끝까지 확인합니다.`).join(' ');
+
+test('read fullText는 1,000자를 넘는 DOM 메시지 원문을 자르지 않고 반환하고 저장하지 않는다', t => {
+  assert.ok(LONG_ORIGINAL.length > 1000);
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({ resourceUrls: [], readEvents: { renderedCount: 1, events: [{ senderIsOther: true, text: LONG_ORIGINAL }] } });
+  assert.equal(f.runRead({ maxEvents: 1 }).data.events[0].text.length, 300, '기본 read는 300자 상한을 유지한다');
+  assert.equal(f.runRead({ maxEvents: 1, maxEventChars: 1000 }).data.events[0].text.length, 1000, '숫자 상한은 여전히 최대 1,000자다');
+  const result = f.runRead({ maxEvents: 1, fullText: true });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.source, 'dom');
+  assert.equal(result.data.events[0].text, LONG_ORIGINAL, '원문 전체를 그대로 반환한다');
+  const stateDir = join(f.home, '.local/share/aha-skills/linkedin-replies');
+  const persisted = readdirSync(stateDir, { recursive: true }).map(name => join(stateDir, name))
+    .filter(path => statSync(path).isFile()).some(path => readFileSync(path, 'utf8').includes('문단01'));
+  assert.equal(persisted, false, '원문은 상태 디렉토리에 저장되지 않는다');
+});
+
+test('read fullText는 캡처 경로에서도 1,000자를 넘는 원문을 자르지 않는다', t => {
+  const f = detailSetup(t);
+  assert.equal(f.runScan({ detailOpenCap: 1 }).data.status, 'OK');
+  f.save({
+    resourceUrls: [CAPTURE_URL],
+    fetchResponse: { ok: true, status: 200, body: JSON.stringify({ included: [captureMessage(1000, false, LONG_ORIGINAL)] }) },
+    readEvents: { renderedCount: 1, events: [{ senderIsOther: true, text: LONG_ORIGINAL }] },
+  });
+  const result = f.runRead({ maxEvents: 1, fullText: true });
+  assert.equal(result.data.status, 'OK');
+  assert.equal(result.data.source, 'capture', '교차 검증이 전체 원문 기준으로 일치한다');
+  assert.equal(result.data.events[0].text, LONG_ORIGINAL);
+});
+
+test('무인 read는 fullText를 줘도 BLOCKED_UNATTENDED로 차단된다', t => {
+  const f = scanSetup(t);
+  const result = f.runReply({ conversationUuid: '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c', fullText: true }, 'unattended', 'read');
+  assert.equal(result.data.status, 'BLOCKED_UNATTENDED');
+  assert.equal(f.records('calls').length, 1);
 });
 
 test('InMail 제목형 프리뷰는 내용이 읽히면 DOM 발신자 판정으로 후보 승격한다', t => {
