@@ -77,7 +77,7 @@ LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬
 
 ### [social-posting](skills/social-experts/social-posting)
 
-**버전**: 0.13.0
+**버전**: 0.13.1
 
 선택한 소셜미디어 그룹의 조회·교차 비교·초안·승인·게시를 조정한다. "Facebook 글을 X와 Bluesky에 맞춰줘", "선택한 플랫폼만 준비해줘", "최근 글 확인해서 다른 곳에도 올려줘", "/social-posting" 요청할 때 사용한다. 단일 플랫폼 작업도 호환하며 전용 x-expert·facebook-expert·bluesky-expert·threads-expert·linkedin-expert·instagram-expert로 직접 요청할 수 있다. 요청한 동작만 수행하고 기존 초안 게시에 재작성을 강제하지 않는다. 최근 글은 Facebook·Threads·X·Bluesky의 기본 최근 24시간(기간 변경 가능), LinkedIn scan은 비지원이다. X·Bluesky 답글 체인·사진을 지원한다. Instagram 사진 피드 조회·비교·캡션/사진 초안을 지원하며 Instagram·Threads 게시는 실환경 미검증으로 차단한다. 유사 후보 확인과 최종 게시 승인은 별도이며 표시한 대상만 승인한다. 무인 실행은 수집·비교·보고만 한다.
 

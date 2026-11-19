@@ -301,13 +301,27 @@ const fs = require('node:fs'), vm = require('node:vm'), webcrypto = require('nod
   args[1] = 'instagram'; args[2] = [options.body ?? '게시 본문'];
   source = source.slice(0, start + 2) + args.map(value => JSON.stringify(value)).join(', ') + source.slice(end);` : ''}
   const runtime = { console: options.responseLoss ? { log() {} } : console, URL, Symbol, Buffer, taskSpace: async () => ({ pages: async () => [{ label: 'one' }], page: () => page,
-      newPage: async () => { log.detailPages++; const detail = page.fork(); detail.close = async () => { log.detailClosed++; }; return detail; },
+      newPage: async () => {
+        log.detailPages++;
+        const detail = page.fork();
+        detail.close = async () => {
+          log.detailClosed++;
+          if (options.detailClose === 'rejected') throw Error('close failed');
+          if (options.detailClose === 'stalled') return new Promise(() => {});
+        };
+        return detail;
+      },
     }),
     Date: class extends Date { static now() { return clock; } },
     setTimeout: (callback, delay) => setImmediate(() => { clock += Math.min(delay, 1000); callback(); }),
     clearTimeout: handle => clearImmediate(handle),
   };
-  await vm.runInNewContext(source, runtime);
+  // 미해결 Promise만 남으면 Node가 정상 종료하므로 watchdog으로 실제 종료 정지를 재현한다.
+  const watchdog = options.detailClose === 'stalled' ? setTimeout(() => process.exit(1), 2000) : null;
+  try {
+    await vm.runInNewContext(source, runtime);
+    log.childCompleted = true;
+  } finally { clearTimeout(watchdog); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
 `;
   writeFileSync(executable, program); chmodSync(executable, 0o755);
@@ -354,6 +368,38 @@ test('상세 페이지에서 관찰이 중단돼도 앞 게시물과 부분 사�
   assert.equal(result.log.detailPages, 1);
   assert.equal(result.log.detailClosed, 1);
   assert.equal(result.log.profileClosed, 0);
+});
+
+for (const command of ['scan', 'bootstrap']) for (const detailClose of ['stalled', 'rejected']) {
+  test(`보조 페이지 종료 ${detailClose}에도 실제 ${command} 결과를 반환한다`, () => {
+    const result = transmitted({ detailClose, grid: true, posts: ['one', 'two'].map(id => ({
+      href: `/p/${id}/`, text: id, time: '2026-11-14T12:00:00Z', slides: [[photo(id)]],
+    })) }, command);
+    assert.equal(result.code, 0, JSON.stringify(result.output));
+    assert.equal(result.log.childCompleted, true);
+    assert.equal(result.log.detailClosed, 1);
+    assert.equal(result.log.profileClosed, 0);
+    const posts = command === 'scan' ? result.output.candidates : result.output.posts;
+    assert.deepEqual(posts.map(post => post.text), ['one', 'two']);
+    if (command === 'scan') {
+      assert.equal(result.output.coverage.observedCount, 2);
+      assert.equal(result.output.coverage.stopReason, 'SCROLL_STALLED');
+      assert.equal(result.output.coverage.complete, false);
+    }
+  });
+}
+
+test('보조 페이지 종료 정지에도 부분 수집 결과와 원래 관찰 중단 사유를 반환한다', () => {
+  const result = transmitted({ detailClose: 'stalled', grid: true, posts: [{
+    href: '/p/partial/', text: '부분 캡션', time: '2026-11-14T12:00:00Z',
+    observeError: true, slides: [[photo('one')], [photo('two')]],
+  }] }, 'scan');
+  assert.equal(result.log.childCompleted, true);
+  assert.equal(result.output.coverage.stopReason, 'EGO_EVAL_STOPPED');
+  assert.equal(result.output.coverage.observedCount, 1);
+  assert.equal(result.output.candidates[0].text, '부분 캡션');
+  assert.equal(result.output.candidates[0].media.length, 1);
+  assert.equal(result.output.candidates[0].mediaComplete, false);
 });
 
 test('read-back도 중단 전에 읽은 대상 캡션과 부분 사진 및 사유를 보존한다', () => {

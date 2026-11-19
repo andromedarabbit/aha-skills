@@ -419,7 +419,7 @@ async function childBootstrap(spaceName, platform, spec) {
     console.log(JSON.stringify(spec.scan ? { status: 'BOOTSTRAP_OBSERVED', posts: collected, stopReason: reason } : { status: reason }));
   } finally {
     if (detailPage) {
-      try { await detailPage.close(); } catch {}
+      try { await beforeDeadline(detailPage.close()); } catch {}
     }
     if (networkPage) {
       try { await beforeDeadline(networkPage.cdp('Network.disable')); } catch {}
