@@ -149,6 +149,15 @@ counts="$({ run_check "$job7d" || true; } | jq -c '.platforms.bluesky.counts')"
 [ "$counts" = "[3,2,2]" ] || fail "thread 3세그먼트 카운트가 [3,2,2]이어야 한다: $counts"
 run_check "$job7d" >/dev/null || fail "thread 3세그먼트 정상 초안은 exit 0이어야 한다"
 
+# --- Threads는 UI 단위 미검증: codepoint는 참고값이며 게시 가능을 뜻하지 않는다 ---
+job7e="$sandbox/job-threads"; mkdir -p "$job7e/drafts"
+t167="$(printf '가%.0s' $(seq 1 167))"
+printf -- '---\nplatform: threads\nformat: single\n---\n%s\n' "$t167" >"$job7e/drafts/threads.md"
+[ "$(post_count "$job7e" threads)" = "167" ] || fail "Threads 한글 167자를 전체 UTF-8 500바이트 규칙으로 막으면 안 된다"
+run_check "$job7e" | jq -e '.platforms.threads.lengthVerified == false and (.platforms.threads.warnings | length > 0)' >/dev/null || fail "Threads UI 미검증을 보고해야 한다"
+printf -- '---\nplatform: threads\nformat: thread\n---\n첫 글\n\n=== POST ===\n\n답글\n' >"$job7e/drafts/threads.md"
+run_check "$job7e" >/dev/null || fail "Threads 답글 초안은 준비할 수 있어야 한다"
+
 # --- 8. 의존성 부재 → fail-closed (uv 없는 python 직접 실행) ---
 if python3 "$CHECK" "$job" >/dev/null 2>&1; then
   # 로컬에 grapheme/yaml이 이미 깔려 있으면 이 검증은 의미 없다 — 스킵 아님, 다른 방식으로 확인
@@ -218,6 +227,16 @@ echo "$payload" | jq -e '.body == "첫 게시물 훅\n\n=== POST ===\n\n두 번�
 echo "$payload" | jq -e --arg p "$job14/plot.png" '.media[0].path == $p and .media[0].alt == "파티션 수별 런타임 그래프"' >/dev/null || fail "페이로드 media가 절대경로·alt를 담아야 한다: $payload"
 echo "$payload" | jq -e '.link == "https://example.com/run" and .format == "thread"' >/dev/null || fail "페이로드 link·format이 담겨야 한다: $payload"
 
+# 단일 대상 검사는 다른 초안의 파싱 오류를 무시하되 선택 초안의 제약은 지킨다.
+job_scoped="$sandbox/job-scoped"; mkdir -p "$job_scoped/drafts"
+printf -- '---\nplatform: x\nformat: single\n---\n선택한 X 본문\n' >"$job_scoped/drafts/x.md"
+printf -- '---\nplatform: facebook\nmedia: [\n---\n미완성 초안\n' >"$job_scoped/drafts/facebook.md"
+if run_check "$job_scoped" >/dev/null 2>&1; then fail "전체 검사는 미완성 Facebook 초안을 계속 거부해야 한다"; fi
+payload="$(uv run -q --with grapheme --with pyyaml python "$CHECK" "$job_scoped" --platform x)" || fail "--platform x는 무관한 Facebook 파싱 오류로 실패하면 안 된다"
+jq -e '.platform == "x" and .body == "선택한 X 본문"' <<<"$payload" >/dev/null || fail "단일 대상 페이로드는 선택 초안만 포함해야 한다"
+printf -- '---\nplatform: x\nformat: single\n---\n%s\n' "$k141" >"$job_scoped/drafts/x.md"
+if uv run -q --with grapheme --with pyyaml python "$CHECK" "$job_scoped" --platform x >/dev/null 2>&1; then fail "단일 대상 검사도 선택한 X의 길이 제약은 거부해야 한다"; fi
+
 # --- 15. 플랫폼 간 문형 중복: 10자 이상 공유 → 경고 (exit 0·ok true 유지) ---
 job15="$sandbox/job-dup"; mkdir -p "$job15/drafts"
 cat >"$job15/drafts/x.md" <<'EOF'
@@ -272,5 +291,156 @@ if run_check "$job19" >/dev/null 2>&1; then fail "본문+줄바꿈+link가 X 상
 printf -- '---\nplatform: x\nformat: thread\nlink: https://example.com/run\n---\n짧음\n\n=== POST ===\n\n%s\n' "$k140" >"$job19/drafts/x.md"
 counts="$(run_check "$job19" | jq -c '.platforms.x.counts')"
 [ "$counts" = '[28,280]' ] || fail "link는 첫 세그먼트에만 포함되어야 한다: $counts"
+
+# --- 20. scan media는 hash·provenance를 확인하고, 승인 뒤 변경되면 fail-closed ---
+job20="$sandbox/job-scan-media"; mkdir -p "$job20/drafts" "$job20/media"
+media="$job20/media/photo.png"
+printf 'image-bytes' >"$media"
+digest="$(shasum -a 256 "$media" | cut -d ' ' -f 1)"
+cat >"$job20/media/$digest.provenance.json" <<EOF
+{"sourceUrl":"https://cdn.example.test/photo.png","finalUrl":"https://cdn.example.test/photo.png","sourcePostUrl":"https://social.example.test/post/1","publisher":"publisher","observedAt":"2026-11-15T00:00:00Z","alt":"설명","contentType":"image/png","sha256":"$digest","bytes":11}
+EOF
+provenance_digest="$(shasum -a 256 "$job20/media/$digest.provenance.json" | cut -d ' ' -f 1)"
+cat >"$job20/drafts/x.md" <<EOF
+---
+platform: x
+format: single
+media:
+  - path: ./media/photo.png
+    alt: 설명
+    source: scan
+    sha256: $digest
+    provenance: ./media/$digest.provenance.json
+    provenance_sha256: $provenance_digest
+---
+scan한 사진을 포함한 본문
+EOF
+run_check "$job20" >/dev/null || fail "정상 scan media는 통과해야 한다"
+cp "$job20/media/$digest.provenance.json" "$sandbox/provenance-original.json"
+jq '.publisher = "changed-author"' "$sandbox/provenance-original.json" >"$job20/media/$digest.provenance.json"
+if run_check "$job20" >/dev/null 2>&1; then fail "파일·alt가 같아도 승인에 묶인 출처가 바뀌면 거부해야 한다"; fi
+cp "$sandbox/provenance-original.json" "$job20/media/$digest.provenance.json"
+printf 'replaced-image' >"$media"
+if run_check "$job20" >/dev/null 2>&1; then fail "scan media가 바뀌면 exit 1이어야 한다"; fi
+if uv run -q --with grapheme --with pyyaml python "$CHECK" "$job20" --platform x >/dev/null 2>&1; then fail "--platform도 바뀐 scan media를 거부해야 한다"; fi
+
+# --- 21. 복사 시점의 bytes·출처 변경과 symlink·비일반파일도 사본 검증으로 거부한다 ---
+printf 'image-bytes' >"$media"
+uv run -q --with grapheme --with pyyaml python -I - "$CHECK" "$job20" "$sandbox" <<'PY'
+import json
+import os
+from pathlib import Path
+import runpy
+import tempfile
+from unittest.mock import patch
+import sys
+
+checker = runpy.run_path(sys.argv[1])
+job, sandbox = sys.argv[2:]
+photo = Path(job, "media/photo.png")
+meta, _ = checker["parse_draft"](str(Path(job, "drafts/x.md")))
+provenance = Path(job, meta["media"][0]["provenance"])
+photo_bytes, provenance_bytes = photo.read_bytes(), provenance.read_bytes()
+copyfileobj = checker["shutil"].copyfileobj
+open_file = os.open
+
+for target in (photo, provenance):
+    for replacement in ("bytes", "symlink", "fifo"):
+        photo.write_bytes(photo_bytes)
+        provenance.write_bytes(provenance_bytes)
+        changed = False
+
+        def copy_with_race(src, dst):
+            global changed
+            if not changed:
+                changed = True
+                target.write_bytes(b"changed-during-copy")
+            return copyfileobj(src, dst)
+
+        def open_with_race(path, flags, *args, **kwargs):
+            global changed
+            if str(path) == str(target) and not changed:
+                changed = True
+                target.unlink()
+                if replacement == "symlink":
+                    target.symlink_to(Path(sandbox, "provenance-original.json"))
+                else:
+                    os.mkfifo(target)
+            return open_file(path, flags, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory(dir=sandbox) as snapshot:
+            race = patch.object(checker["shutil"], "copyfileobj", copy_with_race) if replacement == "bytes" else patch.object(os, "open", open_with_race)
+            with race:
+                try:
+                    checker["payload_for"]("x", job, snapshot)
+                except (checker["DraftFormatError"], OSError):
+                    pass
+                else:
+                    raise AssertionError(f"복사 중 {target.name} {replacement} 변경을 거부해야 한다")
+        if target.is_symlink() or replacement == "fifo":
+            target.unlink()
+        photo.write_bytes(photo_bytes)
+        provenance.write_bytes(provenance_bytes)
+
+with tempfile.TemporaryDirectory(dir=sandbox) as snapshot:
+    payload = checker["payload_for"]("x", job, snapshot)
+    frozen_photo = Path(payload["media"][0]["path"])
+    assert frozen_photo.read_bytes() == photo_bytes
+    assert frozen_photo != photo
+    assert (frozen_photo.parent / "0.provenance.json").read_bytes() == provenance_bytes
+    assert payload["media"][0] == {"path": str(frozen_photo), "alt": "설명"}
+print("scan snapshot: 정상 1건·복사 경합 거부 6건 통과")
+PY
+
+# Instagram은 하나의 사진 피드만 준비하며 웹 계수 검증과 로컬 정책을 구분한다.
+uv run -q --with grapheme --with pyyaml python -I - "$CHECK" "$sandbox" <<'PY'
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import yaml
+
+checker = runpy.run_path(sys.argv[1])
+job = Path(sys.argv[2], "job-instagram")
+(job / "drafts").mkdir(parents=True)
+photo = {"path": "./photo.png", "alt": "사진 설명"}
+draft = job / "drafts/instagram.md"
+
+def check(body="", media=None, **meta):
+    metadata = {"platform": "instagram", "format": "single", "media": [photo] if media is None else media, **meta}
+    draft.write_text("---\n" + yaml.safe_dump(metadata, allow_unicode=True) + "---\n" + body, encoding="utf-8")
+    return checker["check_platform"]("instagram", str(draft))
+
+for size in (1, 20):
+    result = check(media=[photo] * size)
+    assert result["ok"] and result["counts"] == [0], result
+    assert result["lengthVerified"] is False and result["warnings"], result
+    assert checker["parse_draft"](str(draft))[1] == [""]
+    payload = checker["payload_for"]("instagram", str(job))
+    assert payload["body"] == "" and len(payload["media"]) == size
+    assert payload["media"][0] == {"path": str(job / "photo.png"), "alt": "사진 설명"}
+    cli = subprocess.run([sys.executable, sys.argv[1], str(job), "--platform", "instagram"], capture_output=True, text=True)
+    assert cli.returncode == 0, cli.stderr
+for path in ("./photo.jpg", "./photo.JPEG", "./photo.webp"):
+    assert check(media=[{**photo, "path": path}])["ok"]
+for media in ([], [photo] * 21, [{**photo, "path": "./movie.mp4"}], [{**photo, "path": "./animated.gif"}], [{**photo, "path": ""}], [{**photo, "alt": " "}], [{**photo, "alt": 12}], [{**photo, "alt": None}]):
+    assert not check(media=media)["ok"], media
+assert not check(format="thread")["ok"]
+for body in ("a\n=== POST ===\nb", "\n=== POST ===\n"):
+    assert not check(body)["ok"], body
+for body in ("가" * 2200, "😊" * 2200, "é" * 1100, "a\nb" + "x" * 2197):
+    result = check(body)
+    assert result["ok"] and result["counts"] == [2200], result
+    assert not check(body + "x")["ok"]
+link = "https://example.com"
+body = "x" * (2200 - 1 - len(link))
+assert check(body, link=link)["ok"]
+assert not check(body + "x", link=link)["ok"]
+# 다른 플랫폼의 빈 본문 파싱·직접 게시 제한을 완화하지 않는다.
+x = job / "drafts/x.md"
+x.write_text("---\nplatform: x\nformat: single\n---\n", encoding="utf-8")
+assert checker["parse_draft"](str(x))[1] == []
+print("Instagram 초안: 사진 수·형식·alt·빈 캡션·codepoint·링크 경계 통과")
+PY
 
 echo "✅ check-drafts.test.sh 통과"

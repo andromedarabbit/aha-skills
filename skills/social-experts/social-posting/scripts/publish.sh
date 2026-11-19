@@ -1,7 +1,7 @@
 #!/bin/bash
 # publish.sh - 게시의 유일한 진입점. 직접 ego-browser를 호출하지 말고 이 스크립트를 경유한다.
 #
-# 게시 직전 6중 가드 (전부 이 스크립트가 강제 — 훅은 편의일 뿐, 강제력은 여기 있다):
+# 게시 직전 7중 가드 (전부 이 스크립트가 강제 — 훅은 승인 기록 담당):
 #   1. 플랫폼이 job-state.md의 platforms 안에 있는가 (Stage 2에서 사용자가 고른 대상)
 #   2. Ready 판정식 — approved_digests에 해당 플랫폼이 있고 drafts/<platform>.md의
 #      sha256과 일치 (승인 후 초안이 바뀌면 거부 = 실패-닫힘 가드)
@@ -11,6 +11,7 @@
 #   5. 승인 시점 계정 매핑(approved_accounts, 훅 스냅샷)과 현재 job-state가 일치하는가
 #      (승인 후 계정 변경 = 계정 재타깃 차단)
 #   6. 본문 동결 직후 원본 전체 파일 digest를 승인과 재검증 (검사→동결 사이 TOCTOU 차단)
+#   7. scan 사진·출처는 전용 사본의 승인 digest를 검증하고 사본만 실행층에 전달
 #
 # 통과하면 check-drafts 페이로드 JSON(본문·media 절대경로+alt·link·visibility)에 가드 4의
 # ego 신원을 실어 ego-post.mjs post(고정 스크립트 실행 계층)에 넘긴다. 게시 성공 신호는
@@ -56,6 +57,8 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$job" && -n "$platform" ]] || { usage; exit 1; }
 job="${job%/}"
+[[ "$platform" != "instagram" ]] || die "INSTAGRAM_UNVERIFIED — 실제 UI의 사진 피드·계정·첨부·read-back 검증 전 Instagram 게시는 차단됩니다"
+[[ "$platform" != "threads" ]] || die "THREADS_UNVERIFIED — 실제 UI의 길이·사진·답글·read-back 검증 전 Threads 게시는 차단됩니다"
 
 STATE_FILE="$job/job-state.md"
 [[ -f "$STATE_FILE" ]] || die "job-state.md가 없습니다: $STATE_FILE"
@@ -80,7 +83,7 @@ receipt_digest_matches "$platform" \
 command -v uv >/dev/null 2>&1 \
   || die "uv가 없어 하드 제약을 검사할 수 없습니다 — fail-closed로 게시를 거부합니다. 설치: curl -LsSf https://astral.sh/uv/install.sh | sh"
 check_out="$(
-  uv run -q --with grapheme --with pyyaml python "$SCRIPT_DIR/check-drafts.py" "$job" 2>&1
+  uv run -q --with grapheme --with pyyaml python "$SCRIPT_DIR/check-drafts.py" "$job" --platform "$platform" 2>&1
 )" || die "하드 제약 위반 — 게시를 거부합니다:
 $check_out"
 
@@ -102,11 +105,14 @@ if [[ -z "${SOCIAL_EGO_POST:-}" ]] && ! command -v node >/dev/null 2>&1; then
   die "node가 없어 ego 실행 계층(ego-post.mjs)을 돌릴 수 없습니다 — fail-closed로 게시를 거부합니다"
 fi
 
-payload_json="$(uv run -q --with grapheme --with pyyaml python "$SCRIPT_DIR/check-drafts.py" "$job" --platform "$platform")" \
-  || die "게시 페이로드 생성 실패 (초안 형식 오류 가능 — check-drafts를 다시 실행해 확인하세요)"
-
 frozen=""
-trap 'rm -f "$frozen"' EXIT
+frozen_media=""
+trap 'rm -f "$frozen"; [[ -z "$frozen_media" ]] || rm -rf "$frozen_media"' EXIT
+frozen_media="$(mktemp -d "${TMPDIR:-/tmp}/social-posting-media.XXXXXX")" \
+  || die "사진 동결용 임시디렉터리를 만들 수 없습니다"
+payload_json="$(uv run -q --with grapheme --with pyyaml python "$SCRIPT_DIR/check-drafts.py" "$job" --platform "$platform" --freeze-media "$frozen_media")" \
+  || die "게시 페이로드 생성 실패 (초안 형식·scan 사진 사본 검증을 확인하세요)"
+
 frozen="$(mktemp "${TMPDIR:-/tmp}/social-posting-body.XXXXXX")"
 printf '%s' "$payload_json" | jq -j '.body' >"$frozen"
 chmod 0400 "$frozen"
@@ -116,6 +122,11 @@ approved_digest="$(receipt_get ".approved_digests[\"$platform\"] // \"\"")"
 current_digest="$(hash_file "$DRAFT")"
 [[ -n "$approved_digest" && "$approved_digest" == "$current_digest" ]] \
   || die "승인 digest와 현재 초안이 일치하지 않습니다 — 가드 통과 후 초안이 변경됐습니다. Stage 8 승인을 다시 받으세요 (실패-닫힘 가드)"
+
+# --- 가드 7: 사본 동결 이후 원본 변경도 실행 전에 거부한다 (실행층은 검증한 사본만 읽음) ---
+check_out="$(
+  uv run -q --with grapheme --with pyyaml python "$SCRIPT_DIR/check-drafts.py" "$job" --platform "$platform" 2>&1
+)" || die "scan 미디어 재검증 실패 — 게시를 거부합니다:\n$check_out"
 
 media_count="$(printf '%s' "$payload_json" | jq '.media | length')"
 link="$(printf '%s' "$payload_json" | jq -r '.link // ""')"

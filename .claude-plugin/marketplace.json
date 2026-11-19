@@ -25,11 +25,17 @@
     },
     {
       "name": "social-experts",
-      "description": "소셜미디어 게시와 LinkedIn 회신 — 승인 후 게시하거나 미응답 대화의 회신 초안을 검토·전송하고 Orca 정기 확인 등록을 지원",
+      "description": "플랫폼별 소셜 전문가와 선택 그룹 게시 조정, 기존 LinkedIn 회신 검토·전송 및 Orca 정기 확인 등록 지원",
       "source": "./skills/social-experts",
       "strict": false,
       "skills": [
         "./social-posting",
+        "./x-expert",
+        "./facebook-expert",
+        "./bluesky-expert",
+        "./threads-expert",
+        "./linkedin-expert",
+        "./instagram-expert",
         "./linkedin-followup"
       ]
     },

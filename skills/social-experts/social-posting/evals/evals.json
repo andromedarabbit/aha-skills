@@ -1,0 +1,71 @@
+{
+  "skill_name": "social-posting",
+  "evals": [
+    {
+      "id": 1,
+      "name": "x-read-only-action",
+      "prompt": "X 최근 24시간 글만 확인해 줘. 지금은 2026-11-17T12:00:00+09:00이야. 기존 바인딩은 x=me이고 작업 루트는 이미 확정됐어. 제공된 관찰 결과: x1은 본문 '오늘 기록', 시각 2026-11-17T09:00:00+09:00, x2는 시각 미상이야. coverage.complete=false, stopReason=POST_LIMIT. 다른 플랫폼 조회나 초안·게시·보이스 수집은 요청하지 않았어. 제공된 정보만으로 결과와 다음 동작을 답해 줘.",
+      "expected_output": "X만 최근 24시간으로 보고하고 시간 미상·불완전 관찰을 구분한 뒤 종료한다.",
+      "assertions": [
+        "X만 대상으로 최근 24시간 구간을 2026-11-16T12:00:00+09:00부터 고정한다",
+        "x2는 시간 미상 검토이고 complete=false의 한계를 알린다",
+        "조회 요청을 초안·bootstrap·게시 의도로 바꾸거나 게시 승인을 요구하지 않는다"
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "selected-group-photo-handoff",
+      "prompt": "접근 가능한 다른 사람의 Facebook 글 https://www.facebook.com/author/posts/55 를 X와 Bluesky용으로만 준비하고 나중에 게시하려고 해. 원본 author와 로그인 me는 달라. manifest와 관리 영수증은 일치해. 사진 p1~p5 중 p2는 alt가 없고 아직 어느 사진을 쓸지 선택하지 않았어. 두 대상 scan은 complete:false이며 X에 유사한 글이 하나 있어. 지금 사용자에게 필요한 결정과 이후 게시 직전 절차를 답해 줘. 사진을 임의로 고르거나 manifest를 고치지 마.",
+      "expected_output": "X·Bluesky만 준비하며 사진 선택·권리·alt·출처를 확인하고 유사 후보 판단과 게시 승인을 분리한다.",
+      "assertions": [
+        "게시 대상은 X·Bluesky뿐이고 Facebook은 원본이며 추가 플랫폼 초안을 만들지 않는다",
+        "4장 상한 내 사진 ID 선택과 p2 alt 보완을 요청하며 접근 가능성과 재게시 권리를 구분한다",
+        "사진·출처 hash 및 manifest에 결합된 alt 보완을 유지한다",
+        "유사 후보 확인과 header 게시 승인인 별도 AskUserQuestion을 구분하고 게시 대상: x,bluesky를 명시한다",
+        "자동 제외·자동 게시하거나 불완전 관찰을 전체 이력의 미게시로 단정하지 않는다"
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "mixed-job-single-target-approval",
+      "prompt": "기존 작업에 platforms=[x,facebook], accounts={x:me,facebook:me}가 있고 두 초안이 있어. X 초안만 지금 게시하고 싶어. Facebook 초안은 아직 미완성이며 보여주지도 않았어. 계정과 X 본문은 확인했고 승인 영수증에는 예전에 두 플랫폼 digest가 남아 있지만 이번 게시 승인은 아직 안 받았어. 기존 작업과 Facebook 초안은 그대로 두고 다음 절차와 최종 승인 질문을 제시해 줘. 지금 게시 도구를 실행하지는 마.",
+      "expected_output": "기존 혼합 job에서 X만 검사·표시·새 승인하고 다른 초안을 승인·삭제하지 않는다.",
+      "assertions": [
+        "기존 혼합 작업과 Facebook 초안을 보존하고 canonical이나 작업을 새로 만들지 않는다",
+        "X에 한정한 --platform x 검사와 공통 publish.sh 경로를 사용한다",
+        "최종 승인 header 게시 승인, 응답 게시, 질문 게시 대상: x를 명시한다",
+        "새 approved_digests는 X만으로 교체하며 전체 계정 스냅샷 검사를 유지한다",
+        "이전 영수증을 이번 X 게시 승인으로 간주하거나 Facebook까지 승인하지 않는다"
+      ],
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "platform-capability-boundaries",
+      "prompt": "Threads에는 지금 바로 게시하고 LinkedIn에서는 최근 24시간 글과 타인 글 permalink의 사진을 scan해서 가져오고 싶어. Threads는 fake DOM 테스트만 통과했어. 별도 실환경 검증이나 차단 해제는 승인하지 않았어. 지원되는 기존 기능만 설명하고 가능한 다음 작업을 제시해 줘. 실행하지 마.",
+      "expected_output": "Threads 쓰기와 LinkedIn의 비지원 scan/fetch를 차단하고 기존 초안·bootstrap 등의 범위만 설명한다.",
+      "assertions": [
+        "Threads는 수집·초안만 가능하며 publish와 직접 post 모두 THREADS_UNVERIFIED로 막힌다고 설명한다",
+        "LinkedIn 최근 글·permalink scan과 scan 사진 fetch는 비지원이라고 명시한다",
+        "차단 해제·직접 API·다른 스킬 우회나 linkedin-followup 기능 합치기를 제안하지 않는다",
+        "Threads UTF-8 500바이트를 확정 정책으로 주장하지 않는다"
+      ],
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "thread-uncertain-result-stop",
+      "prompt": "X 의미 단위 답글 체인에서 첫 글은 POSTED이고 URL https://x.com/me/status/1 을 회수했어. 두 번째 답글은 클릭 이후 실행 응답이 유실돼 POST_UNKNOWN이야. Bluesky의 별도 작업은 POSTED지만 urlRecovered:false야. 뒤 세그먼트와 URL 확인은 아직 안 했어. 지금 해야 할 일과 하지 말아야 할 일을 답해 줘. 재실행이나 실제 브라우저 확인은 하지 마.",
+      "expected_output": "확인된 첫 URL과 불명·URL 미회수 성공을 구분해 기록하고 자동 재시도·이어쓰기를 중단한다.",
+      "assertions": [
+        "X의 첫 URL·두 번째 POST_UNKNOWN을 구분해 보고하고 뒤 답글 연결과 자동 재시도를 중단한다",
+        "Bluesky POSTED urlRecovered:false는 게시 성립이며 재게시하지 않는다",
+        "실제 결과 확인 후 URL을 확정하고 회수한 URL별 승인 본문 readback과 post-log 기록을 안내한다",
+        "전역 본문 검색으로 readback을 대신하거나 불명 결과를 POST_FAILED로 바꾸지 않는다"
+      ],
+      "files": []
+    }
+  ]
+}

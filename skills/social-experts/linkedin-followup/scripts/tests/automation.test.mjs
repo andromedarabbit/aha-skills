@@ -14,6 +14,12 @@ function automationContract(text) {
 }
 
 test('automation prompt keeps unattended work bounded without forbidding later real user requests', () => automationContract(skill));
+test('automation reports both directions and offers task recording only after the user continues', () => {
+  const prompt = /### automation 프롬프트[\s\S]*?```text\n([\s\S]*?)```/.exec(skill)?.[1];
+  assert.ok(prompt.indexOf('awaitingReply') < prompt.indexOf('무인 호출을 끝낸다'));
+  assert.ok(prompt.indexOf('무인 호출을 끝낸다') < prompt.indexOf('AskUserQuestion'));
+  assert.ok(prompt.includes('승인 없이 기록하지 않는다'));
+});
 test('automation contract detects lost authority and fresh-session boundaries', () => {
   for (const marker of ['정확히 1회', '실제 사용자', '동의 전 create·edit·run은 0회', 'result.automation.id']) assert.throws(() => automationContract(skill.replaceAll(marker, '삭제')));
 });

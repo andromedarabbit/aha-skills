@@ -23,11 +23,10 @@
 # 정확히 "게시"일 때만 승인으로 기록한다. SKILL.md Stage 8이 이 header·답변
 # 문구를 그대로 써야 훅이 인식한다.
 #
-# 기록 내용: 활성 작업 drafts/ 아래 모든 <platform>.md의 sha256을
-# approved_digests 객체로 남기고(승인 시점에 존재하는 초안 전부가 승인 대상),
-# 승인 시점의 accounts 매핑을 approved_accounts로 스냅샷한다 — 승인 후 계정이
-# 바뀌면 publish.sh가 이 값과의 불일치로 게시를 거부한다(계정 재타깃 가드).
-# 승인 대상 플랫폼을 좁히려면 Stage 2에서 platforms를 줄이면 된다.
+# question의 고정 형식 "게시 대상: x,bluesky" 한 줄에 표시한 초안만 승인한다.
+# 대상은 중복 없는 허용 플랫폼 집합이며 작업 platforms의 부분집합이어야 한다.
+# 새 approved_digests는 이전 승인 집합을 교체한다. 전체 accounts 스냅샷과
+# posted_* 기록은 보존한다. Threads·Instagram은 게시 미검증이므로 승인하지 않는다.
 #
 # 한계(문서화): 로컬 bash 스크립트라 에이전트가 이 스크립트를 직접 호출하며
 # 위조 stdin을 흘려보내면 속일 수 있다. 그건 정상 도구 호출 경로를 지키는
@@ -61,6 +60,15 @@ main() {
   answer="$(printf '%s' "$tool_response" | jq -r --arg q "$q_text" '.answers[$q] // empty' 2>/dev/null)"
   [ "$answer" = "게시" ] || exit 0
 
+  local targets
+  targets="$(printf '%s' "$q_text" | jq -Rsec '
+    split("\n") | map(select(startswith("게시 대상:")))
+    | select(length == 1) | .[0]
+    | capture("^게시 대상: (?<targets>(?:x|linkedin|facebook|bluesky)(?:,(?:x|linkedin|facebook|bluesky))*)$")
+    | .targets | split(",")
+    | select(length == (unique | length))
+  ' 2>/dev/null)" || exit 0
+
   local job lib_path
   job="$(printf '%s' "${SOCIAL_POSTING_JOB:-}")"
   if [ -z "$job" ]; then
@@ -77,14 +85,18 @@ main() {
 
   export SOCIAL_POSTING_RECEIPT="${job%/}/receipt.json"
 
-  # 승인 시점 초안 digest 전부를 객체로 만든다
-  local digests draft name
+  # 전체 대상을 검증한 뒤에만 영수증을 쓴다. 누락을 전체 승인으로 복구하지 않는다.
+  local digests draft name digest platforms_line
+  platforms_line="$(sed -n 's/^platforms:[[:space:]]*//p' "$job/job-state.md" 2>/dev/null | head -1)"
   digests="{}"
-  for draft in "$job"/drafts/*.md; do
-    [ -f "$draft" ] || continue
-    name="$(basename "$draft" .md)"
-    digests="$(printf '%s' "$digests" | jq --arg k "$name" --arg v "$(hash_file "$draft")" '.[$k] = $v')"
-  done
+  while IFS= read -r name; do
+    printf '%s' "$platforms_line" | tr -d '[]' | tr -d '[:space:]' | tr ',' '\n' | grep -Fxq "$name" || exit 0
+    draft="$job/drafts/$name.md"
+    [ -f "$draft" ] || exit 0
+    digest="$(hash_file "$draft")" || exit 0
+    [ -n "$digest" ] || exit 0
+    digests="$(printf '%s' "$digests" | jq --arg k "$name" --arg v "$digest" '.[$k] = $v')" || exit 0
+  done < <(printf '%s' "$targets" | jq -r '.[]')
 
   receipt_set_json approved_digests "$digests"
   receipt_set approved_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"

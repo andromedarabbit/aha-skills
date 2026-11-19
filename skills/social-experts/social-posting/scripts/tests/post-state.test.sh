@@ -89,4 +89,14 @@ echo "$out" | jq -e '.posted_x == "https://x.com/a/1" and .posted_bluesky == "ht
   || fail "병렬 set에서 키가 유실됨(락 미작동): $out"
 [ ! -d "$job/receipt.json.lock" ] || fail "receipt 락이 해제 후 잔존한다"
 
+# Instagram 키도 기존 매핑·영수증 경로를 사용하며 승인 권한은 늘리지 않는다.
+printf 'photo-only draft\n' >"$job/drafts/instagram.md"
+[ "$(bash "$STATE" digest instagram)" = "$(hash_of "$job/drafts/instagram.md")" ] || fail "Instagram 초안 digest를 기존 CLI로 읽어야 한다"
+before_x="$(bash "$STATE" get posted_x)"
+bash "$STATE" set posted_instagram "https://www.instagram.com/p/legacy/" >/dev/null || fail "기존 Instagram 게시 기록을 보존할 수 있어야 한다"
+[ "$(bash "$STATE" get posted_instagram)" = "https://www.instagram.com/p/legacy/" ] || fail "Instagram 기록 왕복 실패"
+[ "$(bash "$STATE" get posted_x)" = "$before_x" ] || fail "Instagram 키가 기존 X 기록을 바꾸면 안 된다"
+if bash "$STATE" ready instagram >/dev/null 2>&1; then fail "게시 기록만으로 Instagram을 승인 상태로 승격하면 안 된다"; fi
+if bash "$STATE" set approved_digests '{"instagram":"fake"}' >/dev/null 2>&1; then fail "Instagram 승인 자기 신고도 거부해야 한다"; fi
+
 echo "✅ post-state.test.sh 통과"

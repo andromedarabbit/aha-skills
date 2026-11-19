@@ -675,6 +675,7 @@ export async function scanEgo(input) {
   const review = [];
   let recordWriteFailed = false;
   const candidates = [];
+  const awaitingReply = [];
   const answeredNames = [];
   let capExceeded = false;
   let detailOpened = 0;
@@ -697,7 +698,7 @@ export async function scanEgo(input) {
       const capture = item.capture ?? null;
       try {
         // 캡처 해소분은 uuid·발신자 종별·출처를 이름 키 기록에 남긴다. threadSeg는 DOM 개방분만 승격된다 —
-        // 캡처 후보의 전체 이력 read는 미지원(후보에 ≤12개 이벤트가 인라인으로 실린다).
+        // 캡처 대화의 전체 이력 read는 미지원(반환된 대화에 ≤12개 이벤트가 인라인으로 실린다).
         durableWrite(recordPath, capture ? {
           name: item.name, previewHash, observedAt: new Date().toISOString(), changed,
           uuid: capture.conversationUuid, lastSenderKind: capture.lastSenderIsOther ? 'other' : 'self', source: 'capture',
@@ -710,6 +711,8 @@ export async function scanEgo(input) {
             preview: item.preview, time: item.time, events: Array.isArray(capture.events) ? capture.events : [] });
         } else {
           answeredNames.push(item.name);
+          awaitingReply.push({ name: item.name, conversationUuid: capture.conversationUuid,
+            preview: item.preview, time: item.time, events: Array.isArray(capture.events) ? capture.events : [] });
         }
         continue;
       }
@@ -753,6 +756,8 @@ export async function scanEgo(input) {
       if (opened.lastSenderIsOther !== true) {
         item.status = 'answered';
         answeredNames.push(item.name);
+        awaitingReply.push({ name: item.name, conversationUuid: opened.conversationUuid,
+          preview: item.preview, time: item.time, events: Array.isArray(opened.events) ? opened.events : [] });
       } else {
         item.status = 'candidate';
         candidates.push({ name: item.name, conversationUuid: opened.conversationUuid,
@@ -783,7 +788,7 @@ export async function scanEgo(input) {
     : capturedCount > 0 ? '수신 응답 관측과 상세 개방으로 발신자를 확정했습니다'
     : '상세 개방으로 발신자를 확정했습니다';
   return {
-    status: 'OK', transport: 'ego-ui/1', candidates, review: finalReview,
+    status: 'OK', transport: 'ego-ui/1', candidates, awaitingReply, review: finalReview,
     filters: observed.filters, complete: observed.complete,
     coverage: { listed: observed.itemCount, detailOpened, openCap: cap, capExceeded,
       answeredCount: answeredNames.length, capturedCount,

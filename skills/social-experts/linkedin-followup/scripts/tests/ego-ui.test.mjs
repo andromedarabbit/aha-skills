@@ -907,14 +907,15 @@ test('ego scan 상세 개방은 후보 events와 관측 threadSeg를 기록에 �
   assert.equal('events' in record, false, '레코드에 메시지 본문을 저장하지 않는다');
 });
 
-test('answered·미입증 스레드는 events를 비워 반환하고 기록은 식별자만 남긴다', t => {
+test('본인 발신 대화는 이벤트를 반환하되 관측 기록에는 본문을 남기지 않는다', t => {
   const f = detailSetup(t);
-  // B(own 발신)는 answered로 판정된다 — events는 후보에만 붙는다.
+  // 본인 발신 대화는 답장을 기다리는 대화로도 반환한다.
   f.save({ readEvents: { lastSenderIsOther: false, text: 'p1 요청 드립니다', renderedCount: 1, events: [{ senderIsOther: false, text: '내가 보낸 답장' }] } });
   const result = f.runScan({ detailOpenCap: 1 });
   assert.equal(result.data.status, 'OK');
   assert.equal(result.data.candidates.length, 0);
   assert.equal(result.data.coverage.answeredCount, 1);
+  assert.deepEqual(result.data.awaitingReply[0].events, [{ senderIsOther: false, text: '내가 보낸 답장' }]);
   const record = JSON.parse(readFileSync(promotedRecordPath(f), 'utf8'));
   assert.equal(record.threadSeg, threadSeg, 'answered에도 seg는 식별자로 기록된다');
   assert.equal('events' in record, false);
@@ -1486,6 +1487,8 @@ test('수신 응답 관측은 상세 개방 없이 후보·answered를 판정하
     preview: 'p1', time: 'Nov 12', events: [{ senderIsOther: true, text: 'p1 요청 드립니다' }] });
   assert.equal(result.data.review.length, 0);
   assert.equal(result.data.coverage.answeredCount, 1, '소유자 발신은 answered로 판정된다');
+  assert.deepEqual(result.data.awaitingReply, [{ name: 'B', conversationUuid: captureUuidB,
+    preview: 'p2', time: 'Nov 2', events: [{ senderIsOther: false, text: 'p2 확인했습니다' }] }]);
   assert.equal(result.data.coverage.completeness, 'complete', '개방 0회여도 캡처 해소면 complete다');
   const ops = f.records('operations');
   assert.ok(ops.includes('cdp:Network.enable'));
@@ -1497,6 +1500,30 @@ test('수신 응답 관측은 상세 개방 없이 후보·answered를 판정하
   assert.equal(record.lastSenderKind, 'other');
   assert.equal('threadSeg' in record, false, '캡처분은 seg 승격이 없다');
   assert.equal('events' in record, false, '본문은 기록에 남지 않는다');
+});
+
+test('발신자가 불명인 과거 이벤트는 상대 메시지로 오인하지 않는다', t => {
+  const f = captureSetup(t);
+  const unknown = { ...capMsg({ body: '발신자 미확인', withFrom: false }), deliveredAt: 1 };
+  const latest = { ...capMsg({ body: 'p1 요청 드립니다', firstName: 'A' }), deliveredAt: 2 };
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [unknown, latest] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.candidates.length, 1);
+  assert.deepEqual(result.data.candidates[0].events, [], '발신자가 불명인 이력은 맥락으로 제시하지 않는다');
+});
+
+test('계정과 비교할 수 없는 이벤트 식별자는 상대 발신으로 단정하지 않는다', t => {
+  const f = captureSetup(t);
+  const bindingPath = join(f.home, '.local/share/aha-skills/linkedin-replies/binding.json');
+  const binding = JSON.parse(readFileSync(bindingPath, 'utf8'));
+  delete binding.account.profileId;
+  writeFileSync(bindingPath, JSON.stringify(binding), { mode: 0o600 });
+  const previous = { ...capMsg({ body: '식별 불가' }), deliveredAt: 1, from: { entityUrn: `urn:li:member:${OWNER_ID}` } };
+  const latest = { ...capMsg({ body: 'p1 요청 드립니다', firstName: 'A' }), deliveredAt: 2 };
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: JSON.stringify({ included: [previous, latest] }) } } });
+  const result = f.runScan();
+  assert.equal(result.data.candidates.length, 1);
+  assert.deepEqual(result.data.candidates[0].events, []);
 });
 
 test('캡처는 발신자 urn 비교로도 방향을 판정한다', t => {
