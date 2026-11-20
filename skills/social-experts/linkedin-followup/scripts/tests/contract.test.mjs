@@ -48,6 +48,11 @@ for (const command of ['setup', 'prepare', 'send', 'read']) {
   });
 }
 
+test('unattended cache requires validated summary input before touching local state', () => {
+  const result = run(['--mode', 'unattended', 'cache']);
+  assert.equal(result.status, 'INVALID_ARGUMENT');
+});
+
 for (const mode of ['unattended', 'manual']) {
   test(`${mode} scan without binding is not an empty inbox`, () => {
     const result = run(['--mode', mode, 'scan']);
@@ -86,6 +91,10 @@ test('skill and runtime share exact approval and sending contracts', async () =>
   assertDocumentContract(skill, CONTRACT);
   assert.match(skill, /context: inline/);
   assert.match(skill, /node>=24/);
+  assert.match(skill, /eventEvidence/);
+  assert.match(skill, /cachedSummary/);
+  assert.match(skill, /90일/);
+  assert.match(skill, /recruiting\\|networking\\|technical\\|other\\|unknown/);
 });
 
 test('approval contract mutations are detected', async () => {

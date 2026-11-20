@@ -1,7 +1,7 @@
 ---
 name: social-sync
 description: X·Facebook·Threads·Bluesky 계정의 글을 상호 동기화하는 orca 정기 자동화. "소셜 동기화 등록해줘", "크로스포스트 자동화 걸어줘", "X에만 올린 글 다른 플랫폼에도 올려줘", "/social-sync", "sync tick", "동기화 승인 대기 게시해줘" 같은 요청 시 사용한다. LLM 없는 precheck 게이트(scripts/sync_gate.py)가 새 글을 찾을 때만 에이전트를 깨우고, tick이 미디어 수집·글자수 초과 스레드 분할 초안까지 준비한 뒤 사용자 승인(social-posting의 "게시 승인" 훅 계약)을 거쳐 게시한다. setup(최초 설정·첫 실행 며칠치 질문)/tick(무인)/approve(승인·게시)/status 모드가 있다. Threads 게시는 실환경 검증 전까지 대상에서 제외한다.
-version: 0.1.0
+version: 0.1.1
 context: inline
 language: "korean"
 dependencies:
@@ -61,7 +61,7 @@ bash "${CLAUDE_SKILL_DIR}/scripts/automation-register.sh" --create \
 uv run "${CLAUDE_SKILL_DIR}/scripts/sync_gate.py" wake-report
 ```
 
-`status`가 `NO_WAKE`(exit 1)면 "동기화할 새 글 없음" 한 줄만 출력하고 끝낸다. `WAKE_ERROR`면 오류 내용을 보고하고 끝낸다.
+`status`가 `NO_WAKE`(exit 1)면 `lastScan`을 확인하고 끝낸다. `lastScan`이 null이면 아직 스캔하지 않아 새 글 유무를 모른다고 보고한다. `lastScan.errors`가 비어 있지 않으면 오류를 보고한다. 그 외에는 마지막 스캔 시각과 처리할 wake가 없음을 보고한다. `ERROR`면 오류 내용을 보고하고 끝낸다.
 
 2. **글마다 게시 작업 준비** — 모든 새 글을 하나의 작업 디렉터리(wake-report의 `dir`)로 만든다:
    - 대상 플랫폼 = `config.targets`에서 이 글의 소스 플랫폼을 뺀 집합. `config.threadsVerified`가 `false`면 Threads를 뺀다. 바인딩(`$HOME/.local/share/aha-skills/social-posting/binding.json`의 `identity`)에 없는 플랫폼도 뺀다.

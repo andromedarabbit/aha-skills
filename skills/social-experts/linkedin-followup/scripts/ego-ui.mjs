@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 
@@ -433,6 +434,13 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
       }
       return '';
     };
+    const timestampOf = ev => {
+      for (const key of ['deliveredAt', 'createdAt']) {
+        const value = ev?.[key];
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+      }
+      return null;
+    };
     const senderOf = ev => {
       const out = { slug: null, id: null };
       const dig = (node, depth) => {
@@ -515,16 +523,9 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
       };
       walk(data, 0);
       // 이벤트 정렬: 타임스탬프가 있으면 오름차순, 없으면 배열 순서를 유지한다. 마지막(최신)이 판정 대상이다.
-      const stampOf = ev => {
-        for (const key of ['deliveredAt', 'createdAt']) {
-          const v = ev[key];
-          if (typeof v === 'number' && Number.isFinite(v)) return v;
-        }
-        return null;
-      };
       for (const entry of conversations.values()) {
-        const withStamp = entry.events.every(ev => stampOf(ev) !== null);
-        if (withStamp) entry.events.sort((a, b) => stampOf(a) - stampOf(b));
+        const withStamp = entry.events.every(ev => timestampOf(ev) !== null);
+        if (withStamp) entry.events.sort((a, b) => timestampOf(a) - timestampOf(b));
         entry.last = entry.events[entry.events.length - 1] ?? null;
       }
       return [...conversations.values()];
@@ -635,14 +636,22 @@ async function scanList(spaceName, messagingUrl, expectedFingerprintJson, deadli
         if (isOwner === null) continue;
         const direction = isOwner ? 'self' : 'other';
         const recentEvents = match.events.slice(-12);
-        const events = recentEvents.every(ev => ownerMatches(senderOf(ev)) !== null) ? recentEvents
-          .map(ev => ({ senderIsOther: !ownerMatches(senderOf(ev)), text: textOf(ev).slice(0, 300) }))
-          .filter(e => e.text) : [];
+        const directionComplete = recentEvents.every(ev => ownerMatches(senderOf(ev)) !== null);
+        const readableEvents = directionComplete ? recentEvents
+          .map(ev => ({ event: { senderIsOther: !ownerMatches(senderOf(ev)), text: textOf(ev).slice(0, 300) }, timestamp: timestampOf(ev) }))
+          .filter(({ event }) => event.text) : [];
+        const recentReadable = readableEvents.slice(-12);
+        const events = recentReadable.map(item => item.event);
+        const eventTimestamps = recentReadable.map(item => item.timestamp);
         resolved.set(item.index, {
           conversationUuid: match.uuid,
           lastSenderIsOther: direction === 'other',
           senderSlug: sender.slug,
-          events: events.slice(0, 12),
+          events,
+          eventTimestamps,
+          observedEventCount: match.events.length,
+          truncatedFromOldest: match.events.length > 12,
+          unreadableEventCount: directionComplete ? recentEvents.length - readableEvents.length : recentEvents.length,
         });
       }
     }
@@ -710,11 +719,15 @@ export async function scanEgoList(binding) {
   if (exactKeys(output, ['status']) && EGO_STEP_CODES.includes(output.status)) throw fail(output.status);
   const captureOk = capture => {
     if (capture === null) return true;
-    if (!exactKeys(capture, ['conversationUuid', 'lastSenderIsOther', 'senderSlug', 'events'])) return false;
+    if (!exactKeys(capture, ['conversationUuid', 'lastSenderIsOther', 'senderSlug', 'events', 'eventTimestamps', 'observedEventCount', 'truncatedFromOldest', 'unreadableEventCount'])) return false;
     if (typeof capture.conversationUuid !== 'string' || !/^[A-Za-z0-9-]{8,64}$/.test(capture.conversationUuid)) return false;
     if (typeof capture.lastSenderIsOther !== 'boolean') return false;
     if (capture.senderSlug !== null && !validString(capture.senderSlug, 128)) return false;
+    if (!Number.isSafeInteger(capture.observedEventCount) || capture.observedEventCount < 1 ||
+        typeof capture.truncatedFromOldest !== 'boolean' || !Number.isSafeInteger(capture.unreadableEventCount) || capture.unreadableEventCount < 0) return false;
     return Array.isArray(capture.events) && capture.events.length <= 12 &&
+      Array.isArray(capture.eventTimestamps) && capture.eventTimestamps.length === capture.events.length &&
+      capture.eventTimestamps.every(time => time === null || (typeof time === 'number' && Number.isFinite(time))) &&
       capture.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
         typeof e.text === 'string' && e.text.length <= 300);
   };
@@ -795,6 +808,10 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
     let lastEventReadable = false;
     let threadSeg = null;
     let events = [];
+    let eventIds = [];
+    let observedEventCount = 0;
+    let truncatedFromOldest = false;
+    let unreadableEventCount = 0;
     let segSeen = false;
     let prevUuid = null;
     let stableTicks = 0;
@@ -829,7 +846,7 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
           // 실측(2026-11-14, KTD19 반증): data-event-urn의 프로필 세그먼트는 메시지 발신자가 아니라
           // 수신함 소유자(나)다. 메시지 행(.msg-s-event-listitem)의 `--other` 클래스가 실제 발신 신호다 —
           // 상대 메시지에는 붙고 내 메시지에는 없다(그룹 스레드의 타 멤버 메시지에도 붙는다).
-          const thread = await page.evaluate(eventTextMax => {
+          const thread = await page.evaluate(({ eventTextMax, eventMax }) => {
             const extract = row => {
               const isOther = /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(row.className || ''));
               // 블록 경계 공백 복원: 이 편집기는 문단을 블록으로 만들고 textContent 직렬화가 경계
@@ -839,7 +856,7 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
               const clone = row.cloneNode(true);
               for (const el of clone.querySelectorAll('[class*="listitem__link"], [class*="message-group__meta"], [class*="actions-container"], [class*="emoji-popular"], [class*="a11y-text"]')) el.remove();
               const parts = clone.children.length ? [...clone.children].map(c => (c.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean) : [(clone.textContent || '').replace(/\s+/g, ' ').trim()];
-              return { senderIsOther: isOther, text: parts.join(' ').slice(0, eventTextMax) };
+              return { senderIsOther: isOther, text: parts.join(' ').slice(0, eventTextMax), eventId: row.getAttribute('data-event-urn') || null };
             };
             const rows = [...document.querySelectorAll('.msg-s-event-listitem[data-event-urn]')];
             const all = rows.map(extract);
@@ -847,8 +864,11 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
             const lastIsOther = !!last && /(^|\s)msg-s-event-listitem--other(\s|$)/.test(String(last.className || ''));
             const lastText = all.length ? all[all.length - 1].text : '';
             // renderedCount는 관측된 이벤트 총수이자 스텁·테스트 분기 마커다.
-            return { lastSenderIsOther: lastIsOther, text: lastText, renderedCount: all.length, events: all.filter(e => e.text) };
-          }, EVENT_TEXT_MAX);
+            const readableEventCount = all.filter(e => e.text).length;
+            const unreadableEventCount = all.slice(-eventMax).filter(e => !e.text).length;
+            return { lastSenderIsOther: lastIsOther, text: lastText, renderedCount: all.length,
+              readableEventCount, unreadableEventCount, events: all.slice(-eventMax).filter(e => e.text) };
+          }, { eventTextMax: EVENT_TEXT_MAX, eventMax: EVENT_MAX });
           if (thread && typeof thread.text === 'string') {
             conversationUuid = uuid;
             lastSenderIsOther = thread.lastSenderIsOther;
@@ -857,7 +877,12 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
             // 구조적으로 실패한다. 마지막 버블 내용이 읽혔으면 DOM 발신자 판정을 그대로 신뢰한다.
             lastEventReadable = normalize(thread.text).length > 0;
             threadSeg = seg;
-            events = lastEventReadable && Array.isArray(thread.events) ? thread.events.slice(-EVENT_MAX) : [];
+            observedEventCount = thread.renderedCount;
+            truncatedFromOldest = thread.renderedCount > EVENT_MAX;
+            unreadableEventCount = thread.unreadableEventCount;
+            const readableEvents = lastEventReadable && Array.isArray(thread.events) ? thread.events.slice(-EVENT_MAX) : [];
+            events = readableEvents.map(({ senderIsOther: sender, text }) => ({ senderIsOther: sender, text }));
+            eventIds = readableEvents.map(event => event.eventId);
             if (proofMatch) break;
             // 같은 UUID에서 세 틱 연속 입증 실패면 이미 열린 스레드가 그것이라는 뜻이다 — 대기 없이 UNPROVEN으로 마친다.
             if (uuid === prevUuid) { stableTicks += 1; if (stableTicks >= 3) break; }
@@ -870,7 +895,8 @@ async function openThread(spaceName, messagingUrl, itemIndex, itemHeading, previ
     if (!segSeen) stop('EGO_ATTACH_FAILED');
     console.log(JSON.stringify({
       status: 'THREAD_OBSERVED', conversationUuid,
-      lastSenderIsOther, proofMatch, lastEventReadable, threadSeg, events,
+      lastSenderIsOther, proofMatch, lastEventReadable, threadSeg, events, eventIds,
+      observedEventCount, truncatedFromOldest, unreadableEventCount,
     }));
   } catch (error) {
     const codes = ['EGO_TABS_FAILED', 'EGO_ATTACH_FAILED', 'EGO_ORIGIN_MISMATCH', 'EGO_NEEDS_LOGIN', 'EGO_SNAPSHOT_FAILED', 'EGO_SCHEMA_INVALID', 'EGO_EVAL_STOPPED', 'EGO_TAB_NOT_FOUND'];
@@ -895,10 +921,16 @@ export async function openEgoThread(binding) {
   const eventsOk = Array.isArray(output.events) && output.events.length <= 12 &&
     output.events.every(e => exactKeys(e, ['senderIsOther', 'text']) && typeof e.senderIsOther === 'boolean' &&
       typeof e.text === 'string' && e.text.length <= 300);
-  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSenderIsOther', 'proofMatch', 'lastEventReadable', 'threadSeg', 'events']) || output.status !== 'THREAD_OBSERVED' ||
-      !uuidOk || !segOk || !eventsOk || typeof output.lastSenderIsOther !== 'boolean' ||
-      typeof output.proofMatch !== 'boolean' || typeof output.lastEventReadable !== 'boolean') throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
-  return output;
+  const eventIdsOk = Array.isArray(output.eventIds) && output.eventIds.length === output.events?.length &&
+    output.eventIds.every(id => id === null || (typeof id === 'string' && id.length <= 2048 &&
+      ![...id].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)));
+  if (!exactKeys(output, ['status', 'conversationUuid', 'lastSenderIsOther', 'proofMatch', 'lastEventReadable', 'threadSeg', 'events', 'eventIds', 'observedEventCount', 'truncatedFromOldest', 'unreadableEventCount']) || output.status !== 'THREAD_OBSERVED' ||
+      !uuidOk || !segOk || !eventsOk || !eventIdsOk || typeof output.lastSenderIsOther !== 'boolean' ||
+      typeof output.proofMatch !== 'boolean' || typeof output.lastEventReadable !== 'boolean' ||
+      !Number.isSafeInteger(output.observedEventCount) || output.observedEventCount < output.events.length ||
+      typeof output.truncatedFromOldest !== 'boolean' || !Number.isSafeInteger(output.unreadableEventCount) || output.unreadableEventCount < 0) throw fail('EGO_OUTCOME_UNKNOWN', 'EGO_SCHEMA_INVALID');
+  const { eventIds, ...result } = output;
+  return { ...result, eventIdentities: eventIds.map(id => id === null ? null : createHash('sha256').update(id).digest('hex')) };
 }
 
 // 승인된 본문의 UI 전송(KTD6): 대화 개방 → 전송 직전 기준 재검증 → 빈 composer 확인 → 본문 삽입·정확한

@@ -104,23 +104,57 @@ const pageStub = (label, baseUrl) => ({
     if (src.includes('getEntriesByType')) return state.resourceUrls ?? null;
     if (src.includes('JSESSIONID')) return state.csrf ?? 'ajax:fixture-csrf';
     if (src.includes('renderedCount')) {
+      if (state.executeThreadCallback) {
+        const rows = (state.domRows ?? []).map(event => ({
+          className: event.senderIsOther ? 'msg-s-event-listitem msg-s-event-listitem--other' : 'msg-s-event-listitem',
+          getAttribute: name => name === 'data-event-urn' ? event.eventId ?? null : null,
+          cloneNode: () => ({
+            children: event.text ? [{ textContent: event.text }] : [],
+            textContent: event.text ?? '',
+            querySelectorAll: () => [],
+          }),
+        }));
+        context.document = { querySelectorAll: selector => selector === '.msg-s-event-listitem[data-event-urn]' ? rows : [] };
+        try { return fn(arg); } finally { delete context.document; }
+      }
       if (Array.isArray(state.readEventsQueue) && state.readEventsQueue.length) {
         const next = state.readEventsQueue.shift();
         if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, readEventsQueue: state.readEventsQueue }));
-        return next;
+        const eventTextMax = typeof arg === 'number' ? arg : arg?.eventTextMax;
+        const eventMax = typeof arg === 'object' && arg ? arg.eventMax : 12;
+        const events = next.events.map((e, index) => ({ ...e, ...(src.includes('eventId') ? { eventId: e.eventId ?? 'urn:fixture:' + index } : {}), text: typeof eventTextMax === 'number' ? e.text.slice(0, eventTextMax) : e.text }));
+        const readableEventCount = next.readableEventCount ?? events.filter(e => e.text).length;
+        const renderedCount = next.renderedCount ?? events.length;
+        return { ...next, events, readableEventCount, renderedCount,
+          truncatedFromOldest: next.truncatedFromOldest ?? readableEventCount > eventMax,
+          unreadableEventCount: next.unreadableEventCount ?? events.slice(-eventMax).filter(e => !e.text).length };
       }
       // 실제 추출 evaluate처럼 행당 본문 상한 인자(arg)를 적용한다 — null(fullText)이면 자르지 않는다.
       const read = state.readEvents ?? null;
-      if (!read || typeof arg !== 'number') return read;
-      return { ...read, events: read.events.map(e => ({ ...e, text: e.text.slice(0, arg) })) };
+      const eventTextMax = typeof arg === 'number' ? arg : arg?.eventTextMax;
+      const eventMax = typeof arg === 'object' && arg ? arg.eventMax : 12;
+      if (!read || typeof eventTextMax !== 'number') return read;
+      const events = read.events.map((e, index) => ({ ...e, ...(src.includes('eventId') ? { eventId: e.eventId ?? 'urn:fixture:' + index } : {}), text: e.text.slice(0, eventTextMax) }));
+      const readableEventCount = read.readableEventCount ?? events.filter(e => e.text).length;
+      const renderedCount = read.renderedCount ?? events.length;
+      return { ...read, events, readableEventCount, renderedCount,
+        truncatedFromOldest: read.truncatedFromOldest ?? readableEventCount > eventMax,
+        unreadableEventCount: read.unreadableEventCount ?? events.slice(-eventMax).filter(e => !e.text).length };
     }
     if (src.includes('cloneNode')) {
       if (Array.isArray(state.threadQueue) && state.threadQueue.length) {
         const next = state.threadQueue.shift();
         if (state.persistQueue) writeFileSync(home + '/backend.json', JSON.stringify({ ...state, threadQueue: state.threadQueue }));
+        if (src.includes('eventId') && Array.isArray(next?.events)) {
+          return { ...next, events: next.events.map((event, index) => ({ ...event, eventId: event.eventId ?? 'urn:fixture:' + index })) };
+        }
         return next;
       }
-      return state.thread ?? null;
+      const thread = state.thread ?? null;
+      if (src.includes('eventId') && Array.isArray(thread?.events)) {
+        return { ...thread, events: thread.events.map((event, index) => ({ ...event, eventId: event.eventId ?? 'urn:fixture:' + index })) };
+      }
+      return thread;
     }
     if (src.includes('isOther')) return state.pre ?? { isOther: true };
     if (src.includes('data-event-urn')) {
@@ -276,13 +310,15 @@ globalThis.setTimeout = (fn, delay, ...args) => {
 try {
   const { scanEgo } = await import(${JSON.stringify(join(dir, 'reply.mjs'))});
   let input = ''; for await (const chunk of process.stdin) input += chunk;
-  console.log(JSON.stringify(await scanEgo(JSON.parse(input))));
+  const request = JSON.parse(input);
+  console.log(JSON.stringify(await scanEgo(request.input, request.mode)));
 } catch (error) { console.log(JSON.stringify({ status: error.code || 'FAILED', err: String(error && error.message || error).slice(0, 200) })); }
 `);
-  const runScan = (input = {}) => {
-    const result = spawnSync(process.execPath, [scanWorker], {
+  const runScan = (input = {}, mode = 'unattended', preloadPath = null) => {
+    const command = preloadPath ? ['--import', preloadPath, scanWorker] : [scanWorker];
+    const result = spawnSync(process.execPath, command, {
       env: { HOME: home, PATH: '/invalid', NODE_OPTIONS: '--no-warnings', ASIDE_API_TOKEN: 'must-not-inherit', EGO_API_TOKEN: 'must-not-inherit' },
-      input: JSON.stringify({ transport: 'ego-ui/1', executable, taskSpaceName: 'linkedin-replies-skill', ...input }), encoding: 'utf8', timeout: 20000,
+      input: JSON.stringify({ input: { transport: 'ego-ui/1', executable, taskSpaceName: 'linkedin-replies-skill', ...input }, mode }), encoding: 'utf8', timeout: 20000,
     });
     assert.equal(result.error, undefined);
     assert.equal(result.signal, null);
@@ -305,7 +341,7 @@ try {
     assert.equal(result.signal, null);
     return { ...result, data: result.stdout ? JSON.parse(result.stdout) : null };
   };
-  return { binding, home, run, runReply, startReply, waitFor, save, records, snapshot: backend.snapshot, runScan, runRead };
+  return { binding, dir, home, run, runReply, startReply, waitFor, save, records, snapshot: backend.snapshot, runScan, runRead };
 }
 
 const egoLockPath = f => join(f.home, '.local/share/aha-skills/linkedin-replies/locks', `ego-profile-${createHash('sha256').update(JSON.stringify([f.binding.executable, f.binding.taskSpaceName])).digest('hex')}`);
@@ -848,6 +884,11 @@ const detailSetup = (t, extra = {}) => {
   return f;
 };
 
+const singleDetailSetup = (t, extra = {}) => detailSetup(t, {
+  evaluateQueue: Array.from({ length: 4 }, () => ({ items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 })),
+  ...extra,
+});
+
 test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정하고 UUID 키로 승격한다', t => {
   const f = detailSetup(t);
   // A는 상대(other), B는 own — readEventsQueue는 개방 순서대로 serve된다.
@@ -857,7 +898,7 @@ test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정�
   ] });
   const result = f.runScan({ detailOpenCap: 2 });
   assert.equal(result.data.status, 'OK');
-  assert.equal(result.data.coverage.detailOpened, 2);
+  assert.equal(result.data.coverage.detailOpened, 2, JSON.stringify({ review: result.data.review, stderr: result.stderr }));
   assert.equal(result.data.coverage.openCap, 2);
   assert.equal(result.data.coverage.capExceeded, false);
   assert.equal(result.data.coverage.answeredCount, 1);
@@ -866,6 +907,10 @@ test('ego scan 상세 계층은 발신자 대조로 후보·answered를 판정�
     name: 'A', conversationUuid: '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c',
     preview: 'p1', time: 'Nov 12',
     events: [{ senderIsOther: true, text: 'p1 요청 드립니다' }],
+    eventEvidence: { source: 'detail', observedEventCount: 1, returnedEventCount: 1,
+      truncatedFromOldest: false, unreadableEventCount: 0, possibleTextTruncation: false,
+      fingerprint: result.data.candidates[0].eventEvidence.fingerprint,
+      bodyIncluded: true, bodyOmittedByCache: false, cachedSummary: null },
   });
   assert.equal(result.data.review.length, 0, 'answered는 review에서 제외된다');
   const obsDir = join(f.home, '.local/share/aha-skills/linkedin-replies/conversations');
@@ -901,10 +946,332 @@ test('ego scan 상세 개방은 후보 events와 관측 threadSeg를 기록에 �
   assert.deepEqual(result.data.candidates[0].events, [
     { senderIsOther: true, text: 'p1 요청 드립니다' }, { senderIsOther: false, text: '네 확인했습니다' },
   ]);
+  assert.deepEqual(result.data.candidates[0].eventEvidence, {
+    source: 'detail', observedEventCount: 2, returnedEventCount: 2,
+    truncatedFromOldest: false, unreadableEventCount: 0, possibleTextTruncation: false,
+    fingerprint: result.data.candidates[0].eventEvidence.fingerprint,
+    bodyIncluded: true, bodyOmittedByCache: false, cachedSummary: null,
+  });
+  assert.match(result.data.candidates[0].eventEvidence.fingerprint, /^[0-9a-f]{64}$/);
   const record = JSON.parse(readFileSync(promotedRecordPath(f), 'utf8'));
   assert.equal(record.uuid, '6f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c');
   assert.equal(record.threadSeg, threadSeg, '관측한 원 seg가 기록된다 — read의 직행 내비게이션 근거');
   assert.equal('events' in record, false, '레코드에 메시지 본문을 저장하지 않는다');
+});
+
+test('상세 이벤트 추출은 실제 DOM 콜백에서 최신 창·잘림·읽기 실패를 계산한다', t => {
+  const f = singleDetailSetup(t, {
+    executeThreadCallback: true,
+    domRows: [
+      { senderIsOther: false, text: '오래된 창 밖 이벤트', eventId: 'urn:li:fixture:0' },
+      { senderIsOther: false, text: '', eventId: 'urn:li:fixture:1' },
+      ...Array.from({ length: 10 }, (_, index) => ({ senderIsOther: index % 2 === 0, text: `이력 ${index}`, eventId: `urn:li:fixture:${index + 2}` })),
+      { senderIsOther: true, text: `p1 ${'x'.repeat(320)}`, eventId: 'urn:li:fixture:12' },
+    ],
+  });
+  const result = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = result.candidates[0];
+  assert.equal(candidate.eventEvidence.observedEventCount, 13);
+  assert.equal(candidate.eventEvidence.truncatedFromOldest, true);
+  assert.equal(candidate.eventEvidence.unreadableEventCount, 1);
+  assert.equal(candidate.events.length, 11, '읽지 못한 행 때문에 과거 창 밖 이벤트를 끌어오지 않는다');
+  assert.equal(candidate.events[0].text, '이력 0');
+  assert.equal(candidate.events.at(-1).text.length, 300, '실제 추출 콜백이 본문 상한을 적용한다');
+  assert.equal(candidate.eventEvidence.possibleTextTruncation, true);
+  assert.equal(candidate.eventEvidence.fingerprint, null);
+});
+
+test('실제 DOM 추출에서 최신 이벤트가 비면 검토 필요로 남긴다', t => {
+  const f = singleDetailSetup(t, {
+    executeThreadCallback: true,
+    domRows: [
+      { senderIsOther: true, text: '이전 요청', eventId: 'urn:li:fixture:old' },
+      { senderIsOther: true, text: '', eventId: 'urn:li:fixture:empty' },
+    ],
+  });
+  const result = f.runScan({ detailOpenCap: 1 }).data;
+  assert.equal(result.candidates.length, 0);
+  assert.equal(result.review[0].reason, 'LATEST_EVENT_UNPROVEN');
+});
+
+test('같은 관측 지문은 제한형 캐시 요약만 반환하고 원문은 파일에 저장하지 않는다', t => {
+  const f = singleDetailSetup(t);
+  f.save({ readEvents: { lastSenderIsOther: true, text: 'p1 요청 드립니다', renderedCount: 12,
+    events: [...Array.from({ length: 11 }, (_, i) => ({ senderIsOther: i % 2 === 0, text: `이전 메시지 ${i} ${'x'.repeat(70)}` })),
+      { senderIsOther: true, text: `p1 요청 드립니다 ${'x'.repeat(80)}` }] } });
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  assert.match(candidate.eventEvidence.fingerprint, /^[0-9a-f]{64}$/);
+  const beforeOperations = f.records('operations').length;
+  const saved = f.runReply({ runId: first.runId, summaries: [{
+    conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint,
+    topic: 'recruiting', followUp: 'uncertain',
+  }] }, 'unattended', 'cache');
+  assert.equal(saved.data.status, 'OK');
+  assert.equal(saved.data.saved, 1);
+  assert.equal(f.records('operations').length, beforeOperations, 'cache 저장은 브라우저를 열지 않는다');
+  assert.deepEqual(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')), [], 'cache 전용 락은 성공 뒤 해제된다');
+  const stateRoot = join(f.home, '.local/share/aha-skills/linkedin-replies');
+  const cacheDir = join(stateRoot, 'summaries');
+  const cacheFiles = readdirSync(cacheDir);
+  assert.equal(cacheFiles.length, 1);
+  const cacheText = readFileSync(join(cacheDir, cacheFiles[0]), 'utf8');
+  assert.equal(cacheText.includes('p1 요청 드립니다'), false, '원문은 저장하지 않는다');
+  assert.equal(cacheText.includes('preview'), false);
+  assert.equal(statSync(cacheDir).mode & 0o777, 0o700);
+  assert.equal(statSync(join(cacheDir, cacheFiles[0])).mode & 0o777, 0o600);
+  const runsDir = join(stateRoot, 'runs');
+  const runFiles = readdirSync(runsDir);
+  assert.equal(runFiles.length, 1);
+  const runText = readFileSync(join(runsDir, runFiles[0]), 'utf8');
+  assert.equal(runText.includes('p1 요청 드립니다'), false);
+  assert.equal(runText.includes('preview'), false);
+  assert.equal(runText.includes('"name"'), false, '회차 기록에는 표시 이름 필드를 넣지 않는다');
+  assert.equal(runText.includes('"conversationUuid"'), false, '회차 기록에는 원 UUID를 넣지 않는다');
+  assert.equal(statSync(runsDir).mode & 0o777, 0o700);
+  assert.equal(statSync(join(runsDir, runFiles[0])).mode & 0o777, 0o600);
+  const runRecord = JSON.parse(runText);
+  assert.equal(Date.parse(runRecord.expiresAt) - Date.parse(runRecord.observedAt), 90 * 24 * 60 * 60 * 1000);
+
+  f.save({ evaluateQueue: Array.from({ length: 4 }, () => ({ items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 })) });
+  const second = f.runScan({ detailOpenCap: 1 }).data;
+  const cached = second.candidates[0];
+  assert.deepEqual(cached.events, []);
+  assert.equal(cached.preview, undefined, '일치한 캐시에서는 반복 preview도 생략한다');
+  assert.equal(cached.eventEvidence.bodyIncluded, false);
+  assert.equal(cached.eventEvidence.bodyOmittedByCache, true);
+  assert.equal(cached.eventEvidence.returnedEventCount, cached.events.length);
+  assert.deepEqual({ topic: cached.eventEvidence.cachedSummary.topic, followUp: cached.eventEvidence.cachedSummary.followUp },
+    { topic: 'recruiting', followUp: 'uncertain' });
+  assert.ok(Number.isFinite(Date.parse(cached.eventEvidence.cachedSummary.recordedAt)));
+  assert.ok(Buffer.byteLength(JSON.stringify(second)) < Buffer.byteLength(JSON.stringify(first)), '재관측 출력이 줄어든다');
+});
+
+test('본문이 같아도 새 이벤트 ID면 기존 요약을 재사용하지 않는다', t => {
+  const body = 'p1 같은 요청 본문';
+  const f = singleDetailSetup(t, { readEvents: { lastSenderIsOther: true, text: body, renderedCount: 1,
+    events: [{ senderIsOther: true, text: body, eventId: 'urn:li:fixture:old' }] } });
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  assert.match(candidate.eventEvidence.fingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{ conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint, topic: 'networking', followUp: 'suggested' }] }, 'unattended', 'cache').data.status, 'OK');
+  f.save({ readEvents: { lastSenderIsOther: true, text: body, renderedCount: 1,
+    events: [{ senderIsOther: true, text: body, eventId: 'urn:li:fixture:new' }] },
+    evaluateQueue: Array.from({ length: 4 }, () => ({ items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 })) });
+  const next = f.runScan({ detailOpenCap: 1 }).data.candidates[0];
+  assert.notEqual(next.eventEvidence.fingerprint, candidate.eventEvidence.fingerprint);
+  assert.equal(next.eventEvidence.cachedSummary, null);
+  assert.deepEqual(next.events, [{ senderIsOther: true, text: body }]);
+});
+
+test('수동 scan은 저장된 요약이 있어도 현재 이벤트와 preview를 반환한다', t => {
+  const f = singleDetailSetup(t);
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{ conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint, topic: 'recruiting', followUp: 'uncertain' }] }, 'unattended', 'cache').data.status, 'OK');
+  f.save({ evaluateQueue: Array.from({ length: 4 }, () => ({ items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 })) });
+  const manual = f.runReply({ transport: 'ego-ui/1', executable: f.binding.executable,
+    taskSpaceName: f.binding.taskSpaceName, detailOpenCap: 1 }, 'manual', 'scan').data.candidates[0];
+  assert.deepEqual(manual.events, [{ senderIsOther: true, text: 'p1 요청 드립니다' }]);
+  assert.equal(manual.preview, 'p1');
+  assert.equal(manual.eventEvidence.bodyOmittedByCache, false);
+  assert.equal(manual.eventEvidence.cachedSummary, null);
+});
+
+test('요약 캐시는 계정 slug와 대화 UUID가 바뀌면 재사용하지 않는다', t => {
+  const f = singleDetailSetup(t);
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{ conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint, topic: 'recruiting', followUp: 'uncertain' }] }, 'unattended', 'cache').data.status, 'OK');
+  const oneItemViews = Array.from({ length: 4 }, () => ({ items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 }));
+
+  const bindingPath = join(f.home, '.local/share/aha-skills/linkedin-replies/binding.json');
+  const binding = JSON.parse(readFileSync(bindingPath, 'utf8'));
+  binding.account.slug = 'different-account';
+  writeFileSync(bindingPath, JSON.stringify(binding), { mode: 0o600 });
+  f.save({ evaluateQueue: oneItemViews });
+  const otherAccount = f.runScan({ detailOpenCap: 1 }).data.candidates[0];
+  assert.equal(otherAccount.eventEvidence.cachedSummary, null);
+  assert.deepEqual(otherAccount.events, [{ senderIsOther: true, text: 'p1 요청 드립니다' }]);
+
+  const g = singleDetailSetup(t);
+  const original = g.runScan({ detailOpenCap: 1 }).data;
+  const originalCandidate = original.candidates[0];
+  assert.equal(g.runReply({ runId: original.runId, summaries: [{ conversationUuid: originalCandidate.conversationUuid,
+    fingerprint: originalCandidate.eventEvidence.fingerprint, topic: 'recruiting', followUp: 'uncertain' }] }, 'unattended', 'cache').data.status, 'OK');
+  const nextUuid = '7f1c2a3b-4d5e-4f6a-8b7c-9d0e1f2a3b4c';
+  const nextSeg = '2-' + Buffer.from(`${nextUuid}_100`).toString('base64url');
+  g.save({ click: { __setUrl: `https://www.linkedin.com/messaging/thread/${nextSeg}/`, __ret: { code: 'CLICKED' } }, evaluateQueue: oneItemViews });
+  const otherConversation = g.runScan({ detailOpenCap: 1 }).data.candidates[0];
+  assert.equal(otherConversation.conversationUuid, nextUuid);
+  assert.equal(otherConversation.eventEvidence.cachedSummary, null);
+  assert.deepEqual(otherConversation.events, [{ senderIsOther: true, text: 'p1 요청 드립니다' }]);
+});
+
+test('부분 scan에서는 요약 본문 생략과 캐시 저장을 모두 막는다', t => {
+  const f = singleDetailSetup(t);
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{ conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint, topic: 'recruiting', followUp: 'uncertain' }] }, 'unattended', 'cache').data.status, 'OK');
+  const partialView = { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 };
+  f.save({ evaluateQueue: [partialView, partialView, partialView, partialView] });
+  const partial = f.runScan({ detailOpenCap: 1 }).data;
+  assert.equal(partial.coverage.completeness, 'partial');
+  assert.equal(partial.candidates[0].eventEvidence.bodyOmittedByCache, false);
+  assert.deepEqual(partial.candidates[0].events, [{ senderIsOther: true, text: 'p1 요청 드립니다' }]);
+  assert.equal(f.runReply({ runId: partial.runId, summaries: [{ conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint, topic: 'recruiting', followUp: 'uncertain' }] }, 'unattended', 'cache').data.status, 'STALE');
+});
+
+test('이력 정리 디렉터리·삭제 I/O 실패는 scan을 막거나 프로필 락을 남기지 않는다', t => {
+  for (const method of ['readdirSync', 'rmSync']) {
+    const f = scanSetup(t);
+    const runsDir = join(f.home, '.local/share/aha-skills/linkedin-replies/runs');
+    const faultPath = join(runsDir, 'ego-run-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.json');
+    if (method === 'rmSync') writeFileSync(faultPath, JSON.stringify({ expiresAt: '2000-01-01T00:00:00.000Z' }), { mode: 0o600 });
+    const condition = method === 'readdirSync'
+      ? "String(path).endsWith('/runs')"
+      : `String(path) === ${JSON.stringify(faultPath)}`;
+    const preloadPath = join(f.dir, `fail-${method}.mjs`);
+    writeFileSync(preloadPath, `import fs from 'node:fs';\nimport { syncBuiltinESMExports } from 'node:module';\nconst original = fs[${JSON.stringify(method)}];\nfs[${JSON.stringify(method)}] = function(path, ...args) { if (${condition}) throw Object.assign(new Error('forced'), { code: 'EIO' }); return original.call(this, path, ...args); };\nsyncBuiltinESMExports();\n`);
+    const result = f.runScan({}, 'unattended', preloadPath).data;
+    assert.equal(result.status, 'OK', `${method} 오류여도 목록 scan은 완료된다`);
+    assert.equal(result.coverage.historyPruneFailed, true);
+    assert.equal(existsSync(egoLockPath(f)), false, '완료된 브라우저 scan의 프로필 락은 해제된다');
+  }
+});
+
+test('90일 지난 회차와 요약은 다음 scan에서 제거하고 원문 이벤트를 다시 반환한다', t => {
+  const f = singleDetailSetup(t);
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{
+    conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint,
+    topic: 'recruiting', followUp: 'uncertain',
+  }] }, 'unattended', 'cache').data.status, 'OK');
+  const stateRoot = join(f.home, '.local/share/aha-skills/linkedin-replies');
+  const oldRunPath = join(stateRoot, 'runs', `ego-run-${first.runId}.json`);
+  const untouchedRun = join(stateRoot, 'runs', 'ego-run-not-owned.json');
+  writeFileSync(untouchedRun, JSON.stringify({ expiresAt: '2000-01-01T00:00:00.000Z' }), { mode: 0o600 });
+  const run = JSON.parse(readFileSync(oldRunPath, 'utf8'));
+  run.expiresAt = '2000-01-01T00:00:00.000Z';
+  writeFileSync(oldRunPath, JSON.stringify(run), { mode: 0o600 });
+  const summaryDir = join(stateRoot, 'summaries');
+  const summaryPath = join(summaryDir, readdirSync(summaryDir)[0]);
+  const summary = JSON.parse(readFileSync(summaryPath, 'utf8'));
+  summary.expiresAt = '2000-01-01T00:00:00.000Z';
+  writeFileSync(summaryPath, JSON.stringify(summary), { mode: 0o600 });
+  f.save({ evaluateQueue: Array.from({ length: 4 }, () => ({ items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 })) });
+  const next = f.runScan({ detailOpenCap: 1 }).data;
+  assert.deepEqual(next.candidates[0].events, [{ senderIsOther: true, text: 'p1 요청 드립니다' }]);
+  assert.equal(next.candidates[0].eventEvidence.cachedSummary, null);
+  assert.equal(existsSync(oldRunPath), false);
+  assert.equal(existsSync(summaryPath), false);
+  assert.equal(existsSync(untouchedRun), true, '만료 정리는 알 수 없는 파일명을 지우지 않는다');
+});
+
+test('손상된 요약은 재사용하지 않고 이벤트 원문을 반환한다', t => {
+  const f = singleDetailSetup(t);
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{
+    conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint,
+    topic: 'recruiting', followUp: 'uncertain',
+  }] }, 'unattended', 'cache').data.status, 'OK');
+  const stateRoot = join(f.home, '.local/share/aha-skills/linkedin-replies');
+  const summaryDir = join(stateRoot, 'summaries');
+  const summaryPath = join(summaryDir, readdirSync(summaryDir)[0]);
+  writeFileSync(summaryPath, '{broken', { mode: 0o600 });
+  const runsDir = join(stateRoot, 'runs');
+  const malformedRunPath = join(runsDir, `ego-run-${first.runId}.json`);
+  writeFileSync(malformedRunPath, '{broken', { mode: 0o600 });
+  const invalidExpiryRunPath = join(runsDir, 'ego-run-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.json');
+  writeFileSync(invalidExpiryRunPath, JSON.stringify({ expiresAt: 'not-a-date' }), { mode: 0o600 });
+  f.save({ evaluateQueue: Array.from({ length: 4 }, () => ({ items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }], total: 1 })) });
+  const next = f.runScan({ detailOpenCap: 1 }).data;
+  assert.deepEqual(next.candidates[0].events, [{ senderIsOther: true, text: 'p1 요청 드립니다' }]);
+  assert.equal(next.candidates[0].eventEvidence.cachedSummary, null);
+  assert.equal(next.coverage.historyPruneFailed, true);
+  assert.equal(existsSync(summaryPath), false, '인식된 손상 요약은 제거한다');
+  assert.equal(existsSync(malformedRunPath), false, '인식된 손상 회차 파일은 제거한다');
+  assert.equal(existsSync(invalidExpiryRunPath), false, '만료 시각이 잘못된 회차 파일은 제거한다');
+});
+
+test('본문 지문이 달라지면 캐시를 쓰지 않고 최신 이벤트를 반환한다', t => {
+  const f = singleDetailSetup(t);
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{
+    conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint,
+    topic: 'recruiting', followUp: 'uncertain',
+  }] }, 'unattended', 'cache').data.status, 'OK');
+  f.save({
+    readEvents: { lastSenderIsOther: true, text: 'p1 요청이 바뀌었습니다', renderedCount: 1,
+      events: [{ senderIsOther: true, text: 'p1 요청이 바뀌었습니다' }] },
+    evaluateQueue: [
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
+      { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 },
+    ],
+  });
+  const changed = f.runScan({ detailOpenCap: 1 }).data.candidates[0];
+  assert.equal(changed.eventEvidence.bodyOmittedByCache, false);
+  assert.deepEqual(changed.events, [{ senderIsOther: true, text: 'p1 요청이 바뀌었습니다' }]);
+  assert.equal(changed.eventEvidence.cachedSummary, null);
+});
+
+test('본문이 300자에 닿으면 잘림 가능성을 표시하고 캐시 지문을 만들지 않는다', t => {
+  const f = singleDetailSetup(t);
+  const longText = `p1 ${'가'.repeat(300)}`;
+  f.save({ readEvents: { lastSenderIsOther: true, text: longText, renderedCount: 1,
+    events: [{ senderIsOther: true, text: longText }] } });
+  const candidate = f.runScan({ detailOpenCap: 1 }).data.candidates[0];
+  assert.equal(candidate.events[0].text.length, 300);
+  assert.equal(candidate.eventEvidence.possibleTextTruncation, true);
+  assert.equal(candidate.eventEvidence.fingerprint, null);
+});
+
+test('무인 cache는 허용 enum만 받고 오래된 회차·이름만 있는 대상을 저장하지 않는다', t => {
+  const f = singleDetailSetup(t);
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  const stale = { runId: first.runId, summaries: [{
+    conversationUuid: candidate.conversationUuid,
+    fingerprint: '0'.repeat(64), topic: 'recruiting', followUp: 'uncertain',
+  }] };
+  assert.equal(f.runReply(stale, 'unattended', 'cache').data.status, 'STALE');
+  const input = { runId: first.runId, summaries: [{
+    conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint,
+    topic: 'free text is forbidden', followUp: 'uncertain',
+  }] };
+  assert.equal(f.runReply(input, 'unattended', 'cache').data.status, 'INVALID_ARGUMENT');
+  assert.equal(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/summaries')).length, 0);
+  assert.equal(f.runReply(input, 'manual', 'cache').data.status, 'INVALID_ARGUMENT');
+});
+
+test('cache는 만료되거나 파싱할 수 없는 run 기록을 거부한다', t => {
+  const f = singleDetailSetup(t);
+  const first = f.runScan({ detailOpenCap: 1 }).data;
+  const candidate = first.candidates[0];
+  const input = { runId: first.runId, summaries: [{ conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint, topic: 'recruiting', followUp: 'uncertain' }] };
+  const runPath = join(f.home, '.local/share/aha-skills/linkedin-replies/runs', `ego-run-${first.runId}.json`);
+  const run = JSON.parse(readFileSync(runPath, 'utf8'));
+  run.expiresAt = '2000-01-01T00:00:00.000Z';
+  writeFileSync(runPath, JSON.stringify(run), { mode: 0o600 });
+  assert.equal(f.runReply(input, 'unattended', 'cache').data.status, 'STALE');
+  writeFileSync(runPath, '{broken', { mode: 0o600 });
+  assert.equal(f.runReply(input, 'unattended', 'cache').data.status, 'STALE');
+  assert.equal(readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/summaries')).length, 0);
 });
 
 test('본인 발신 대화는 이벤트를 반환하되 관측 기록에는 본문을 남기지 않는다', t => {
@@ -1375,7 +1742,11 @@ test('빈 입력 scan은 저장된 ego binding으로 무인 정상 입구를 제
   const f = scanSetup(t);
   f.save({ mode: 'stderr' });
   const result = f.runReply({}, 'unattended', 'scan');
-  assert.deepEqual(result.data, { status: 'EGO_OUTCOME_UNKNOWN', reason: 'EGO_CONNECT_FAILED', profileLockRetained: true });
+  assert.equal(result.data.status, 'EGO_OUTCOME_UNKNOWN');
+  assert.equal(result.data.reason, 'EGO_CONNECT_FAILED');
+  assert.match(result.data.runId, /^[0-9a-f-]{36}$/i);
+  assert.equal(result.data.historyWriteFailed, false);
+  assert.equal(result.data.profileLockRetained, true);
 });
 
 test('ego scan은 잘린 목록(total>items)에서 complete를 보고하지 않는다', t => {
@@ -1419,7 +1790,11 @@ test('ego scan은 fingerprint 불일치를 명시 실패로 반환하고 락을 
   const f = scanSetup(t);
   f.save({ fingerprint: { labels: ['Focused'], hasConversationList: true } });
   const result = f.runScan();
-  assert.deepEqual(result.data, { status: 'EGO_FINGERPRINT_MISMATCH', reason: 'UI_OPERATION_FAILED', profileLockRetained: true });
+  assert.equal(result.data.status, 'EGO_FINGERPRINT_MISMATCH');
+  assert.equal(result.data.reason, 'UI_OPERATION_FAILED');
+  assert.match(result.data.runId, /^[0-9a-f-]{36}$/i);
+  assert.equal(result.data.historyWriteFailed, false);
+  assert.equal(result.data.profileLockRetained, true);
   const locks = readdirSync(join(f.home, '.local/share/aha-skills/linkedin-replies/locks')).filter(n => n.startsWith('ego-profile-'));
   assert.equal(locks.length, 1);
   assert.equal(f.runScan().data.status, 'LOCKED');
@@ -1484,11 +1859,19 @@ test('수신 응답 관측은 상세 개방 없이 후보·answered를 판정하
   assert.equal(result.data.coverage.capturedCount, 2);
   assert.equal(result.data.candidates.length, 1);
   assert.deepEqual(result.data.candidates[0], { name: 'A', conversationUuid: captureUuidA,
-    preview: 'p1', time: 'Nov 12', events: [{ senderIsOther: true, text: 'p1 요청 드립니다' }] });
+    preview: 'p1', time: 'Nov 12', events: [{ senderIsOther: true, text: 'p1 요청 드립니다' }],
+    eventEvidence: { source: 'capture', observedEventCount: 1, returnedEventCount: 1,
+      truncatedFromOldest: false, unreadableEventCount: 0, possibleTextTruncation: false,
+      fingerprint: result.data.candidates[0].eventEvidence.fingerprint,
+      bodyIncluded: true, bodyOmittedByCache: false, cachedSummary: null } });
   assert.equal(result.data.review.length, 0);
   assert.equal(result.data.coverage.answeredCount, 1, '소유자 발신은 answered로 판정된다');
   assert.deepEqual(result.data.awaitingReply, [{ name: 'B', conversationUuid: captureUuidB,
-    preview: 'p2', time: 'Nov 2', events: [{ senderIsOther: false, text: 'p2 확인했습니다' }] }]);
+    preview: 'p2', time: 'Nov 2', events: [{ senderIsOther: false, text: 'p2 확인했습니다' }],
+    eventEvidence: { source: 'capture', observedEventCount: 1, returnedEventCount: 1,
+      truncatedFromOldest: false, unreadableEventCount: 0, possibleTextTruncation: false,
+      fingerprint: result.data.awaitingReply[0].eventEvidence.fingerprint,
+      bodyIncluded: true, bodyOmittedByCache: false, cachedSummary: null } }]);
   assert.equal(result.data.coverage.completeness, 'complete', '개방 0회여도 캡처 해소면 complete다');
   const ops = f.records('operations');
   assert.ok(ops.includes('cdp:Network.enable'));
@@ -1502,6 +1885,54 @@ test('수신 응답 관측은 상세 개방 없이 후보·answered를 판정하
   assert.equal('events' in record, false, '본문은 기록에 남지 않는다');
 });
 
+test('빈 입력 무인 scan은 저장 binding으로 한 번 조회하고 캐시 후에도 다시 한 번 실시간 조회한다', t => {
+  const f = captureSetup(t);
+  const payload = JSON.stringify({ included: [
+    capMsg({ body: 'p1 요청 드립니다', firstName: 'A' }),
+    capMsg({ uuid: captureUuidB, slug: 'test-slug', id: OWNER_ID, body: 'p2 확인했습니다', firstName: 'B' }),
+  ] });
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: payload } } });
+  const first = f.runReply({}, 'unattended', 'scan').data;
+  assert.equal(first.status, 'OK');
+  assert.equal(first.coverage.completeness, 'complete');
+  assert.equal(f.records('operations').filter(op => op === 'cdp:Network.enable').length, 1);
+  const candidate = first.candidates[0];
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{ conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint, topic: 'technical', followUp: 'suggested' }] }, 'unattended', 'cache').data.status, 'OK');
+  const view = { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 };
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: payload } },
+    evaluateQueue: [view, view, view, view] });
+  const second = f.runReply({}, 'unattended', 'scan').data;
+  assert.equal(second.status, 'OK');
+  assert.equal(f.records('operations').filter(op => op === 'cdp:Network.enable').length, 2, 'cache 적중 뒤에도 새 scan은 정확히 한 번 실행한다');
+  assert.equal(second.candidates[0].eventEvidence.bodyOmittedByCache, true);
+});
+
+test('캡처 본문이 같아도 신뢰 시각이 바뀌면 캐시 fingerprint가 달라진다', t => {
+  const f = captureSetup(t);
+  const body = JSON.stringify({ included: [
+    { ...capMsg({ body: 'p1 동일 본문', firstName: 'A' }), deliveredAt: 1000 },
+    { ...capMsg({ uuid: captureUuidB, slug: 'test-slug', id: OWNER_ID, body: 'p2 내 응답', firstName: 'B' }), deliveredAt: 2000 },
+  ] });
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body } } });
+  const first = f.runScan().data;
+  const candidate = first.candidates[0];
+  assert.match(candidate.eventEvidence.fingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(f.runReply({ runId: first.runId, summaries: [{ conversationUuid: candidate.conversationUuid,
+    fingerprint: candidate.eventEvidence.fingerprint, topic: 'networking', followUp: 'suggested' }] }, 'unattended', 'cache').data.status, 'OK');
+  const changedBody = JSON.stringify({ included: [
+    { ...capMsg({ body: 'p1 동일 본문', firstName: 'A' }), deliveredAt: 3000 },
+    { ...capMsg({ uuid: captureUuidB, slug: 'test-slug', id: OWNER_ID, body: 'p2 내 응답', firstName: 'B' }), deliveredAt: 2000 },
+  ] });
+  const view = { items: [{ index: 0, name: 'A', preview: 'p1', time: 'Nov 12' }, { index: 1, name: 'B', preview: 'p2', time: 'Nov 2' }], total: 2 };
+  f.save({ eventsQueue: [capPair('r1')], cdpBody: { r1: { base64Encoded: false, body: changedBody } },
+    evaluateQueue: [view, view, view, view] });
+  const next = f.runScan().data.candidates[0];
+  assert.notEqual(next.eventEvidence.fingerprint, candidate.eventEvidence.fingerprint);
+  assert.equal(next.eventEvidence.cachedSummary, null);
+  assert.deepEqual(next.events, [{ senderIsOther: true, text: 'p1 동일 본문' }]);
+});
+
 test('발신자가 불명인 과거 이벤트는 상대 메시지로 오인하지 않는다', t => {
   const f = captureSetup(t);
   const unknown = { ...capMsg({ body: '발신자 미확인', withFrom: false }), deliveredAt: 1 };
@@ -1510,6 +1941,9 @@ test('발신자가 불명인 과거 이벤트는 상대 메시지로 오인하�
   const result = f.runScan();
   assert.equal(result.data.candidates.length, 1);
   assert.deepEqual(result.data.candidates[0].events, [], '발신자가 불명인 이력은 맥락으로 제시하지 않는다');
+  assert.equal(result.data.candidates[0].eventEvidence.bodyIncluded, false);
+  assert.equal(result.data.candidates[0].eventEvidence.bodyOmittedByCache, false);
+  assert.equal(result.data.candidates[0].eventEvidence.fingerprint, null);
 });
 
 test('계정과 비교할 수 없는 이벤트 식별자는 상대 발신으로 단정하지 않는다', t => {

@@ -68,7 +68,7 @@ LinkedIn 전용 기존 bootstrap, 단일 글·기존 사진 게시, read-back만
 
 ### [linkedin-followup](skills/social-experts/linkedin-followup)
 
-**버전**: 1.13.0
+**버전**: 1.14.0
 
 LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬어 승인 후 기존 대화에 회신한다(링크드인 팔로업 루프). "LinkedIn 팔로업 확인해줘", "LinkedIn 답장 안 한 메시지 확인해줘", "회신 초안 써줘", "LinkedIn 정기 확인 등록해줘" 요청할 때 사용한다. Orca 정기 확인 등록을 선택적으로 지원하며 게시물·새 대화·연결 수락은 다루지 않는다.
 
@@ -87,7 +87,7 @@ LinkedIn 최근 미응답 대화를 확인·요약하고 답장 초안을 다듬
 
 ### [social-sync](skills/social-experts/social-sync)
 
-**버전**: 0.1.0
+**버전**: 0.1.1
 
 X·Facebook·Threads·Bluesky 계정의 글을 상호 동기화하는 orca 정기 자동화. "소셜 동기화 등록해줘", "크로스포스트 자동화 걸어줘", "X에만 올린 글 다른 플랫폼에도 올려줘", "/social-sync", "sync tick", "동기화 승인 대기 게시해줘" 같은 요청 시 사용한다. LLM 없는 precheck 게이트(scripts/sync_gate.py)가 새 글을 찾을 때만 에이전트를 깨우고, tick이 미디어 수집·글자수 초과 스레드 분할 초안까지 준비한 뒤 사용자 승인(social-posting의 "게시 승인" 훅 계약)을 거쳐 게시한다. setup(최초 설정·첫 실행 며칠치 질문)/tick(무인)/approve(승인·게시)/status 모드가 있다. Threads 게시는 실환경 검증 전까지 대상에서 제외한다.
 

@@ -53,7 +53,7 @@ assert_contains "create 응답" "$OUT" '"id": "a1"'
 LOG="$(cat "$WORK/orca.log")"
 assert_contains "orca 인자" "$LOG" "--disabled"
 assert_contains "orca 인자" "$LOG" "--precheck bash $CONFIG_DIR/gate.sh"
-assert_contains "orca 인자" "$LOG" "--precheck-timeout 900"
+assert_contains "orca 인자" "$LOG" "--precheck-timeout 600"
 assert_contains "orca 인자" "$LOG" "--prompt /social-sync tick"
 assert_contains "orca 인자" "$LOG" "--trigger */30 * * * *"
 assert_contains "orca 인자" "$LOG" "--workspace path:/tmp/somewhere"

@@ -17,7 +17,7 @@ ORCA="${SOCIAL_SYNC_ORCA:-orca}"
 NAME="social-sync"
 PROMPT="/social-sync tick"
 PRECHECK="bash ${CONFIG_DIR}/gate.sh"
-PRECHECK_TIMEOUT="900"
+PRECHECK_TIMEOUT="600"  # orca 상한이 600초다 (게이트 자체는 플랫폼당 120초 상한이 따로 있다)
 DEFAULT_TRIGGER="0 * * * *"
 TIMEZONE="Asia/Seoul"
 

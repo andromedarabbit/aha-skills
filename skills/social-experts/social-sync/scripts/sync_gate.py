@@ -48,7 +48,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 # 동기화 대상 4개 플랫폼. linkedin·instagram은 v1 동기화 범위 밖이다.
 SYNC_PLATFORMS = ["x", "facebook", "threads", "bluesky"]
 # compareCandidates(ego-post.mjs normalizeText·similarity)와 동일 임계값 — 양쪽을 함께 바꾼다.
@@ -517,7 +517,8 @@ def cmd_wake_report(_args):
     state = load_state_or_fail()
     last_wake = state.get("lastWake")
     if not last_wake:
-        fail("소비할 wake가 없습니다", code=1)
+        print(json.dumps({"status": "NO_WAKE", "lastScan": state.get("lastScan"), "gateError": state.get("gateError")}, ensure_ascii=False))
+        sys.exit(1)
     print(json.dumps({"status": "WAKE", **last_wake}, ensure_ascii=False))
     sys.exit(0)
 

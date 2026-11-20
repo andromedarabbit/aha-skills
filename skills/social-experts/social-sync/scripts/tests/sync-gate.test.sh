@@ -169,11 +169,18 @@ gate_tool 0 "$WORK/out" SOCIAL_SYNC_NOW="2026-11-19T20:00:00Z" STUB_SCAN_FAIL=1 
 assert_contains "6시간 후 재기상" "$(cat "$WORK/out")" "WAKE_ERROR"
 # 비게이트 스캔은 오류를 항상 exit 2로 올린다
 gate_tool 2 "$WORK/out" SOCIAL_SYNC_NOW="2026-11-19T21:00:00Z" STUB_SCAN_FAIL=1 -- uv run --script "$SYNC_GATE" scan
+gate_tool 1 "$WORK/out" -- uv run --script "$SYNC_GATE" wake-report
+jq -e '.status == "NO_WAKE" and (.lastScan.errors | length > 0)' < "$WORK/out" >/dev/null || fail "wake-report: 스캔 오류 누락"
 
 # ── 8. wake-report ──
 init_env "x"
 rm -rf "$WORK/jobs"
 gate_tool 1 "$WORK/out" -- uv run --script "$SYNC_GATE" wake-report
+jq -e '.status == "NO_WAKE" and .lastScan == null' < "$WORK/out" >/dev/null || fail "wake-report: 스캔 전 NO_WAKE 상태 누락"
+fixture "$WORK/fixture-empty.json" x '[]' "$NEW_COVERAGE"
+gate_tool 1 "$WORK/out" STUB_SCAN_FIXTURE="$WORK/fixture-empty.json" -- uv run --script "$SYNC_GATE" scan --gate
+gate_tool 1 "$WORK/out" -- uv run --script "$SYNC_GATE" wake-report
+jq -e '.status == "NO_WAKE" and .lastScan.at != null' < "$WORK/out" >/dev/null || fail "wake-report: 스캔 후 NO_WAKE 상태 누락"
 gate_tool 0 "$WORK/out" STUB_SCAN_FIXTURE="$WORK/fixture-x.json" -- uv run --script "$SYNC_GATE" scan --gate
 gate_tool 0 "$WORK/out" -- uv run --script "$SYNC_GATE" wake-report
 assert_contains "wake-report 본문" "$(cat "$WORK/out")" '"status": "WAKE"'

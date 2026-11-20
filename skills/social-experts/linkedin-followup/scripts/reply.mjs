@@ -123,6 +123,9 @@ export async function scanRecent(account, request) {
 const fail = code => Object.assign(new Error(code), { code });
 const MAX_INPUT = 2 * 1024 * 1024;
 const TRANSPORT = 'linkedincli/1';
+const HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const SUMMARY_TOPICS = Object.freeze(['recruiting', 'networking', 'technical', 'other', 'unknown']);
+const FOLLOW_UP_STATES = Object.freeze(['suggested', 'none', 'uncertain']);
 
 function privateDirectory(path) {
   const stat = lstatSync(path);
@@ -138,7 +141,7 @@ function ensureState() {
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail('UNSAFE_STATE');
   }
   privateDirectory(STATE_DIR);
-  for (const name of ['jobs', 'locks', 'conversations']) {
+  for (const name of ['jobs', 'locks', 'conversations', 'runs', 'summaries']) {
     const path = join(STATE_DIR, name);
     if (!existsSync(path)) mkdirSync(path, { mode: 0o700 });
     privateDirectory(path);
@@ -163,6 +166,170 @@ function durableWrite(path, value, json = true) {
     const fd = openSync(join(path, '..'), constants.O_RDONLY);
     try { fsyncSync(fd); } finally { closeSync(fd); }
   } finally { rmSync(temporary, { force: true }); }
+}
+
+function summaryConversationKey(accountSlug, conversationUuid) {
+  return digest(['linkedin-summary-conversation/v1', accountSlug, conversationUuid]);
+}
+
+function summaryPath(accountSlug, conversationUuid) {
+  return join(STATE_DIR, 'summaries', `ego-summary-${summaryConversationKey(accountSlug, conversationUuid)}.json`);
+}
+
+function runPath(runId) {
+  return join(STATE_DIR, 'runs', `ego-run-${runId}.json`);
+}
+
+function eventEvidence(source, events, eventIdentities, observedEventCount, truncatedFromOldest, unreadableEventCount) {
+  const possibleTextTruncation = events.some(event => event.text.length >= 300);
+  const identitiesComplete = Array.isArray(eventIdentities) && eventIdentities.length === events.length &&
+    eventIdentities.every(identity => typeof identity === 'string' && identity.length > 0) &&
+    new Set(eventIdentities).size === eventIdentities.length;
+  const eligible = events.length > 0 && identitiesComplete && unreadableEventCount === 0 && !possibleTextTruncation;
+  const fingerprint = eligible
+    ? digest(['linkedin-summary-window/v2', source, events.map(({ senderIsOther, text }) => [senderIsOther, text]), eventIdentities, truncatedFromOldest])
+    : null;
+  return {
+    source, observedEventCount, returnedEventCount: events.length, truncatedFromOldest,
+    unreadableEventCount, possibleTextTruncation, fingerprint,
+    bodyIncluded: events.length > 0, bodyOmittedByCache: false, cachedSummary: null,
+  };
+}
+
+function readSummary(accountSlug, conversationUuid, fingerprint, now) {
+  if (!fingerprint) return null;
+  const path = summaryPath(accountSlug, conversationUuid);
+  let value;
+  try { value = readPrivate(path); }
+  catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    if (error?.code === 'ELOOP' || error?.code === 'UNSAFE_STATE') throw fail('UNSAFE_STATE');
+    return null;
+  }
+  const exact = value && Object.keys(value).sort().join('|') ===
+    ['schemaVersion', 'conversationKey', 'fingerprint', 'topic', 'followUp', 'createdAt', 'expiresAt'].sort().join('|');
+  if (!exact || value.schemaVersion !== 1 || value.conversationKey !== summaryConversationKey(accountSlug, conversationUuid) ||
+      value.fingerprint !== fingerprint || !SUMMARY_TOPICS.includes(value.topic) || !FOLLOW_UP_STATES.includes(value.followUp)) return null;
+  const expiresAt = Date.parse(value.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return null;
+  return value;
+}
+
+function conversationOutput(link, { name, conversationUuid, preview, time, events, eventIdentities, source, observedEventCount, truncatedFromOldest, unreadableEventCount }) {
+  return { name, conversationUuid, preview, time, events,
+    eventEvidence: eventEvidence(source, events, eventIdentities, observedEventCount, truncatedFromOldest, unreadableEventCount) };
+}
+
+function applyCachedSummary(entry, cached) {
+  if (!cached) return;
+  entry.events = [];
+  delete entry.preview;
+  entry.eventEvidence.returnedEventCount = 0;
+  entry.eventEvidence.bodyIncluded = false;
+  entry.eventEvidence.bodyOmittedByCache = true;
+  entry.eventEvidence.cachedSummary = { topic: cached.topic, followUp: cached.followUp, recordedAt: cached.createdAt };
+}
+
+function pruneExpired(directory, filePattern, now) {
+  let failed = false;
+  for (const name of readdirSync(directory)) {
+    if (!filePattern.test(name)) continue;
+    const path = join(directory, name);
+    let value;
+    try { value = readPrivate(path); }
+    catch (error) {
+      if (error?.code === 'UNSAFE_STATE') throw error;
+      if (error instanceof SyntaxError) { rmSync(path); failed = true; continue; }
+      failed = true;
+      continue;
+    }
+    const expiresAt = Date.parse(value?.expiresAt ?? '');
+    if (!Number.isFinite(expiresAt)) { rmSync(path); failed = true; continue; }
+    if (expiresAt <= now) rmSync(path);
+  }
+  return failed;
+}
+
+function withCacheLock(link, operation, action) {
+  const lockPath = join(STATE_DIR, 'locks', `ego-cache-profile-${digest([link.executable, link.taskSpaceName])}`);
+  try { mkdirSync(lockPath, { mode: 0o700 }); }
+  catch (error) { if (error.code === 'EEXIST') throw fail('LOCKED'); throw error; }
+  try {
+    durableWrite(join(lockPath, 'operation.json'), { operation, attemptId: randomUUID(), startedAt: new Date().toISOString(), ownerPid: process.pid });
+    const lockFd = openSync(join(STATE_DIR, 'locks'), constants.O_RDONLY);
+    try { fsyncSync(lockFd); } finally { closeSync(lockFd); }
+    return action();
+  } finally {
+    rmSync(join(lockPath, 'operation.json'), { force: true });
+    rmdirSync(lockPath);
+  }
+}
+
+function pruneHistory(link, now) {
+  try {
+    return withCacheLock(link, 'retention-prune', () => {
+      const runPruneFailed = pruneExpired(join(STATE_DIR, 'runs'), /^ego-run-[0-9a-f-]{36}\.json$/i, now);
+      const summaryPruneFailed = pruneExpired(join(STATE_DIR, 'summaries'), /^ego-summary-[0-9a-f]{64}\.json$/, now);
+      return runPruneFailed || summaryPruneFailed;
+    });
+  } catch (error) {
+    if (error?.code === 'UNSAFE_STATE') throw error;
+    return true;
+  }
+}
+
+function writeRunHistory(link, runId, observedAt, status, coverage, conversations) {
+  const path = runPath(runId);
+  durableWrite(path, {
+    schemaVersion: 1, runId, accountKey: digest(['linkedin-summary-account/v1', link.account.slug]),
+    observedAt, expiresAt: new Date(Date.parse(observedAt) + HISTORY_RETENTION_MS).toISOString(),
+    status, coverage, conversations,
+  });
+}
+
+function cacheEgoSummaries(input) {
+  if (Object.keys(input).sort().join('|') !== ['runId', 'summaries'].sort().join('|') ||
+      typeof input.runId !== 'string' || !/^[0-9a-f-]{36}$/i.test(input.runId) ||
+      !Array.isArray(input.summaries) || input.summaries.length < 1 || input.summaries.length > 100) throw fail('INVALID_ARGUMENT');
+  const seen = new Set();
+  for (const item of input.summaries) {
+    if (!item || Object.keys(item).sort().join('|') !== ['conversationUuid', 'fingerprint', 'topic', 'followUp'].sort().join('|') ||
+        typeof item.conversationUuid !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(item.conversationUuid) ||
+        typeof item.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(item.fingerprint) ||
+        !SUMMARY_TOPICS.includes(item.topic) || !FOLLOW_UP_STATES.includes(item.followUp)) throw fail('INVALID_ARGUMENT');
+    const key = item.conversationUuid.toLowerCase();
+    if (seen.has(key)) throw fail('INVALID_ARGUMENT');
+    seen.add(key);
+  }
+  const link = egoBinding();
+  ensureState();
+  return withCacheLock(link, 'cache', () => {
+    let run;
+    try { run = readPrivate(runPath(input.runId)); }
+    catch (error) {
+      if (error?.code === 'UNSAFE_STATE') throw error;
+      throw fail('STALE');
+    }
+    const now = Date.now();
+    if (run?.schemaVersion !== 1 || run.runId !== input.runId ||
+        run.accountKey !== digest(['linkedin-summary-account/v1', link.account.slug]) || run.status !== 'OK' ||
+        run.coverage?.completeness !== 'complete' || run.coverage?.historyPruneFailed === true ||
+        run.coverage?.historyWriteFailed === true || !Array.isArray(run.conversations) ||
+        !Number.isFinite(Date.parse(run.expiresAt)) || Date.parse(run.expiresAt) <= now) throw fail('STALE');
+    const saved = [];
+    for (const item of input.summaries) {
+      const key = summaryConversationKey(link.account.slug, item.conversationUuid);
+      const observed = run.conversations.find(value => value?.conversationKey === key && value.fingerprint === item.fingerprint);
+      if (!observed?.cacheEligible) throw fail('STALE');
+      saved.push({
+        path: summaryPath(link.account.slug, item.conversationUuid),
+        record: { schemaVersion: 1, conversationKey: key, fingerprint: item.fingerprint,
+          topic: item.topic, followUp: item.followUp, createdAt: run.observedAt, expiresAt: run.expiresAt },
+      });
+    }
+    for (const item of saved) durableWrite(item.path, item.record);
+    return { status: 'OK', saved: saved.length };
+  });
 }
 
 function binding() {
@@ -653,10 +820,10 @@ function egoBinding() {
 }
 
 // G2 통과 뒤 활성 전환 지점: run()의 scan 가드를 두 줄로 교체한다 —
-// `if (command === 'scan' && input.transport === 'ego-ui/1') return scanEgo(input);` +
+// `if (command === 'scan' && input.transport === 'ego-ui/1') return scanEgo(input, mode);` +
 // `if (command === 'scan' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');` (aside 차단 유지).
 // 합성 검증은 이 함수를 직접 호출해 수행한다(진입점은 아직 가드로 막혀 있어 테스트만의 유일한 구동 경로).
-export async function scanEgo(input) {
+export async function scanEgo(input, mode = 'manual') {
   const { scanEgoList, EGO_STEP_CODES, EGO_FAILURE_REASONS } = await import('./ego-ui.mjs');
   if (Object.keys(input).some(key => !['transport', 'executable', 'taskSpaceName', 'detailOpenCap'].includes(key)) ||
       input.transport !== 'ego-ui/1' || typeof input.executable !== 'string' || !input.executable.startsWith('/') ||
@@ -672,6 +839,12 @@ export async function scanEgo(input) {
   catch (error) { if (error.code === 'EEXIST') throw fail('LOCKED'); throw error; }
   let phase = 'UI_STATE_FAILED';
   let observed = null;
+  const runId = randomUUID();
+  const runStartedAt = new Date().toISOString();
+  let historyWriteFailed = false;
+  let historyPruneFailed = false;
+  const runConversations = [];
+  const cachedEntries = [];
   const review = [];
   let recordWriteFailed = false;
   const candidates = [];
@@ -681,9 +854,10 @@ export async function scanEgo(input) {
   let detailOpened = 0;
   let capturedCount = 0;
   try {
-    durableWrite(join(path, 'operation.json'), { operation: 'scan', attemptId: randomUUID(), startedAt: new Date().toISOString(), ownerPid: process.pid });
+    durableWrite(join(path, 'operation.json'), { operation: 'scan', attemptId: runId, startedAt: runStartedAt, ownerPid: process.pid });
     const fd = openSync(join(STATE_DIR, 'locks'), constants.O_RDONLY);
     try { fsyncSync(fd); } finally { closeSync(fd); }
+    historyPruneFailed = pruneHistory(link, Date.now());
     phase = 'UI_OPERATION_FAILED';
     observed = await scanEgoList({ executable: link.executable, taskSpaceName: link.taskSpaceName, fingerprint: link.fingerprint, deadlineMs: 100000,
       ownerSlug: link.account?.slug ?? null, ownerProfileId: link.account?.profileId ?? null });
@@ -706,13 +880,20 @@ export async function scanEgo(input) {
       } catch { recordWriteFailed = true; }
       if (capture) {
         capturedCount += 1;
-        if (capture.lastSenderIsOther === true) {
-          candidates.push({ name: item.name, conversationUuid: capture.conversationUuid,
-            preview: item.preview, time: item.time, events: Array.isArray(capture.events) ? capture.events : [] });
-        } else {
+        const events = Array.isArray(capture.events) ? capture.events : [];
+        const entry = conversationOutput(link, {
+          name: item.name, conversationUuid: capture.conversationUuid, preview: item.preview, time: item.time,
+          events, eventIdentities: capture.eventTimestamps.map(time => time === null ? null : digest(['linkedin-event-time/v1', time])),
+          source: 'capture', observedEventCount: capture.observedEventCount,
+          truncatedFromOldest: capture.truncatedFromOldest, unreadableEventCount: capture.unreadableEventCount,
+        });
+        const status = capture.lastSenderIsOther === true ? 'candidate' : 'awaitingReply';
+        runConversations.push({ conversationKey: summaryConversationKey(slug, capture.conversationUuid),
+          fingerprint: entry.eventEvidence.fingerprint, cacheEligible: Boolean(entry.eventEvidence.fingerprint), status });
+        if (status === 'candidate') candidates.push(entry);
+        else {
           answeredNames.push(item.name);
-          awaitingReply.push({ name: item.name, conversationUuid: capture.conversationUuid,
-            preview: item.preview, time: item.time, events: Array.isArray(capture.events) ? capture.events : [] });
+          awaitingReply.push(entry);
         }
         continue;
       }
@@ -753,31 +934,44 @@ export async function scanEgo(input) {
           { uuid: opened.conversationUuid, name: item.name, previewHash: item.previewHash, lastSenderKind: opened.lastSenderIsOther ? 'other' : 'self', status: 'review', observedAt: new Date().toISOString(), threadSeg: opened.threadSeg });
         continue;
       }
+      const events = Array.isArray(opened.events) ? opened.events : [];
+      const entry = conversationOutput(link, {
+        name: item.name, conversationUuid: opened.conversationUuid, preview: item.preview, time: item.time,
+        events, eventIdentities: opened.eventIdentities,
+        source: 'detail', observedEventCount: opened.observedEventCount,
+        truncatedFromOldest: opened.truncatedFromOldest, unreadableEventCount: opened.unreadableEventCount,
+      });
       if (opened.lastSenderIsOther !== true) {
         item.status = 'answered';
         answeredNames.push(item.name);
-        awaitingReply.push({ name: item.name, conversationUuid: opened.conversationUuid,
-          preview: item.preview, time: item.time, events: Array.isArray(opened.events) ? opened.events : [] });
+        runConversations.push({ conversationKey: summaryConversationKey(slug, opened.conversationUuid),
+          fingerprint: entry.eventEvidence.fingerprint, cacheEligible: Boolean(entry.eventEvidence.fingerprint), status: 'awaitingReply' });
+        awaitingReply.push(entry);
       } else {
         item.status = 'candidate';
-        candidates.push({ name: item.name, conversationUuid: opened.conversationUuid,
-          preview: item.preview, time: item.time, events: Array.isArray(opened.events) ? opened.events : [] });
+        runConversations.push({ conversationKey: summaryConversationKey(slug, opened.conversationUuid),
+          fingerprint: entry.eventEvidence.fingerprint, cacheEligible: Boolean(entry.eventEvidence.fingerprint), status: 'candidate' });
+        candidates.push(entry);
       }
       // UUID 키 승격(KTD23): 이름 키 기록 제거, UUID 키로 기록.
       const uuidPath = join(recordsDir, `ego-obs-${digest(['ego-observation', slug, 'uuid', opened.conversationUuid])}.json`);
       durableWrite(uuidPath, { uuid: opened.conversationUuid, name: item.name, previewHash: item.previewHash, lastSenderKind: opened.lastSenderIsOther ? 'other' : 'self', status: item.status, observedAt: new Date().toISOString(), threadSeg: opened.threadSeg });
       rmSync(join(recordsDir, `ego-obs-${digest(['ego-observation', slug, item.name])}.json`), { force: true });
     }
-    rmSync(join(path, 'operation.json'));
-    rmdirSync(path);
     observed.recordWriteFailed = recordWriteFailed;
+    const cacheSafe = mode === 'unattended' && observed.complete && !capExceeded &&
+      !review.some(item => item.status === 'review') && (detailOpened > 0 || capturedCount > 0) &&
+      !recordWriteFailed && !historyPruneFailed;
+    if (cacheSafe) for (const entry of [...candidates, ...awaitingReply]) {
+      const cached = readSummary(link.account.slug, entry.conversationUuid, entry.eventEvidence.fingerprint, Date.now());
+      if (cached) cachedEntries.push([entry, cached]);
+    }
   } catch (error) {
-    const allowed = [...EGO_STEP_CODES];
-    return {
-      status: allowed.includes(error?.code) ? error.code : 'EGO_OUTCOME_UNKNOWN',
-      reason: EGO_FAILURE_REASONS.includes(error?.reason) ? error.reason : phase,
-      profileLockRetained: true,
-    };
+    const status = [...EGO_STEP_CODES].includes(error?.code) ? error.code : 'EGO_OUTCOME_UNKNOWN';
+    const reason = EGO_FAILURE_REASONS.includes(error?.reason) ? error.reason : phase;
+    try { writeRunHistory(link, runId, runStartedAt, status, { reason }, []); }
+    catch { historyWriteFailed = true; }
+    return { status, reason, runId, historyWriteFailed, profileLockRetained: true };
   }
   const finalReview = review.filter(item => item.status === 'review');
   const openFailedCount = finalReview.filter(item => String(item.reason ?? '').startsWith('THREAD_OPEN_FAILED')).length;
@@ -787,15 +981,27 @@ export async function scanEgo(input) {
     : capturedCount > 0 && detailOpened === 0 ? '수신 응답 관측으로 발신자를 확정했습니다'
     : capturedCount > 0 ? '수신 응답 관측과 상세 개방으로 발신자를 확정했습니다'
     : '상세 개방으로 발신자를 확정했습니다';
-  return {
-    status: 'OK', transport: 'ego-ui/1', candidates, awaitingReply, review: finalReview,
+  const result = {
+    status: 'OK', transport: 'ego-ui/1', runId, candidates, awaitingReply, review: finalReview,
     filters: observed.filters, complete: observed.complete,
     coverage: { listed: observed.itemCount, detailOpened, openCap: cap, capExceeded,
       answeredCount: answeredNames.length, capturedCount,
       recordWriteFailed: observed.recordWriteFailed,
-      completeness: observed.complete && !capExceeded && finalReview.length === 0 && (detailOpened > 0 || capturedCount > 0) ? 'complete' : 'partial',
+      historyPruneFailed,
+      historyWriteFailed: false,
+      completeness: observed.complete && !capExceeded && finalReview.length === 0 && (detailOpened > 0 || capturedCount > 0) &&
+        !recordWriteFailed && !historyPruneFailed ? 'complete' : 'partial',
       reason },
   };
+  try { writeRunHistory(link, runId, runStartedAt, 'OK', result.coverage, runConversations); }
+  catch { historyWriteFailed = true; result.coverage.historyWriteFailed = true; result.coverage.completeness = 'partial'; }
+  if (result.coverage.completeness === 'complete' && !historyWriteFailed) {
+    for (const [entry, cached] of cachedEntries) applyCachedSummary(entry, cached);
+  }
+  result.historyWriteFailed = historyWriteFailed;
+  rmSync(join(path, 'operation.json'));
+  rmdirSync(path);
+  return result;
 }
 
 // 대화 전체 읽기(KTD25): scan이 승격한 UUID 키 기록의 관측 threadSeg로 스레드에 직행해 렌더된
@@ -906,21 +1112,23 @@ async function run(args, input) {
   try {
     parsed = parseArgs({ args, options: { mode: { type: 'string' } }, allowPositionals: true });
   } catch {
-    return { status: 'INVALID_ARGUMENT', message: 'scan/setup/prepare/send/inspect/read와 --mode manual|unattended만 지정하세요.' };
+    return { status: 'INVALID_ARGUMENT', message: 'scan/cache/setup/prepare/send/inspect/read와 --mode manual|unattended만 지정하세요.' };
   }
 
   const mode = parsed.values.mode;
   const [command] = parsed.positionals;
-  if (!['manual', 'unattended'].includes(mode) || parsed.positionals.length !== 1 || !['scan', 'setup', 'prepare', 'send', 'inspect', 'read'].includes(command)) {
+  if (!['manual', 'unattended'].includes(mode) || parsed.positionals.length !== 1 || !['scan', 'cache', 'setup', 'prepare', 'send', 'inspect', 'read'].includes(command)) {
     return { status: 'INVALID_ARGUMENT', message: '동작 하나와 --mode manual|unattended를 명시하세요.' };
   }
-  if (mode === 'unattended' && command !== 'scan') {
-    return { status: 'BLOCKED_UNATTENDED', mode, command, message: '무인 단계에서는 scan 한 번만 허용하며 질문·승인 생성·전송은 금지합니다.' };
+  if (mode === 'unattended' && !['scan', 'cache'].includes(command)) {
+    return { status: 'BLOCKED_UNATTENDED', mode, command, message: '무인 단계에서는 scan과 로컬 cache 기록만 허용하며 질문·승인 생성·전송은 금지합니다.' };
   }
+  if (command === 'cache' && mode !== 'unattended') throw fail('INVALID_ARGUMENT');
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('INVALID_ARGUMENT');
+  if (command === 'cache') return cacheEgoSummaries(input);
   if (command === 'inspect') return input.taskSpaceName !== undefined ? inspectEgo(input) : inspectUi(input);
   if (command === 'setup' && input.transport === 'ego-ui/1') return setupEgo(input);
-  if (command === 'scan' && input.transport === 'ego-ui/1') return scanEgo(input);
+  if (command === 'scan' && input.transport === 'ego-ui/1') return scanEgo(input, mode);
   if (command === 'scan' && input.transport === 'aside-ui/1') throw fail('UI_NOT_ACTIVATED');
   // read는 transport 조건 없이 명령만 검사한다 — transport 검증은 readEgo 내부에서 하고,
   // 여기 조건을 붙이면 알 수 없는 명령이 send로 추락하는 기존 fall-through와 결합해 read가 send로 샌다.
@@ -933,7 +1141,7 @@ async function run(args, input) {
       if (saved.transport === 'ego-ui/1') {
         if (typeof saved.executable !== 'string' || !saved.executable.startsWith('/') ||
             typeof saved.taskSpaceName !== 'string' || !saved.taskSpaceName) throw fail('UNSAFE_STATE');
-        return scanEgo({ transport: 'ego-ui/1', executable: saved.executable, taskSpaceName: saved.taskSpaceName });
+        return scanEgo({ transport: 'ego-ui/1', executable: saved.executable, taskSpaceName: saved.taskSpaceName }, mode);
       }
     }
   }
