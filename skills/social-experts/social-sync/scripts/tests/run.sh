@@ -5,6 +5,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 bash "$HERE/sync-gate.test.sh"
+python3 "$HERE/scenarios.py"
+python3 "$HERE/edge-cases.py"
 bash "$HERE/register.test.sh"
 
 echo "social-sync: 모든 테스트 통과"

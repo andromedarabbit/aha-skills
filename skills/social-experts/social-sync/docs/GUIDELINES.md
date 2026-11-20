@@ -6,11 +6,11 @@ tick 모드는 사람 없이 돌아간다. 이 원칙을 깨는 변경(무인 �
 
 ## 상태 전이는 게이트 스크립트로만
 
-`new → pending → synced` 전이는 `sync_gate.py`의 `mark-*` 서브커맨드로만 한다. `state.json`을 손으로 고치면 워터마크·pairs·pending의 불변식이 깨져 재동기화나 누락이 생긴다.
+`tick`에서 wake를 선점하고, `mark-pending`으로 원본을 대기열에 넣는다. 게시는 `publish-pending`이 기존 가드를 호출해 대상별 시도와 결과를 기록한다. 결과가 불명확하면 재실행하지 않고 먼저 실제 게시 여부를 확인한다. `state.json`을 손으로 수정하거나 기존 설정을 초기화하지 않는다.
 
 ## 스캔 산출물 레이아웃을 유지한다
 
-`fetch-media`는 scan jobDir가 `<작업>/scans/<scan-id>/<platform>` 형태일 때만 작동한다(작업 루트의 `media/`로 수집). 게이트가 wake 디렉터리를 승격하는 구조(`.scratch-` → `<ts>-<rand>`)를 바꾸면 이 계약이 깨진다.
+`fetch-media`는 스캔이 반환한 `<wake>/scans/<scan-id>/<platform>` 절대경로와 후보 ID를 확인한다. manifest 영수증에 경로가 묶이므로 스캔 디렉터리를 옮기면 검증에 실패한다. `prepare-media`는 `fetch-media`로 검증한 사진과 출처 파일만 원본별 초안 작업으로 복사한다.
 
 ## 유사도 임계값은 양쪽을 함께 바꾼다
 
