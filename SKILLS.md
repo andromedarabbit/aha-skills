@@ -6,7 +6,7 @@
 
 ### [workspace-restic-backup](skills/backup-experts/workspace-restic-backup)
 
-**버전**: 0.1.0
+**버전**: 0.1.1
 
 '지정한 Workspace 저장소를 restic으로 수동 반복 백업한다. "Workspace 백업해줘", "저장소 다시 백업해줘" 요청에 사용한다. 예약, 인증 변경, 외부 스킬 설치는 처리하지 않는다.'
 
