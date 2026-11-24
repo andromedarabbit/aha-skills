@@ -2,6 +2,19 @@
 
 이 저장소에 포함된 모든 스킬의 카테고리별 인덱스입니다.
 
+## backup-experts
+
+### [workspace-restic-backup](skills/backup-experts/workspace-restic-backup)
+
+**버전**: 0.1.0
+
+'지정한 Workspace 저장소를 restic으로 수동 반복 백업한다. "Workspace 백업해줘", "저장소 다시 백업해줘" 요청에 사용한다. 예약, 인증 변경, 외부 스킬 설치는 처리하지 않는다.'
+
+- [문서](skills/backup-experts/workspace-restic-backup/README.md)
+- [구현 가이드](skills/backup-experts/workspace-restic-backup/docs/GUIDELINES.md)
+- [레퍼런스](skills/backup-experts/workspace-restic-backup/docs/REFERENCE.md)
+
+
 ## email-experts
 
 ### [cloudflare-email-routing](skills/email-experts/cloudflare-email-routing)

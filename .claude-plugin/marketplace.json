@@ -9,6 +9,13 @@
   },
   "plugins": [
     {
+      "name": "backup-experts",
+      "description": "Workspace 저장소 수동 백업",
+      "source": "./skills/backup-experts",
+      "strict": false,
+      "skills": ["./workspace-restic-backup"]
+    },
+    {
       "name": "meta-experts",
       "description": "새 에이전트 스킬을 만들고 저장소 관례에 맞게 검증하는 메타 스킬",
       "source": "./skills/meta-experts",
