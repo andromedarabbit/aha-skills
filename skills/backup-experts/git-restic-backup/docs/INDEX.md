@@ -1,6 +1,6 @@
 # 문서 인덱스
 
-이 디렉토리에는 workspace-restic-backup 스킬의 상세 문서가 있습니다.
+이 디렉토리에는 `git-restic-backup` 스킬의 상세 문서가 있습니다.
 
 ## 사용 가능한 문서
 

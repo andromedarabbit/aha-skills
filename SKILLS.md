@@ -4,15 +4,15 @@
 
 ## backup-experts
 
-### [workspace-restic-backup](skills/backup-experts/workspace-restic-backup)
+### [git-restic-backup](skills/backup-experts/git-restic-backup)
 
-**버전**: 0.1.1
+**버전**: 0.2.0
 
-'지정한 Workspace 저장소를 restic으로 수동 반복 백업한다. "Workspace 백업해줘", "저장소 다시 백업해줘" 요청에 사용한다. 예약, 인증 변경, 외부 스킬 설치는 처리하지 않는다.'
+'현재 또는 명시적으로 지정한 Git 저장소 폴더 전체를 restic CLI로 사용자가 지정한 로컬 경로 또는 마운트된 볼륨에 수동 백업한다. "현재 Git 저장소 전체를 백업해줘", "이 Git 저장소를 다시 백업해줘"라고 요청할 때 사용한다. 상위 폴더를 훑거나 Git 이력만 내보내지 않는다. 예약, 인증 변경, 도구 설치는 처리하지 않는다.'
 
-- [문서](skills/backup-experts/workspace-restic-backup/README.md)
-- [구현 가이드](skills/backup-experts/workspace-restic-backup/docs/GUIDELINES.md)
-- [레퍼런스](skills/backup-experts/workspace-restic-backup/docs/REFERENCE.md)
+- [문서](skills/backup-experts/git-restic-backup/README.md)
+- [구현 가이드](skills/backup-experts/git-restic-backup/docs/GUIDELINES.md)
+- [레퍼런스](skills/backup-experts/git-restic-backup/docs/REFERENCE.md)
 
 
 ## email-experts

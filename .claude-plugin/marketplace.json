@@ -10,10 +10,10 @@
   "plugins": [
     {
       "name": "backup-experts",
-      "description": "Workspace 저장소 수동 백업",
+      "description": "Git 저장소 폴더 전체 수동 백업",
       "source": "./skills/backup-experts",
       "strict": false,
-      "skills": ["./workspace-restic-backup"]
+      "skills": ["./git-restic-backup"]
     },
     {
       "name": "meta-experts",
