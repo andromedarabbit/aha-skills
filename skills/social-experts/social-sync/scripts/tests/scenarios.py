@@ -131,6 +131,10 @@ class Sandbox:
         self.write_exec("ego-browser", "#!/bin/sh\nexit 99\n")
         self.write_exec("orca", "#!/bin/sh\nexit 99\n")
         self.write_exec("publish-stub", '#!/bin/bash\n/bin/cat >/dev/null\nprintf "fixture\\n" >> "$HOME/publish.log"\nprintf "%s\\n" "$STUB_POST_RESULT"\nexit "$STUB_POST_EXIT"\n')
+        # record-approval.sh가 approved_at을 초 단위 실제 시계로 남긴다. 재승인이 직전 승인과 같은 초에 묶이면
+        # sync_gate가 새 승인으로 보지 않는다 — 빠른 CI에서만 깨지는 경합이라 승인 시각은 STUB_DATE로 고정한다.
+        self.write_exec("date", '#!/bin/sh\n[ -n "${STUB_DATE:-}" ] || exec "' + shutil.which("date") + '" "$@"\nprintf "%s\\n" "$STUB_DATE"\n')
+        self.approvals = 0
         self.fallback = home / "fixture.mjs"
         self.fallback.touch()
         (home / "binding.json").write_text(json.dumps({"identity": dict(x="fixture", facebook="fixture", bluesky="fixture.bsky.social", threads="fixture")}))
@@ -192,12 +196,14 @@ class Sandbox:
         return job
 
     def approve(self, job, targets):
+        self.approvals += 1
+        stamp = f"2026-11-20T12:00:{self.approvals:02d}Z"
         q = "초안을 게시할까요?\n게시 대상: " + ",".join(targets)
         data = {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"header": "게시 승인", "question": q}]},
                 "tool_response": {"answers": {q: "게시"}}}
         subprocess.run(["/bin/bash", str(self.posting / "record-approval.sh")], input=json.dumps(data), text=True,
-                       env={**self.env, "SOCIAL_POSTING_JOB": str(job)}, check=True, capture_output=True)
-        assert (job / "receipt.json").is_file()
+                       env={**self.env, "SOCIAL_POSTING_JOB": str(job), "STUB_DATE": stamp}, check=True, capture_output=True)
+        assert json.loads((job / "receipt.json").read_text())["approved_at"] == stamp, "훅이 승인을 기록하지 않았거나 승인 시각이 STUB_DATE와 다르다"
 
 
 def checks(name, box):
@@ -328,6 +334,9 @@ def checks(name, box):
     _, failed = box.run("publish-pending", *args, "--target", "bluesky", extra={"STUB_POST_RESULT": '{"status":"POST_FAILED","reason":"fixture"}', "STUB_POST_EXIT": "1"})
     _, status = box.run("status")
     check("게시 전 실패만 새 승인 대상으로 남긴다", failed.get("status") == "POST_FAILED" and status["pending"][0]["readyTargets"] == ["bluesky"], failed)
+    code, reused = box.run("publish-pending", *args, "--target", "bluesky")
+    check("게시 전 실패는 그 승인을 소진한다 — 새 승인 없이는 재시도하지 않는다", code == 2 and
+          reused.get("reason") == "이전 시도 이후 새 게시 승인이 필요합니다", reused)
     box.approve(job, ["bluesky"])
     _, partial = box.run("publish-pending", *args, "--target", "bluesky", extra={"STUB_POST_RESULT": '{"status":"PARTIAL_POSTED","urls":["https://bsky.app/profile/fixture/post/1"]}', "STUB_POST_EXIT": "1"})
     count = (box.home / "publish.log").read_text().count("fixture")

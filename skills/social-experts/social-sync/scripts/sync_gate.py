@@ -37,7 +37,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 # 동기화 대상 4개 플랫폼. linkedin·instagram은 v1 동기화 범위 밖이다.
 SYNC_PLATFORMS = ["x", "facebook", "threads", "bluesky"]
 # compareCandidates(ego-post.mjs normalizeText·similarity)와 동일 임계값 — 양쪽을 함께 바꾼다.
