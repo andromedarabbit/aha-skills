@@ -2,19 +2,6 @@
 
 이 저장소에 포함된 모든 스킬의 카테고리별 인덱스입니다.
 
-## backup-experts
-
-### [git-restic-backup](skills/backup-experts/git-restic-backup)
-
-**버전**: 0.2.0
-
-'현재 또는 명시적으로 지정한 Git 저장소 폴더 전체를 restic CLI로 사용자가 지정한 로컬 경로 또는 마운트된 볼륨에 수동 백업한다. "현재 Git 저장소 전체를 백업해줘", "이 Git 저장소를 다시 백업해줘"라고 요청할 때 사용한다. 상위 폴더를 훑거나 Git 이력만 내보내지 않는다. 예약, 인증 변경, 도구 설치는 처리하지 않는다.'
-
-- [문서](skills/backup-experts/git-restic-backup/README.md)
-- [구현 가이드](skills/backup-experts/git-restic-backup/docs/GUIDELINES.md)
-- [레퍼런스](skills/backup-experts/git-restic-backup/docs/REFERENCE.md)
-
-
 ## email-experts
 
 ### [cloudflare-email-routing](skills/email-experts/cloudflare-email-routing)
